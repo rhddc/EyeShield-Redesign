@@ -42,11 +42,20 @@ class EyeShieldApp(QMainWindow):
 
         self.pages = QStackedWidget()
 
-        self.dashboard_page = self.create_dashboard_page()
+        # Create main pages first so dashboard can query live data
         self.screening_page = ScreeningPage()
         self.patient_records_page = PatientRecordsPage()
         self.reports_page = ReportsPage()
         self.users_page = UsersPage()
+
+        # Dashboard is created after the other pages so it can be refreshed
+        self.dashboard_page = self.create_dashboard_page()
+
+        # Allow screening page to add records directly to the patient records page
+        # so saved screenings appear immediately in the Records view.
+        self.screening_page.patient_records_page = self.patient_records_page
+        # Let patient records notify the app when rows are added
+        self.patient_records_page.parent_app = self
 
         self.pages.addWidget(self.dashboard_page)
         self.pages.addWidget(self.screening_page)
@@ -156,7 +165,7 @@ class EyeShieldApp(QMainWindow):
         cards_layout = QHBoxLayout(cards_container)
         cards_layout.setSpacing(20)
 
-        def create_stat_card(title, value):
+        def create_stat_card(title, value_label):
             card = QWidget()
             card.setStyleSheet("""
                 QWidget {
@@ -165,12 +174,11 @@ class EyeShieldApp(QMainWindow):
                     border: 1px solid #dee2e6;
                 }
             """)
-            card.setFixedSize(200, 100)
+            card.setFixedSize(220, 110)
 
             card_layout = QVBoxLayout(card)
-            card_layout.setContentsMargins(20, 15, 20, 15)
+            card_layout.setContentsMargins(18, 12, 18, 12)
 
-            value_label = QLabel(value)
             value_label.setStyleSheet("""
                 font-size: 28px;
                 font-weight: bold;
@@ -190,14 +198,16 @@ class EyeShieldApp(QMainWindow):
 
             return card
 
-        # Get stats from patient table
-        patient_count = self.patient_records_page.patient_table.rowCount() if hasattr(self, 'patient_records_page') else 0
-        screenings_today = patient_count
+        # Create value labels (will be refreshed dynamically)
+        self.stat_today_value = QLabel("0")
+        self.stat_total_value = QLabel("0")
+        self.stat_images_value = QLabel("0")
+        self.stat_dr_value = QLabel("0")
 
-        cards_layout.addWidget(create_stat_card("Today's Screenings", str(screenings_today)))
-        cards_layout.addWidget(create_stat_card("Total Patients", str(patient_count)))
-        cards_layout.addWidget(create_stat_card("Images Processed", str(patient_count)))
-        cards_layout.addWidget(create_stat_card("DR Positive Cases", "0"))
+        cards_layout.addWidget(create_stat_card("Today's Screenings", self.stat_today_value))
+        cards_layout.addWidget(create_stat_card("Total Patients", self.stat_total_value))
+        cards_layout.addWidget(create_stat_card("Images Processed", self.stat_images_value))
+        cards_layout.addWidget(create_stat_card("DR Positive Cases", self.stat_dr_value))
 
         layout.addWidget(cards_container)
 
@@ -284,22 +294,64 @@ class EyeShieldApp(QMainWindow):
         """)
 
         activity_layout = QVBoxLayout(activity_group)
-        activity_layout.setContentsMargins(20, 40, 20, 20)
+        activity_layout.setContentsMargins(20, 20, 20, 20)
 
-        if patient_count > 0:
-            recent_label = QLabel(f"Recent screenings: {patient_count} patient records updated")
-            recent_label.setStyleSheet("color: #495057; font-size: 14px;")
-            activity_layout.addWidget(recent_label)
-        else:
-            no_activity_label = QLabel("No recent clinical activity. Ready for patient screenings.")
-            no_activity_label.setStyleSheet("color: #6c757d; font-size: 14px; font-style: italic;")
-            activity_layout.addWidget(no_activity_label)
+        self.recent_activity_label = QLabel("No recent clinical activity. Ready for patient screenings.")
+        self.recent_activity_label.setStyleSheet("color: #6c757d; font-size: 14px; font-style: italic;")
+        self.recent_activity_label.setWordWrap(True)
+        activity_layout.addWidget(self.recent_activity_label)
 
         layout.addWidget(activity_group)
 
         layout.addStretch()
 
+        # After building the page, attempt an initial refresh if data exists
         return page
+
+    def refresh_dashboard(self):
+        """Refresh dashboard stats and recent activity from patient records"""
+        try:
+            table = self.patient_records_page.patient_table
+            total = table.rowCount()
+
+            # Simple heuristic: today's screenings = total (no date tracking yet)
+            todays = total
+
+            # DR positive: check Result column (index 12 in expanded table)
+            dr_count = 0
+            results_idx = 12
+            for r in range(total):
+                item = table.item(r, results_idx)
+                if item and 'dr' in item.text().lower():
+                    dr_count += 1
+
+            # Images processed: use total for now
+            images = total
+
+            self.stat_today_value.setText(str(todays))
+            self.stat_total_value.setText(str(total))
+            self.stat_images_value.setText(str(images))
+            self.stat_dr_value.setText(str(dr_count))
+
+            # Recent activity: show up to 5 latest
+            recent_lines = []
+            for r in range(total - 1, max(-1, total - 6), -1):
+                pid_item = table.item(r, 0)
+                name_item = table.item(r, 1)
+                result_item = table.item(r, results_idx)
+                pid = pid_item.text() if pid_item else ""
+                name = name_item.text() if name_item else ""
+                result = result_item.text() if result_item else ""
+                recent_lines.append(f"{pid} — {name} — {result}")
+
+            if recent_lines:
+                self.recent_activity_label.setStyleSheet("color: #495057; font-size: 14px;")
+                self.recent_activity_label.setText("\n".join(recent_lines))
+            else:
+                self.recent_activity_label.setStyleSheet("color: #6c757d; font-size: 14px; font-style: italic;")
+                self.recent_activity_label.setText("No recent clinical activity. Ready for patient screenings.")
+        except Exception:
+            pass
 
     @staticmethod
     def get_nav_button_style():

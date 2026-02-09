@@ -55,6 +55,15 @@ class UsersPage(QWidget):
         table_layout.addWidget(self.table)
         root_layout.addWidget(table_group)
 
+        # Activity log display
+        self.activity_log = QTableWidget(0, 3)
+        self.activity_log.setHorizontalHeaderLabels(["User", "Action", "Timestamp"])
+        self.activity_log.setMinimumHeight(120)
+        self.activity_log.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.activity_log.setSelectionMode(QAbstractItemView.NoSelection)
+        root_layout.addWidget(QLabel("User Activity Log (session only):"))
+        root_layout.addWidget(self.activity_log)
+
         # Form group: Add user
         form_group = QGroupBox("Add New User")
         form_group.setStyleSheet("QGroupBox { font-weight: bold; }")
@@ -87,7 +96,7 @@ class UsersPage(QWidget):
 
         root_layout.addWidget(form_group)
 
-        # Actions row: update role / delete
+        # Actions row: update role / delete / reset password
         actions_group = QGroupBox()
         actions_group.setTitle("")
         actions_layout = QHBoxLayout(actions_group)
@@ -106,11 +115,16 @@ class UsersPage(QWidget):
         delete_btn.setFixedHeight(30)
         delete_btn.clicked.connect(self.delete_user)
 
+        reset_pw_btn = QPushButton("Reset Password")
+        reset_pw_btn.setFixedHeight(30)
+        reset_pw_btn.clicked.connect(self.reset_password)
+
         actions_layout.addWidget(QLabel("Selected user:"))
         actions_layout.addStretch()
         actions_layout.addWidget(self.new_role_input)
         actions_layout.addWidget(update_btn)
         actions_layout.addWidget(delete_btn)
+        actions_layout.addWidget(reset_pw_btn)
 
         root_layout.addWidget(actions_group)
 
@@ -130,6 +144,15 @@ class UsersPage(QWidget):
             self.table.setItem(row, 0, QTableWidgetItem(username))
             self.table.setItem(row, 1, QTableWidgetItem(role))
 
+    def log_activity(self, user, action):
+        """Add an entry to the activity log (session only)"""
+        from datetime import datetime
+        row = self.activity_log.rowCount()
+        self.activity_log.insertRow(row)
+        self.activity_log.setItem(row, 0, QTableWidgetItem(user))
+        self.activity_log.setItem(row, 1, QTableWidgetItem(action))
+        self.activity_log.setItem(row, 2, QTableWidgetItem(datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+
     def add_user(self):
         """Create a new user using UserManager.create_user"""
         username = self.username_input.text().strip()
@@ -146,6 +169,7 @@ class UsersPage(QWidget):
             self.username_input.clear()
             self.password_input.clear()
             self.refresh_users()
+            self.log_activity(username, f"Created as {role}")
         else:
             QMessageBox.warning(self, "Error", "Could not create user (may already exist).")
 
@@ -166,6 +190,7 @@ class UsersPage(QWidget):
         if success:
             QMessageBox.information(self, "Deleted", f"User '{username}' deleted.")
             self.refresh_users()
+            self.log_activity(username, "Deleted")
         else:
             QMessageBox.warning(self, "Error", "Could not delete user.")
 
@@ -183,5 +208,27 @@ class UsersPage(QWidget):
         if success:
             QMessageBox.information(self, "Updated", f"Role updated for '{username}'.")
             self.refresh_users()
+            self.log_activity(username, f"Role changed to {new_role}")
         else:
             QMessageBox.warning(self, "Error", "Could not update role.")
+
+    def reset_password(self):
+        """Reset password for the selected user"""
+        row = self.table.currentRow()
+        if row < 0:
+            QMessageBox.warning(self, "Select", "Select a user to reset password.")
+            return
+
+        username = self.table.item(row, 0).text()
+        from PySide6.QtWidgets import QInputDialog
+        new_pw, ok = QInputDialog.getText(self, "Reset Password", f"Enter new password for '{username}':")
+        if not ok or not new_pw:
+            return
+        # Use UserManager to update password (delete and recreate for demo)
+        # In production, add a dedicated update_password method
+        role = self.table.item(row, 1).text()
+        UserManager.delete_user(username)
+        UserManager.create_user(username, new_pw, role)
+        self.refresh_users()
+        self.log_activity(username, "Password reset")
+        QMessageBox.information(self, "Reset", f"Password reset for '{username}'.")
