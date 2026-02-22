@@ -35,7 +35,7 @@ class ReportsPage(QWidget):
         root.setSpacing(12)
 
         title = QLabel("Reports")
-        title.setStyleSheet("font-size:20px;font-weight:bold;")
+        title.setStyleSheet("font-size:22px;font-weight:700;color:#007bff;font-family:'Segoe UI','Inter','Arial';")
         subtitle = QLabel("Offline analytics from locally saved screening records")
         subtitle.setStyleSheet("font-size:13px;color:#6c757d;")
 

@@ -31,6 +31,7 @@ class ScreeningPage(QWidget):
 
     def init_ui(self):
         """Initialize the revised UI: patient info and image upload in one window, results in new window"""
+        self._apply_ui_polish()
         main_layout = QVBoxLayout(self)
         main_layout.setSpacing(15)
         main_layout.setContentsMargins(15, 15, 15, 15)
@@ -41,6 +42,82 @@ class ScreeningPage(QWidget):
         self.stacked_widget.addWidget(self.results_page)
         main_layout.addWidget(self.stacked_widget)
         self._setup_validators()
+
+    def _apply_ui_polish(self):
+        self.setStyleSheet("""
+            QWidget {
+                background: #f8f9fa;
+                color: #212529;
+                font-size: 13px;
+                font-family: "Segoe UI", "Inter", "Arial";
+            }
+            QGroupBox {
+                background: #ffffff;
+                border: 1px solid #dee2e6;
+                border-radius: 8px;
+                margin-top: 10px;
+                font-size: 15px;
+                font-weight: 700;
+                color: #007bff;
+                padding-top: 8px;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 12px;
+                padding: 0 6px;
+                color: #007bff;
+                letter-spacing: 0.2px;
+            }
+            QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox, QTextEdit {
+                background: #ffffff;
+                border: 1px solid #ced4da;
+                border-radius: 6px;
+                padding: 6px 8px;
+            }
+            QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus, QTextEdit:focus {
+                border: 1px solid #0d6efd;
+            }
+            QPushButton {
+                background: #e9ecef;
+                color: #212529;
+                border: 1px solid #ced4da;
+                border-radius: 6px;
+                padding: 7px 12px;
+                font-weight: 600;
+            }
+            QPushButton:hover {
+                background: #dee2e6;
+            }
+            QPushButton:disabled {
+                background: #f1f3f5;
+                color: #adb5bd;
+                border: 1px solid #e9ecef;
+            }
+            QPushButton#primaryAction {
+                background: #0d6efd;
+                color: #ffffff;
+                border: 1px solid #0b5ed7;
+            }
+            QPushButton#primaryAction:hover {
+                background: #0b5ed7;
+            }
+            QPushButton#dangerAction {
+                background: #ffffff;
+                color: #dc3545;
+                border: 1px solid #dc3545;
+            }
+            QPushButton#dangerAction:hover {
+                background: #fff5f5;
+            }
+            QLabel#pageHeader {
+                font-size: 22px;
+                font-weight: 700;
+                color: #007bff;
+                letter-spacing: 0.2px;
+                font-family: "Segoe UI", "Inter", "Arial";
+            }
+        """)
+
     def create_unified_page(self):
         container = QWidget()
         grid = QGridLayout(container)
@@ -123,9 +200,39 @@ class ScreeningPage(QWidget):
         self.hba1c.setValue(7.0)
         clinical_form.addRow("HbA1c:", self.hba1c)
         self.prev_treatment = QCheckBox("Previous DR Treatment")
+        self.prev_treatment.setStyleSheet("""
+            QCheckBox {
+                color: #212529;
+                spacing: 8px;
+            }
+            QCheckBox::indicator {
+                width: 18px;
+                height: 18px;
+                border: 1px solid #6c757d;
+                border-radius: 3px;
+                background: #ffffff;
+            }
+            QCheckBox::indicator:checked {
+                background: #007bff;
+                border: 1px solid #0056b3;
+            }
+        """)
         clinical_form.addRow("", self.prev_treatment)
         self.notes = QTextEdit()
         self.notes.setMaximumHeight(80)
+        self.notes.setMinimumHeight(80)
+        self.notes.setPlaceholderText("Enter clinical notes")
+        self.notes.setStyleSheet("""
+            QTextEdit {
+                background: #ffffff;
+                border: 1px solid #6c757d;
+                border-radius: 6px;
+                padding: 6px 8px;
+            }
+            QTextEdit:focus {
+                border: 1px solid #0d6efd;
+            }
+        """)
         clinical_form.addRow("Notes:", self.notes)
         clinical_group.setLayout(clinical_form)
         # Image Upload
@@ -138,8 +245,10 @@ class ScreeningPage(QWidget):
         image_layout.addWidget(self.image_label)
         btn_layout = QHBoxLayout()
         self.btn_upload = QPushButton("Upload Image")
+        self.btn_upload.setObjectName("primaryAction")
         self.btn_upload.clicked.connect(self.upload_image)
         self.btn_clear = QPushButton("Clear")
+        self.btn_clear.setObjectName("dangerAction")
         self.btn_clear.clicked.connect(self.clear_image)
         btn_layout.addWidget(self.btn_upload)
         btn_layout.addWidget(self.btn_clear)
@@ -155,6 +264,7 @@ class ScreeningPage(QWidget):
         analyze_layout = QHBoxLayout()
         analyze_layout.addStretch()
         self.btn_analyze = QPushButton("Analyze Image")
+        self.btn_analyze.setObjectName("primaryAction")
         self.btn_analyze.setEnabled(False)
         self.btn_analyze.clicked.connect(self.open_results_window)
         analyze_layout.addWidget(self.btn_analyze)
@@ -259,6 +369,7 @@ class ScreeningPage(QWidget):
         title = QLabel("Step 1: Patient Information")
         title_font = QFont("Arial", 16, QFont.Weight.Bold)
         title.setFont(title_font)
+        title.setObjectName("pageHeader")
         layout.addWidget(title)
 
         patient_group = QGroupBox("Patient Information")
@@ -343,10 +454,40 @@ class ScreeningPage(QWidget):
         clinical_form.addRow("HbA1c:", self.hba1c)
 
         self.prev_treatment = QCheckBox("Previous DR Treatment")
+        self.prev_treatment.setStyleSheet("""
+            QCheckBox {
+                color: #212529;
+                spacing: 8px;
+            }
+            QCheckBox::indicator {
+                width: 18px;
+                height: 18px;
+                border: 1px solid #6c757d;
+                border-radius: 3px;
+                background: #ffffff;
+            }
+            QCheckBox::indicator:checked {
+                background: #007bff;
+                border: 1px solid #0056b3;
+            }
+        """)
         clinical_form.addRow("", self.prev_treatment)
 
         self.notes = QTextEdit()
         self.notes.setMaximumHeight(80)
+        self.notes.setMinimumHeight(80)
+        self.notes.setPlaceholderText("Enter clinical notes")
+        self.notes.setStyleSheet("""
+            QTextEdit {
+                background: #ffffff;
+                border: 1px solid #6c757d;
+                border-radius: 6px;
+                padding: 6px 8px;
+            }
+            QTextEdit:focus {
+                border: 1px solid #0d6efd;
+            }
+        """)
         clinical_form.addRow("Notes:", self.notes)
 
         clinical_group.setLayout(clinical_form)
@@ -372,6 +513,7 @@ class ScreeningPage(QWidget):
         title = QLabel("Step 2: Image Analysis")
         title_font = QFont("Arial", 16, QFont.Weight.Bold)
         title.setFont(title_font)
+        title.setObjectName("pageHeader")
         layout.addWidget(title)
 
         self.summary_label = QLabel()
@@ -593,6 +735,7 @@ class ResultsWindow(QWidget):
 
         self.title_label = QLabel("Results")
         self.title_label.setFont(QFont("Arial", 16, QFont.Weight.Bold))
+        self.title_label.setObjectName("pageHeader")
         layout.addWidget(self.title_label)
 
         heatmap_group = QGroupBox("Heatmap Output")
@@ -615,12 +758,14 @@ class ResultsWindow(QWidget):
         button_layout = QHBoxLayout()
         button_layout.addStretch()
         self.btn_save = QPushButton("Save Patient")
+        self.btn_save.setObjectName("primaryAction")
         self.btn_save.clicked.connect(self.save_patient)
         button_layout.addWidget(self.btn_save)
         self.btn_new = QPushButton("New Patient")
         self.btn_new.clicked.connect(self.new_patient)
         button_layout.addWidget(self.btn_new)
         self.btn_back = QPushButton("Back to Screening")
+        self.btn_back.setObjectName("dangerAction")
         self.btn_back.clicked.connect(self.go_back)
         button_layout.addWidget(self.btn_back)
         layout.addLayout(button_layout)

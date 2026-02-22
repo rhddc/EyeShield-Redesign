@@ -21,7 +21,7 @@ class PatientRecordsPage(QWidget):
         layout.setSpacing(12)
 
         title = QLabel("Patients / Screenings")
-        title.setStyleSheet("font-size:20px;font-weight:bold;margin-bottom:4px;")
+        title.setStyleSheet("font-size:22px;font-weight:700;color:#007bff;font-family:'Segoe UI','Inter','Arial';margin-bottom:4px;")
         layout.addWidget(title)
 
         # Search bar and export button
