@@ -5,6 +5,8 @@ Handles patient screening functionality and image analysis with fixed UI styling
 
 
 from datetime import datetime
+import secrets
+import sqlite3
 from PySide6.QtWidgets import (
     QWidget, QLabel, QPushButton, QLineEdit, QVBoxLayout, QHBoxLayout,
     QFileDialog, QFormLayout, QGroupBox, QComboBox, QDateEdit, QMessageBox,
@@ -13,6 +15,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtGui import QPixmap, QFont, QRegularExpressionValidator
 from PySide6.QtCore import Qt, QDate, QRegularExpression
+from auth import DB_FILE
 
 
 class ScreeningPage(QWidget):
@@ -33,8 +36,8 @@ class ScreeningPage(QWidget):
         """Initialize the revised UI: patient info and image upload in one window, results in new window"""
         self._apply_ui_polish()
         main_layout = QVBoxLayout(self)
-        main_layout.setSpacing(15)
-        main_layout.setContentsMargins(15, 15, 15, 15)
+        main_layout.setSpacing(12)
+        main_layout.setContentsMargins(16, 16, 16, 16)
         # Unified page: Patient Info + Image Upload
         unified_page = self.create_unified_page()
         self.results_page = ResultsWindow(self)
@@ -88,6 +91,9 @@ class ScreeningPage(QWidget):
             QPushButton:hover {
                 background: #dee2e6;
             }
+            QPushButton:focus {
+                border: 1px solid #0d6efd;
+            }
             QPushButton:disabled {
                 background: #f1f3f5;
                 color: #adb5bd;
@@ -116,13 +122,17 @@ class ScreeningPage(QWidget):
                 letter-spacing: 0.2px;
                 font-family: "Segoe UI", "Inter", "Arial";
             }
+            QLabel#statusLabel {
+                color: #495057;
+                font-size: 12px;
+            }
         """)
 
     def create_unified_page(self):
         container = QWidget()
         grid = QGridLayout(container)
-        grid.setSpacing(14)
-        grid.setContentsMargins(12, 12, 12, 12)
+        grid.setSpacing(12)
+        grid.setContentsMargins(16, 16, 16, 16)
         # Patient Info
         patient_group = QGroupBox("Patient Information")
         patient_form = QFormLayout()
@@ -192,12 +202,38 @@ class ScreeningPage(QWidget):
         self.diabetes_duration = QSpinBox()
         self.diabetes_duration.setSuffix(" years")
         self.diabetes_duration.setRange(0, 80)
+        self.diabetes_duration.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
+        self.diabetes_duration.setStyleSheet("""
+            QSpinBox::up-button {
+                subcontrol-origin: border;
+                subcontrol-position: top right;
+                width: 18px;
+            }
+            QSpinBox::down-button {
+                subcontrol-origin: border;
+                subcontrol-position: bottom right;
+                width: 18px;
+            }
+        """)
         clinical_form.addRow("Duration:", self.diabetes_duration)
         self.hba1c = QDoubleSpinBox()
         self.hba1c.setRange(4.0, 15.0)
         self.hba1c.setDecimals(1)
         self.hba1c.setSuffix(" %")
         self.hba1c.setValue(7.0)
+        self.hba1c.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
+        self.hba1c.setStyleSheet("""
+            QDoubleSpinBox::up-button {
+                subcontrol-origin: border;
+                subcontrol-position: top right;
+                width: 18px;
+            }
+            QDoubleSpinBox::down-button {
+                subcontrol-origin: border;
+                subcontrol-position: bottom right;
+                width: 18px;
+            }
+        """)
         clinical_form.addRow("HbA1c:", self.hba1c)
         self.prev_treatment = QCheckBox("Previous DR Treatment")
         self.prev_treatment.setStyleSheet("""
@@ -266,10 +302,27 @@ class ScreeningPage(QWidget):
         self.btn_analyze = QPushButton("Analyze Image")
         self.btn_analyze.setObjectName("primaryAction")
         self.btn_analyze.setEnabled(False)
+        self.btn_analyze.setAutoDefault(True)
+        self.btn_analyze.setDefault(True)
         self.btn_analyze.clicked.connect(self.open_results_window)
+        analyze_layout.addStretch()
         analyze_layout.addWidget(self.btn_analyze)
         grid.addLayout(analyze_layout, 2, 1, 1, 1)
+        self._set_tab_order_unified()
         return container
+
+    def _set_tab_order_unified(self):
+        self.setTabOrder(self.p_name, self.p_dob)
+        self.setTabOrder(self.p_dob, self.p_sex)
+        self.setTabOrder(self.p_sex, self.p_contact)
+        self.setTabOrder(self.p_contact, self.diabetes_type)
+        self.setTabOrder(self.diabetes_type, self.diabetes_duration)
+        self.setTabOrder(self.diabetes_duration, self.hba1c)
+        self.setTabOrder(self.hba1c, self.prev_treatment)
+        self.setTabOrder(self.prev_treatment, self.notes)
+        self.setTabOrder(self.notes, self.btn_upload)
+        self.setTabOrder(self.btn_upload, self.btn_clear)
+        self.setTabOrder(self.btn_clear, self.btn_analyze)
 
     def _setup_validators(self):
         self.name_regex = QRegularExpression(r"^[A-Za-z][A-Za-z\s\-']*$")
@@ -573,10 +626,44 @@ class ScreeningPage(QWidget):
     # ==================== LOGIC FUNCTIONS ====================
 
     def generate_patient_id(self):
-        today = datetime.now().strftime("%Y%m%d")
-        self.patient_counter += 1
-        pid = f"ES-{today}-{self.patient_counter:04d}"
+        pid = self._next_unique_patient_id()
         self.p_id.setText(pid)
+        return pid
+
+    def _next_unique_patient_id(self):
+        for _ in range(25):
+            stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+            suffix = secrets.token_hex(2).upper()
+            candidate = f"ES-{stamp}-{suffix}"
+            if not self._patient_id_exists(candidate):
+                return candidate
+
+        fallback = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+        return f"ES-{fallback}"
+
+    def _patient_id_exists(self, patient_id):
+        patient_id = str(patient_id or "").strip()
+        if not patient_id:
+            return False
+
+        try:
+            if hasattr(self, "patient_records_page") and self.patient_records_page:
+                records = getattr(self.patient_records_page, "_all_records", [])
+                for row in records:
+                    if row and str(row[0]).strip() == patient_id:
+                        return True
+        except Exception:
+            pass
+
+        try:
+            conn = sqlite3.connect(DB_FILE)
+            cur = conn.cursor()
+            cur.execute("SELECT 1 FROM patient_records WHERE patient_id = ? LIMIT 1", (patient_id,))
+            exists = cur.fetchone() is not None
+            conn.close()
+            return exists
+        except Exception:
+            return False
 
     def update_age_from_dob(self, date):
         if not date.isValid():
@@ -660,9 +747,10 @@ class ScreeningPage(QWidget):
             return
         confirm_box = QMessageBox(self)
         confirm_box.setWindowTitle("Confirm Details")
-        confirm_box.setText("Please confirm all details are correct before proceeding to results.")
+        confirm_box.setText("Please confirm all patient information is correct before proceeding to results.")
         proceed_button = confirm_box.addButton("Proceed to Results", QMessageBox.ButtonRole.AcceptRole)
         confirm_box.addButton("Edit Information", QMessageBox.ButtonRole.RejectRole)
+        
         confirm_box.exec()
         if confirm_box.clickedButton() != proceed_button:
             return
@@ -684,7 +772,9 @@ class ScreeningPage(QWidget):
             return
         name = self.p_name.text().strip()
 
-        pid = self.p_id.text()
+        pid = self.p_id.text().strip()
+        if not pid or self._patient_id_exists(pid):
+            pid = self.generate_patient_id()
 
         dob_date = self._get_dob_date()
         dob_str = dob_date.toString("yyyy-MM-dd") if dob_date.isValid() else ""
@@ -724,7 +814,6 @@ class ScreeningPage(QWidget):
         except Exception as e:
             QMessageBox.warning(self, "Warning", f"Saved but failed to update Patient Records: {e}")
 
-        QMessageBox.information(self, "Saved", f"Screening record for {name} saved.")
         self.reset_screening()
 class ResultsWindow(QWidget):
     def __init__(self, parent=None):
@@ -759,6 +848,8 @@ class ResultsWindow(QWidget):
         button_layout.addStretch()
         self.btn_save = QPushButton("Save Patient")
         self.btn_save.setObjectName("primaryAction")
+        self.btn_save.setAutoDefault(True)
+        self.btn_save.setDefault(True)
         self.btn_save.clicked.connect(self.save_patient)
         button_layout.addWidget(self.btn_save)
         self.btn_new = QPushButton("New Patient")

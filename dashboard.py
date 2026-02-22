@@ -176,11 +176,13 @@ class EyeShieldApp(QMainWindow):
             "Are you sure you want to log out?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
         )
-        if reply == QMessageBox.StandardButton.Yes:
-            from login import LoginWindow
-            self.login = LoginWindow()
-            self.login.show()
-            self.close()
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        from login import LoginWindow
+        self.login = LoginWindow()
+        self.login.show()
+        self.close()
 
     def create_dashboard_page(self):
         """Create dashboard page"""
@@ -401,6 +403,9 @@ class EyeShieldApp(QMainWindow):
                     background: #e9ecef;
                     color: #007bff;
                 }
+                QPushButton:focus {
+                    border: 1px solid #0d6efd;
+                }
             """
         else:
             return """
@@ -418,5 +423,8 @@ class EyeShieldApp(QMainWindow):
                 QPushButton:hover {
                     background: #e9ecef;
                     color: #007bff;
+                }
+                QPushButton:focus {
+                    border: 1px solid #0d6efd;
                 }
             """

@@ -29,6 +29,14 @@ class ReportsPage(QWidget):
         super().__init__()
         self._summary_cache = {}
         self._recent_rows = []
+        self.setStyleSheet("""
+            QWidget { background: #f8f9fa; color: #212529; font-family: 'Segoe UI', 'Inter', 'Arial'; }
+            QGroupBox { background: #ffffff; border: 1px solid #dee2e6; border-radius: 8px; }
+            QLineEdit, QComboBox, QTableWidget { background: #ffffff; border: 1px solid #ced4da; border-radius: 6px; }
+            QPushButton:focus, QTableWidget:focus { border: 1px solid #0d6efd; }
+            QPushButton#primaryAction { background: #0d6efd; color: #ffffff; border: 1px solid #0b5ed7; border-radius: 6px; padding: 6px 12px; font-weight: 600; }
+            QLabel#statusLabel { color: #495057; font-size: 12px; }
+        """)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(16, 16, 16, 16)
@@ -42,15 +50,21 @@ class ReportsPage(QWidget):
         top_bar = QHBoxLayout()
         top_bar.addWidget(title)
         top_bar.addStretch(1)
-        refresh_btn = QPushButton("Refresh")
-        refresh_btn.clicked.connect(self.refresh_report)
-        export_btn = QPushButton("Export Summary")
-        export_btn.clicked.connect(self.export_summary)
-        top_bar.addWidget(refresh_btn)
-        top_bar.addWidget(export_btn)
+        self.refresh_btn = QPushButton("Refresh")
+        self.refresh_btn.clicked.connect(self.refresh_report)
+        self.export_btn = QPushButton("Export Summary")
+        self.export_btn.setObjectName("primaryAction")
+        self.export_btn.setAutoDefault(True)
+        self.export_btn.setDefault(True)
+        self.export_btn.clicked.connect(self.export_summary)
+        top_bar.addWidget(self.refresh_btn)
+        top_bar.addWidget(self.export_btn)
 
         root.addLayout(top_bar)
         root.addWidget(subtitle)
+        self.status_label = QLabel("Ready")
+        self.status_label.setObjectName("statusLabel")
+        root.addWidget(self.status_label)
 
         stats_group = QGroupBox("Summary")
         stats_layout = QHBoxLayout(stats_group)
@@ -83,6 +97,9 @@ class ReportsPage(QWidget):
         recent_layout.addWidget(self.recent_table)
 
         root.addWidget(recent_group)
+
+        self.setTabOrder(self.refresh_btn, self.export_btn)
+        self.setTabOrder(self.export_btn, self.recent_table)
 
         self.refresh_report()
 
@@ -168,7 +185,7 @@ class ReportsPage(QWidget):
 
     def export_summary(self):
         if not self._summary_cache:
-            QMessageBox.information(self, "Export", "No report data to export yet.")
+            self.status_label.setText("No report data to export")
             return
 
         path, _ = QFileDialog.getSaveFileName(self, "Export Report Summary", "", "Text Files (*.txt)")
@@ -193,6 +210,6 @@ class ReportsPage(QWidget):
         try:
             with open(path, "w", encoding="utf-8") as file:
                 file.write("\n".join(lines))
-            QMessageBox.information(self, "Export", f"Report summary exported to:\n{path}")
+            self.status_label.setText(f"Summary exported to {path}")
         except OSError as err:
             QMessageBox.warning(self, "Export", f"Failed to export summary: {err}")

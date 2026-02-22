@@ -15,6 +15,13 @@ class PatientRecordsPage(QWidget):
 
     def __init__(self):
         super().__init__()
+        self.setStyleSheet("""
+            QWidget { background: #f8f9fa; color: #212529; font-family: 'Segoe UI', 'Inter', 'Arial'; }
+            QLineEdit, QTableWidget { background: #ffffff; border: 1px solid #ced4da; border-radius: 6px; }
+            QPushButton:focus, QLineEdit:focus, QTableWidget:focus { border: 1px solid #0d6efd; }
+            QPushButton#primaryAction { background: #0d6efd; color: #ffffff; border: 1px solid #0b5ed7; border-radius: 6px; padding: 6px 12px; font-weight: 600; }
+            QLabel#statusLabel { color: #495057; font-size: 12px; }
+        """)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 16, 16, 16)
@@ -36,10 +43,12 @@ class PatientRecordsPage(QWidget):
 
         top_bar.addStretch(1)
 
-        export_btn = QPushButton("Export to CSV")
-        export_btn.setStyleSheet("padding: 6px 16px; font-size: 14px; border-radius: 5px;")
-        export_btn.clicked.connect(self.export_to_csv)
-        top_bar.addWidget(export_btn)
+        self.export_btn = QPushButton("Export to CSV")
+        self.export_btn.setObjectName("primaryAction")
+        self.export_btn.setAutoDefault(True)
+        self.export_btn.setDefault(True)
+        self.export_btn.clicked.connect(self.export_to_csv)
+        top_bar.addWidget(self.export_btn)
 
         layout.addLayout(top_bar)
 
@@ -74,19 +83,35 @@ class PatientRecordsPage(QWidget):
         self.patient_table.setSelectionMode(QTableWidget.SingleSelection)
         layout.addWidget(self.patient_table)
 
+        self.status_label = QLabel("Ready")
+        self.status_label.setObjectName("statusLabel")
+        layout.addWidget(self.status_label)
+
+        self.search_input.returnPressed.connect(lambda: self.filter_table(self.search_input.text()))
+        self.setTabOrder(self.search_input, self.export_btn)
+        self.setTabOrder(self.export_btn, self.patient_table)
+
         self._all_records = []
         self.load_records_from_db()
 
     def add_patient_record(self, patient_data):
         """Add a patient record to the table, store for filtering/export, and save to DB"""
+        if not self.save_record_to_db(patient_data):
+            return
         self._all_records.append(patient_data)
-        self.save_record_to_db(patient_data)
         self._refresh_table()
 
     def save_record_to_db(self, patient_data):
+        patient_id = str(patient_data[0]).strip() if patient_data and len(patient_data) > 0 else ""
         try:
             conn = sqlite3.connect(DB_FILE)
             cur = conn.cursor()
+            if patient_id:
+                cur.execute("SELECT 1 FROM patient_records WHERE patient_id = ? LIMIT 1", (patient_id,))
+                if cur.fetchone() is not None:
+                    conn.close()
+                    self.status_label.setText(f"Duplicate patient ID blocked: {patient_id}")
+                    return False
             cur.execute("""
                 INSERT INTO patient_records (
                     patient_id, name, birthdate, age, sex, contact, eyes, diabetes_type, duration, hba1c, prev_treatment, notes, result, confidence
@@ -94,8 +119,10 @@ class PatientRecordsPage(QWidget):
             """, patient_data)
             conn.commit()
             conn.close()
+            return True
         except Exception as e:
             print(f"Failed to save patient record: {e}")
+            return False
 
     def load_records_from_db(self):
         try:
@@ -152,8 +179,7 @@ class PatientRecordsPage(QWidget):
                 writer.writerow([self.patient_table.horizontalHeaderItem(i).text() for i in range(self.patient_table.columnCount())])
                 for row in records:
                     writer.writerow(row)
-            from PySide6.QtWidgets import QMessageBox
-            QMessageBox.information(self, "Exported", f"Patient records exported to {path}")
+            self.status_label.setText(f"Exported records to {path}")
         except Exception as e:
             from PySide6.QtWidgets import QMessageBox
             QMessageBox.warning(self, "Error", f"Failed to export: {e}")
@@ -173,6 +199,8 @@ class PatientRecordsPage(QWidget):
         text.setHtml(details)
         layout.addWidget(text)
         close_btn = QPushButton("Close")
+        close_btn.setAutoDefault(True)
+        close_btn.setDefault(True)
         close_btn.clicked.connect(dialog.accept)
         layout.addWidget(close_btn)
         dialog.setMinimumWidth(400)

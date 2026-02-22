@@ -68,8 +68,11 @@ class NewUserDialog(QDialog):
         btn_layout.addStretch()
         create_btn = QPushButton("Create")
         cancel_btn = QPushButton("Cancel")
+        create_btn.setAutoDefault(True)
+        create_btn.setDefault(True)
         create_btn.clicked.connect(self._create_user)
         cancel_btn.clicked.connect(self.reject)
+        self.password_input.returnPressed.connect(self._create_user)
         btn_layout.addWidget(create_btn)
         btn_layout.addWidget(cancel_btn)
         layout.addLayout(btn_layout)
@@ -85,12 +88,13 @@ class NewUserDialog(QDialog):
 
         success = UserManager.create_user(username, password, role)
         if success:
-            QMessageBox.information(self, "Created", f"User '{username}' created.")
             parent = self.parent()
             if hasattr(parent, 'refresh_users'):
                 parent.refresh_users()
             if hasattr(parent, 'log_activity'):
                 parent.log_activity(username, f"Created as {role}")
+            if hasattr(parent, 'status_label'):
+                parent.status_label.setText(f"User '{username}' created")
             self.accept()
         else:
             QMessageBox.warning(self, "Error", "Could not create user (may already exist).")
@@ -101,6 +105,34 @@ class UsersPage(QWidget):
 
     def __init__(self):
         super().__init__()
+        self.setStyleSheet("""
+            QWidget {
+                background: #f8f9fa;
+                color: #212529;
+                font-family: 'Segoe UI', 'Inter', 'Arial';
+            }
+            QLineEdit, QComboBox {
+                background: #ffffff;
+                border: 1px solid #ced4da;
+                border-radius: 6px;
+                padding: 6px 8px;
+            }
+            QLineEdit:focus, QComboBox:focus, QTableWidget:focus, QPushButton:focus {
+                border: 1px solid #0d6efd;
+            }
+            QPushButton#primaryAction {
+                background: #0d6efd;
+                color: #ffffff;
+                border: 1px solid #0b5ed7;
+                border-radius: 6px;
+                padding: 6px 12px;
+                font-weight: 600;
+            }
+            QLabel#statusLabel {
+                color: #495057;
+                font-size: 12px;
+            }
+        """)
 
         # Initialize UserManager instance
         self.user_manager = UserManager()
@@ -110,8 +142,8 @@ class UsersPage(QWidget):
 
         # Main layout
         main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(12, 12, 12, 12)
-        main_layout.setSpacing(16)
+        main_layout.setContentsMargins(16, 16, 16, 16)
+        main_layout.setSpacing(12)
 
         # Header
         header_layout = QHBoxLayout()
@@ -132,7 +164,7 @@ class UsersPage(QWidget):
 
         # Grid layout for main content
         grid_layout = QGridLayout()
-        grid_layout.setSpacing(16)
+        grid_layout.setSpacing(12)
 
         # Users Table
         self.users_table = QTableWidget(0, 3)
@@ -194,6 +226,9 @@ class UsersPage(QWidget):
         self.role_input = QComboBox()
         self.role_input.addItems(["clinician", "admin", "viewer"])
         self.add_user_button = QPushButton("Add User")
+        self.add_user_button.setObjectName("primaryAction")
+        self.add_user_button.setAutoDefault(True)
+        self.add_user_button.setDefault(True)
         self.add_user_button.setEnabled(False)
         self.add_user_button.clicked.connect(self.add_user)
 
@@ -211,9 +246,19 @@ class UsersPage(QWidget):
 
         main_layout.addLayout(grid_layout)
 
+        self.status_label = QLabel("Ready")
+        self.status_label.setObjectName("statusLabel")
+        main_layout.addWidget(self.status_label)
+
         # Connect input validation
         self.username_input.textChanged.connect(self._toggle_add_button)
         self.password_input.textChanged.connect(self._toggle_add_button)
+        self.password_input.returnPressed.connect(self.add_user)
+
+        self.setTabOrder(self.username_input, self.password_input)
+        self.setTabOrder(self.password_input, self.role_input)
+        self.setTabOrder(self.role_input, self.add_user_button)
+        self.setTabOrder(self.add_user_button, self.users_table)
 
         self.refresh_users()
 
@@ -241,9 +286,12 @@ class UsersPage(QWidget):
 
         success = user_store.add_user(username, password, role)
         if success:
-            QMessageBox.information(self, "Success", f"User '{username}' created successfully.")
+            self.status_label.setText(f"User '{username}' created")
             self.log_activity(username, f"Created as {role}")
             self.refresh_users()
+            self.username_input.clear()
+            self.password_input.clear()
+            self.username_input.setFocus()
         else:
             QMessageBox.warning(self, "Error", "Failed to create user. User may already exist.")
 
@@ -285,7 +333,7 @@ class UsersPage(QWidget):
         if confirm == QMessageBox.Yes:
             success = user_store.delete_user(username)
             if success:
-                QMessageBox.information(self, "Deleted", f"User '{username}' has been deleted.")
+                self.status_label.setText(f"User '{username}' deleted")
                 self.log_activity(username, "Deleted")
                 self.refresh_users()
             else:
