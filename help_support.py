@@ -10,11 +10,11 @@ class HelpSupportPage(QWidget):
         self.setStyleSheet("background: #f8f9fa;")
 
         root_layout = QVBoxLayout(self)
-        root_layout.setContentsMargins(20, 20, 20, 20)
-        root_layout.setSpacing(15)
+        root_layout.setContentsMargins(24, 24, 24, 24)
+        root_layout.setSpacing(16)
 
         title = QLabel("Help & Support")
-        title.setStyleSheet("font-size: 22px; font-weight: 700; color: #007bff;")
+        title.setStyleSheet("font-size: 24px; font-weight: 700; color: #007bff;")
         root_layout.addWidget(title)
 
         subtitle = QLabel("Quick guidance for daily workflows, troubleshooting, and support contacts.")
@@ -36,7 +36,7 @@ class HelpSupportPage(QWidget):
             <ul>
                 <li>Log in with your assigned role.</li>
                 <li>Use <b>Screening</b> to capture patient details and upload a fundus image.</li>
-                <li>Review the result, then save to <b>Patient Records</b>.</li>
+                <li>Review the result, then save the screening outcome.</li>
                 <li>Generate summaries in <b>Reports</b>.</li>
             </ul>
             """
@@ -47,8 +47,8 @@ class HelpSupportPage(QWidget):
             """
             <ul>
                 <li><b>New screening:</b> Enter patient info, upload image, analyze, then save.</li>
-                <li><b>Edit records:</b> Open a patient in <b>Records</b> and update details.</li>
-                <li><b>Export report:</b> Use <b>Reports</b> to create PDF or print summaries.</li>
+                <li><b>Review results:</b> Open <b>Reports</b> to view all DR screening outcomes.</li>
+                <li><b>Export report:</b> Use <b>Reports</b> to export all screening results.</li>
             </ul>
             """
         ))
@@ -109,7 +109,7 @@ class HelpSupportPage(QWidget):
                 color: #007bff;
                 border: 1px solid #dee2e6;
                 border-radius: 8px;
-                margin-top: 10px;
+                margin-top: 8px;
                 background: white;
             }
             QGroupBox::title {

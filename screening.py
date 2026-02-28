@@ -58,8 +58,8 @@ class ScreeningPage(QWidget):
                 background: #ffffff;
                 border: 1px solid #dee2e6;
                 border-radius: 8px;
-                margin-top: 10px;
-                font-size: 15px;
+                margin-top: 8px;
+                font-size: 16px;
                 font-weight: 700;
                 color: #007bff;
                 padding-top: 8px;
@@ -67,15 +67,15 @@ class ScreeningPage(QWidget):
             QGroupBox::title {
                 subcontrol-origin: margin;
                 left: 12px;
-                padding: 0 6px;
+                padding: 0 8px;
                 color: #007bff;
                 letter-spacing: 0.2px;
             }
             QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox, QTextEdit {
                 background: #ffffff;
                 border: 1px solid #ced4da;
-                border-radius: 6px;
-                padding: 6px 8px;
+                border-radius: 8px;
+                padding: 8px;
             }
             QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus, QTextEdit:focus {
                 border: 1px solid #0d6efd;
@@ -84,8 +84,8 @@ class ScreeningPage(QWidget):
                 background: #e9ecef;
                 color: #212529;
                 border: 1px solid #ced4da;
-                border-radius: 6px;
-                padding: 7px 12px;
+                border-radius: 8px;
+                padding: 8px 16px;
                 font-weight: 600;
             }
             QPushButton:hover {
@@ -159,8 +159,8 @@ class ScreeningPage(QWidget):
                 color: #212529;
                 background: #ffffff;
                 border: 1px solid #ced4da;
-                border-radius: 4px;
-                padding: 4px 8px;
+                border-radius: 8px;
+                padding: 8px;
             }
         """
         self._dob_invalid_style = """
@@ -168,8 +168,8 @@ class ScreeningPage(QWidget):
                 color: #212529;
                 background: #fff5f5;
                 border: 1px solid #dc3545;
-                border-radius: 4px;
-                padding: 4px 8px;
+                border-radius: 8px;
+                padding: 8px;
             }
         """
         self.p_dob.setStyleSheet(self._dob_default_style)
@@ -647,15 +647,6 @@ class ScreeningPage(QWidget):
             return False
 
         try:
-            if hasattr(self, "patient_records_page") and self.patient_records_page:
-                records = getattr(self.patient_records_page, "_all_records", [])
-                for row in records:
-                    if row and str(row[0]).strip() == patient_id:
-                        return True
-        except Exception:
-            pass
-
-        try:
             conn = sqlite3.connect(DB_FILE)
             cur = conn.cursor()
             cur.execute("SELECT 1 FROM patient_records WHERE patient_id = ? LIMIT 1", (patient_id,))
@@ -808,13 +799,29 @@ class ScreeningPage(QWidget):
             confidence,
         ]
 
-        try:
-            if hasattr(self, "patient_records_page") and self.patient_records_page:
-                self.patient_records_page.add_patient_record(patient_data)
-        except Exception as e:
-            QMessageBox.warning(self, "Warning", f"Saved but failed to update Patient Records: {e}")
+        if not self._save_screening_to_db(patient_data):
+            QMessageBox.warning(self, "Save Failed", "Unable to save screening record. Please try again.")
+            return
 
         self.reset_screening()
+
+    def _save_screening_to_db(self, patient_data):
+        try:
+            conn = sqlite3.connect(DB_FILE)
+            cur = conn.cursor()
+            cur.execute(
+                """
+                INSERT INTO patient_records (
+                    patient_id, name, birthdate, age, sex, contact, eyes, diabetes_type, duration, hba1c, prev_treatment, notes, result, confidence
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                patient_data,
+            )
+            conn.commit()
+            conn.close()
+            return True
+        except Exception:
+            return False
 class ResultsWindow(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)

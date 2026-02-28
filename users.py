@@ -114,8 +114,8 @@ class UsersPage(QWidget):
             QLineEdit, QComboBox {
                 background: #ffffff;
                 border: 1px solid #ced4da;
-                border-radius: 6px;
-                padding: 6px 8px;
+                border-radius: 8px;
+                padding: 8px;
             }
             QLineEdit:focus, QComboBox:focus, QTableWidget:focus, QPushButton:focus {
                 border: 1px solid #0d6efd;
@@ -124,8 +124,8 @@ class UsersPage(QWidget):
                 background: #0d6efd;
                 color: #ffffff;
                 border: 1px solid #0b5ed7;
-                border-radius: 6px;
-                padding: 6px 12px;
+                border-radius: 8px;
+                padding: 8px 16px;
                 font-weight: 600;
             }
             QLabel#statusLabel {
@@ -143,12 +143,12 @@ class UsersPage(QWidget):
         # Main layout
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(16, 16, 16, 16)
-        main_layout.setSpacing(12)
+        main_layout.setSpacing(16)
 
         # Header
         header_layout = QHBoxLayout()
         title_label = QLabel("User Management")
-        title_label.setStyleSheet("font-size:22px;font-weight:700;color:#007bff;font-family:'Segoe UI','Inter','Arial';")
+        title_label.setStyleSheet("font-size:24px;font-weight:700;color:#007bff;font-family:'Segoe UI','Inter','Arial';")
         header_layout.addWidget(title_label)
         header_layout.addStretch()
 
@@ -164,7 +164,7 @@ class UsersPage(QWidget):
 
         # Grid layout for main content
         grid_layout = QGridLayout()
-        grid_layout.setSpacing(12)
+        grid_layout.setSpacing(16)
 
         # Users Table
         self.users_table = QTableWidget(0, 3)
@@ -174,8 +174,8 @@ class UsersPage(QWidget):
         self.users_table.setAlternatingRowColors(True)
         self.users_table.setStyleSheet(
             "QTableWidget { background: #ffffff; gridline-color: #dcdcdc; }"
-            "QHeaderView::section { background: #f0f0f0; padding: 8px; border: none; font-weight: bold; }"
-            "QTableWidget::item { padding: 6px 8px; }")
+            "QHeaderView::section { background: #f0f0f0; padding: 8px; border: none; font-weight: 600; }"
+            "QTableWidget::item { padding: 8px; }")
         self.users_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
 
         # --- Place delete button inside users list area at bottom right ---
@@ -206,8 +206,8 @@ class UsersPage(QWidget):
         self.activity_log.setEditTriggers(QTableWidget.NoEditTriggers)
         self.activity_log.setStyleSheet(
             "QTableWidget { background: #ffffff; gridline-color: #dcdcdc; }"
-            "QHeaderView::section { background: #f0f0f0; padding: 8px; border: none; font-weight: bold; }"
-            "QTableWidget::item { padding: 6px 8px; }")
+            "QHeaderView::section { background: #f0f0f0; padding: 8px; border: none; font-weight: 600; }"
+            "QTableWidget::item { padding: 8px; }")
         self.activity_log.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         activity_log_layout.addWidget(self.activity_log)
         grid_layout.addWidget(QLabel("Activity Log"), 0, 1)
@@ -216,7 +216,7 @@ class UsersPage(QWidget):
 
         # Add User Form
         form_group = QGroupBox("Add New User")
-        form_group.setStyleSheet("QGroupBox { font-weight: bold; background: #ffffff; border: 1px solid #dcdcdc; border-radius: 8px; padding: 12px; }")
+        form_group.setStyleSheet("QGroupBox { font-weight: 600; background: #ffffff; border: 1px solid #dcdcdc; border-radius: 8px; padding: 16px; }")
         form_layout = QFormLayout(form_group)
         self.username_input = QLineEdit()
         self.username_input.setPlaceholderText("Enter username")

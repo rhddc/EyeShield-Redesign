@@ -27,10 +27,10 @@ class CameraPage(QWidget):
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 24, 24, 24)
-        layout.setSpacing(14)
+        layout.setSpacing(16)
 
         title = QLabel("Temporary Webcam")
-        title.setStyleSheet("font-size: 22px; font-weight: 700; color: #007bff;")
+        title.setStyleSheet("font-size: 24px; font-weight: 700; color: #007bff;")
 
         subtitle = QLabel("Use this while fundus camera integration is in progress.")
         subtitle.setStyleSheet("font-size: 13px; color: #495057;")
@@ -43,7 +43,7 @@ class CameraPage(QWidget):
         self.video_widget.setStyleSheet("background: #000000; border: 1px solid #dee2e6; border-radius: 8px;")
 
         controls = QHBoxLayout()
-        controls.setSpacing(10)
+        controls.setSpacing(8)
 
         self.start_btn = QPushButton("Start Camera")
         self.start_btn.setStyleSheet(
@@ -51,9 +51,9 @@ class CameraPage(QWidget):
             QPushButton {
                 background: #28a745;
                 color: white;
-                border: none;
-                border-radius: 6px;
-                padding: 10px 16px;
+                border: 1px solid #1e7e34;
+                border-radius: 8px;
+                padding: 8px 16px;
                 font-size: 13px;
                 font-weight: 600;
             }
@@ -68,9 +68,9 @@ class CameraPage(QWidget):
             QPushButton {
                 background: #dc3545;
                 color: white;
-                border: none;
-                border-radius: 6px;
-                padding: 10px 16px;
+                border: 1px solid #bb2d3b;
+                border-radius: 8px;
+                padding: 8px 16px;
                 font-size: 13px;
                 font-weight: 600;
             }

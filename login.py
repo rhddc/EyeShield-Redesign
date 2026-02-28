@@ -25,21 +25,21 @@ class LoginWindow(QWidget):
         self.setStyleSheet("""
             QWidget {
                 background: #f8f9fa;
-                border-radius: 10px;
+                border-radius: 8px;
             }
         """)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(40, 40, 40, 40)
-        layout.setSpacing(20)
+        layout.setContentsMargins(32, 32, 32, 32)
+        layout.setSpacing(16)
 
         title = QLabel("EyeShield EMR")
         title.setAlignment(Qt.AlignCenter)
         title.setStyleSheet("""
             font-size: 28px;
-            font-weight: bold;
+            font-weight: 700;
             color: #007bff;
-            margin-bottom: 10px;
+            margin-bottom: 8px;
         """)
 
         subtitle = QLabel("Electronic Medical Records System")
@@ -47,7 +47,7 @@ class LoginWindow(QWidget):
         subtitle.setStyleSheet("""
             font-size: 14px;
             color: #6c757d;
-            margin-bottom: 30px;
+            margin-bottom: 24px;
         """)
 
         # Login form container
@@ -57,11 +57,11 @@ class LoginWindow(QWidget):
                 background: white;
                 border-radius: 8px;
                 border: 1px solid #dee2e6;
-                padding: 20px;
+                padding: 16px;
             }
         """)
         form_layout = QVBoxLayout(form_widget)
-        form_layout.setSpacing(15)
+        form_layout.setSpacing(16)
 
         self.username_input = QLineEdit()
         self.username_input.setPlaceholderText("Username")
@@ -69,14 +69,14 @@ class LoginWindow(QWidget):
         self.username_input.setStyleSheet("""
             QLineEdit {
                 border: 1px solid #ced4da;
-                border-radius: 4px;
+                border-radius: 8px;
                 padding: 8px 12px;
                 font-size: 14px;
                 background: white;
                 min-width: 250px;
             }
             QLineEdit:focus {
-                border-color: #007bff;
+                border-color: #0d6efd;
             }
         """)
 
@@ -87,14 +87,14 @@ class LoginWindow(QWidget):
         self.password_input.setStyleSheet("""
             QLineEdit {
                 border: 1px solid #ced4da;
-                border-radius: 4px;
+                border-radius: 8px;
                 padding: 8px 12px;
                 font-size: 14px;
                 background: white;
                 min-width: 250px;
             }
             QLineEdit:focus {
-                border-color: #007bff;
+                border-color: #0d6efd;
             }
         """)
 
@@ -102,16 +102,16 @@ class LoginWindow(QWidget):
         btn.setMinimumHeight(40)
         btn.setStyleSheet("""
             QPushButton {
-                background: #007bff;
+                background: #0d6efd;
                 color: white;
-                border: none;
-                border-radius: 4px;
-                padding: 10px;
+                border: 1px solid #0b5ed7;
+                border-radius: 8px;
+                padding: 8px 16px;
                 font-size: 14px;
-                font-weight: 500;
+                font-weight: 600;
             }
             QPushButton:hover {
-                background: #0056b3;
+                background: #0b5ed7;
             }
         """)
         btn.clicked.connect(self.handle_login)

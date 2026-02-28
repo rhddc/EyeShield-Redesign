@@ -43,8 +43,8 @@ class SettingsPage(QWidget):
             QComboBox {
                 background: #ffffff;
                 border: 1px solid #ced4da;
-                border-radius: 6px;
-                padding: 6px 8px;
+                border-radius: 8px;
+                padding: 8px;
                 min-height: 20px;
             }
             QComboBox:focus {
@@ -57,8 +57,8 @@ class SettingsPage(QWidget):
                 background: #e9ecef;
                 color: #212529;
                 border: 1px solid #ced4da;
-                border-radius: 6px;
-                padding: 7px 12px;
+                border-radius: 8px;
+                padding: 8px 16px;
                 font-weight: 600;
             }
             QPushButton:hover {
@@ -85,7 +85,7 @@ class SettingsPage(QWidget):
         layout.setSpacing(12)
 
         self.title_label = QLabel("Settings")
-        self.title_label.setStyleSheet("font-size:22px;font-weight:700;color:#007bff;font-family:'Segoe UI','Inter','Arial';")
+        self.title_label.setStyleSheet("font-size:24px;font-weight:700;color:#007bff;font-family:'Segoe UI','Inter','Arial';")
         self.subtitle_label = QLabel("Local offline preferences for this installation")
         self.subtitle_label.setStyleSheet("font-size:13px;color:#6c757d;")
         layout.addWidget(self.title_label)
@@ -121,12 +121,12 @@ class SettingsPage(QWidget):
                 width: 18px;
                 height: 18px;
                 border: 1px solid #6c757d;
-                border-radius: 3px;
+                border-radius: 4px;
                 background: #ffffff;
             }
             QCheckBox::indicator:checked {
-                background: #007bff;
-                border: 1px solid #0056b3;
+                background: #0d6efd;
+                border: 1px solid #0b5ed7;
             }
         """
         self.auto_logout.setStyleSheet(checkbox_style)
