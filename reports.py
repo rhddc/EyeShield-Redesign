@@ -52,8 +52,10 @@ class ReportsPage(QWidget):
         root.setSpacing(16)
 
         title = QLabel("DR Screening Reports")
+        title.setObjectName("pageHeader")
         title.setStyleSheet("font-size:24px;font-weight:700;color:#007bff;font-family:'Segoe UI','Inter','Arial';")
         subtitle = QLabel("Complete diabetic retinopathy screening outcomes from locally saved records")
+        subtitle.setObjectName("pageSubtitle")
         subtitle.setStyleSheet("font-size:13px;color:#6c757d;")
 
         top_bar = QHBoxLayout()
@@ -145,14 +147,17 @@ class ReportsPage(QWidget):
 
     def _make_stat_card(self, title: str, value: str) -> tuple[QWidget, QLabel]:
         container = QWidget()
+        container.setObjectName("dashTile")
         container.setStyleSheet("background:#ffffff;border:1px solid #dee2e6;border-radius:8px;")
         layout = QVBoxLayout(container)
         layout.setContentsMargins(16, 12, 16, 12)
         layout.setSpacing(8)
 
         title_label = QLabel(title)
+        title_label.setObjectName("tileTitle")
         title_label.setStyleSheet("font-size:12px;font-weight:600;color:#6c757d;")
         value_label = QLabel(value)
+        value_label.setObjectName("statValue")
         value_label.setStyleSheet("font-size:18px;font-weight:700;color:#343a40;")
 
         layout.addWidget(title_label)

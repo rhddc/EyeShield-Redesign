@@ -21,6 +21,7 @@ DARK_STYLESHEET = """
         background: #1e1e2e;
         color: #cdd6f4;
         font-family: "Segoe UI", "Inter", "Arial";
+        font-size: 13px;
     }
     QMainWindow, QStackedWidget {
         background: #1e1e2e;
@@ -33,6 +34,7 @@ DARK_STYLESHEET = """
         border: 1px solid #45475a;
         border-radius: 8px;
         padding: 8px;
+        font-size: 13px;
         selection-background-color: #585b70;
     }
     QLineEdit:focus, QTextEdit:focus, QComboBox:focus,
@@ -53,6 +55,7 @@ DARK_STYLESHEET = """
         gridline-color: #45475a;
         border: 1px solid #45475a;
         border-radius: 8px;
+        font-size: 13px;
     }
     QHeaderView::section {
         background: #363649;
@@ -60,6 +63,7 @@ DARK_STYLESHEET = """
         padding: 8px;
         border: none;
         font-weight: 600;
+        font-size: 13px;
     }
     QTableWidget::item {
         padding: 8px;
@@ -71,6 +75,7 @@ DARK_STYLESHEET = """
         border: 1px solid #45475a;
         border-radius: 8px;
         margin-top: 10px;
+        font-size: 15px;
         font-weight: 600;
         color: #89b4fa;
     }
@@ -88,6 +93,7 @@ DARK_STYLESHEET = """
         border: 1px solid #585b70;
         border-radius: 8px;
         padding: 8px 16px;
+        font-size: 13px;
         font-weight: 600;
     }
     QPushButton:hover {
@@ -134,9 +140,13 @@ DARK_STYLESHEET = """
     QLabel {
         background: transparent;
         color: #cdd6f4;
+        font-size: 13px;
     }
     QLabel#tileTitle {
         color: #a6adc8;
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.5px;
     }
     QLabel#statusLabel {
         color: #a6adc8;
@@ -144,15 +154,74 @@ DARK_STYLESHEET = """
     }
     QLabel#hintLabel {
         color: #6c7086;
+        font-size: 12px;
     }
     QLabel#pageHeader {
         color: #89b4fa;
+        font-size: 24px;
+        font-weight: 700;
+        font-family: "Segoe UI", "Inter", "Arial";
+    }
+    QLabel#pageSubtitle {
+        color: #a6adc8;
+        font-size: 13px;
+    }
+    QLabel#appTitle {
+        color: #89b4fa;
+        font-size: 24px;
+        font-weight: 700;
+        margin-right: 24px;
+    }
+    QLabel#userInfo {
+        color: #a6adc8;
+        font-size: 12px;
+        font-weight: 500;
+        margin-left: 16px;
+        margin-right: 8px;
+    }
+    QLabel#welcomeTitle {
+        color: #89b4fa;
+        font-size: 24px;
+        font-weight: 700;
+    }
+    QLabel#bigValue {
+        color: #cdd6f4;
+        font-size: 32px;
+        font-weight: 700;
+    }
+    QLabel#quoteLabel {
+        color: #a6adc8;
+        font-size: 13px;
+        font-style: italic;
+    }
+    QLabel#dashDate {
+        color: #89b4fa;
+        font-size: 13px;
+        font-weight: 600;
+    }
+    QLabel#insightLabel {
+        color: #a6adc8;
+        font-size: 13px;
+    }
+    QLabel#activityLabel {
+        color: #a6adc8;
+        font-size: 14px;
+    }
+    QLabel#notesLabel {
+        color: #a6adc8;
+        font-size: 13px;
+    }
+    QLabel#statValue {
+        color: #cdd6f4;
+        font-size: 18px;
+        font-weight: 700;
     }
 
     /* ---- Checkboxes ---- */
     QCheckBox {
         color: #cdd6f4;
         spacing: 8px;
+        font-size: 13px;
     }
     QCheckBox::indicator {
         width: 18px;
@@ -192,6 +261,10 @@ DARK_STYLESHEET = """
         background: #262637;
         border: 1px solid #45475a;
         border-radius: 8px;
+    }
+    QWidget#navBar {
+        background: #181825;
+        border-bottom: 1px solid #45475a;
     }
 
     /* ---- Video widget ---- */
@@ -282,8 +355,10 @@ class SettingsPage(QWidget):
         layout.setSpacing(12)
 
         self.title_label = QLabel("Settings")
+        self.title_label.setObjectName("pageHeader")
         self.title_label.setStyleSheet("font-size:24px;font-weight:700;color:#007bff;font-family:'Segoe UI','Inter','Arial';")
         self.subtitle_label = QLabel("Local offline preferences for this installation")
+        self.subtitle_label.setObjectName("pageSubtitle")
         self.subtitle_label.setStyleSheet("font-size:13px;color:#6c757d;")
         layout.addWidget(self.title_label)
         layout.addWidget(self.subtitle_label)

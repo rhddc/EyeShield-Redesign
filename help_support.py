@@ -14,10 +14,12 @@ class HelpSupportPage(QWidget):
         root_layout.setSpacing(16)
 
         title = QLabel("Help & Support")
+        title.setObjectName("pageHeader")
         title.setStyleSheet("font-size: 24px; font-weight: 700; color: #007bff;")
         root_layout.addWidget(title)
 
         subtitle = QLabel("Quick guidance for daily workflows, troubleshooting, and support contacts.")
+        subtitle.setObjectName("pageSubtitle")
         subtitle.setStyleSheet("color: #495057; font-size: 13px;")
         root_layout.addWidget(subtitle)
 

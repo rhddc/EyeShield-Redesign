@@ -220,6 +220,7 @@ class UsersPage(QWidget):
         # Header
         header_layout = QHBoxLayout()
         title_label = QLabel("User Management")
+        title_label.setObjectName("pageHeader")
         title_label.setStyleSheet("font-size:24px;font-weight:700;color:#007bff;font-family:'Segoe UI','Inter','Arial';")
         header_layout.addWidget(title_label)
         header_layout.addStretch()

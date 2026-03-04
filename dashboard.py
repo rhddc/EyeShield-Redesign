@@ -41,6 +41,7 @@ class EyeShieldApp(QMainWindow):
 
         # Create top navigation bar
         nav_bar = QWidget()
+        nav_bar.setObjectName("navBar")
         nav_layout = QHBoxLayout(nav_bar)
         nav_layout.setContentsMargins(8, 8, 8, 8)
         nav_layout.setSpacing(8)
@@ -49,6 +50,7 @@ class EyeShieldApp(QMainWindow):
 
         # App title
         title_label = QLabel("EyeShield EMR")
+        title_label.setObjectName("appTitle")
         title_label.setStyleSheet("color: #007bff; font-size: 24px; font-weight: 700; margin-right: 24px;")
         nav_layout.addWidget(title_label)
 
@@ -93,6 +95,7 @@ class EyeShieldApp(QMainWindow):
         # User info on the right
         nav_layout.addStretch()
         user_info = QLabel(f"👤 {self.username} ({self.role})")
+        user_info.setObjectName("userInfo")
         user_info.setStyleSheet("color: #495057; font-size: 12px; font-weight: 500; margin-left: 16px; margin-right: 8px;")
         nav_layout.addWidget(user_info)
 
@@ -297,6 +300,10 @@ class EyeShieldApp(QMainWindow):
         current_idx = self.pages.currentIndex()
         self._set_active_nav(current_idx)
 
+        # Refresh quote label with correct accent color
+        if hasattr(self, 'quote_label'):
+            self.quote_label.setText(self.get_medical_quote(dark=self._dark_mode))
+
     def handle_logout(self):
         reply = QMessageBox.question(
             self,
@@ -355,10 +362,13 @@ class EyeShieldApp(QMainWindow):
 
         hero_tile, hero_layout = make_tile("Overview", accent="#007bff", minimum_height=170)
         welcome_title = QLabel(f"Welcome, {self.username}!")
+        welcome_title.setObjectName("welcomeTitle")
         welcome_title.setStyleSheet("color: #007bff; font-size: 24px; font-weight: 700;")
         welcome_subtitle = QLabel("Diabetic Retinopathy Screening Command Center")
+        welcome_subtitle.setObjectName("pageSubtitle")
         welcome_subtitle.setStyleSheet("color: #6c757d; font-size: 14px;")
-        self.quote_label = QLabel(self.get_medical_quote())
+        self.quote_label = QLabel(self.get_medical_quote(dark=self._dark_mode))
+        self.quote_label.setObjectName("quoteLabel")
         self.quote_label.setStyleSheet("color: #495057; font-size: 13px; font-style: italic;")
         self.quote_label.setTextFormat(Qt.RichText)
         self.quote_label.setWordWrap(True)
@@ -369,6 +379,7 @@ class EyeShieldApp(QMainWindow):
 
         session_tile, session_layout = make_tile("Session", accent="#17a2b8", minimum_height=170)
         self.dashboard_date_label = QLabel("")
+        self.dashboard_date_label.setObjectName("dashDate")
         self.dashboard_date_label.setStyleSheet("font-size: 13px; color: #007bff; font-weight: 600;")
         role_label = QLabel(f"Role: {self.role.capitalize()}")
         role_label.setStyleSheet("font-size: 13px; color: #495057;")
@@ -382,8 +393,10 @@ class EyeShieldApp(QMainWindow):
 
         total_tile, total_layout = make_tile("Total Screenings", accent="#28a745")
         self.total_screenings_value = QLabel("0")
+        self.total_screenings_value.setObjectName("bigValue")
         self.total_screenings_value.setStyleSheet("font-size: 32px; font-weight: 700; color: #212529;")
         total_hint = QLabel("All saved DR screenings")
+        total_hint.setObjectName("hintLabel")
         total_hint.setStyleSheet("font-size: 12px; color: #6c757d;")
         total_layout.addWidget(self.total_screenings_value)
         total_layout.addWidget(total_hint)
@@ -392,8 +405,10 @@ class EyeShieldApp(QMainWindow):
 
         attention_tile, attention_layout = make_tile("High Attention", accent="#dc3545")
         self.high_attention_value = QLabel("0")
+        self.high_attention_value.setObjectName("bigValue")
         self.high_attention_value.setStyleSheet("font-size: 32px; font-weight: 700; color: #212529;")
         self.high_attention_hint = QLabel("Cases flagged for follow-up")
+        self.high_attention_hint.setObjectName("hintLabel")
         self.high_attention_hint.setStyleSheet("font-size: 12px; color: #6c757d;")
         attention_layout.addWidget(self.high_attention_value)
         attention_layout.addWidget(self.high_attention_hint)
@@ -445,8 +460,10 @@ class EyeShieldApp(QMainWindow):
 
         confidence_tile, confidence_layout = make_tile("Average Confidence", accent="#ffc107")
         self.avg_confidence_value = QLabel("—")
+        self.avg_confidence_value.setObjectName("bigValue")
         self.avg_confidence_value.setStyleSheet("font-size: 32px; font-weight: 700; color: #212529;")
         confidence_hint = QLabel("Across records with confidence data")
+        confidence_hint.setObjectName("hintLabel")
         confidence_hint.setStyleSheet("font-size: 12px; color: #6c757d;")
         confidence_layout.addWidget(self.avg_confidence_value)
         confidence_layout.addWidget(confidence_hint)
@@ -455,6 +472,7 @@ class EyeShieldApp(QMainWindow):
 
         insight_tile, insight_layout = make_tile("Clinical Insight", accent="#fd7e14")
         self.insight_label = QLabel("Start a screening to generate real-time insight.")
+        self.insight_label.setObjectName("insightLabel")
         self.insight_label.setStyleSheet("font-size: 13px; color: #495057;")
         self.insight_label.setWordWrap(True)
         insight_layout.addWidget(self.insight_label)
@@ -463,6 +481,7 @@ class EyeShieldApp(QMainWindow):
 
         activity_tile, activity_layout = make_tile("Recent Clinical Activity", accent="#007bff", minimum_height=180)
         self.recent_activity_label = QLabel("No recent clinical activity. Ready for patient screenings.")
+        self.recent_activity_label.setObjectName("activityLabel")
         self.recent_activity_label.setStyleSheet("color: #6c757d; font-size: 14px; font-style: italic;")
         self.recent_activity_label.setWordWrap(True)
         activity_layout.addWidget(self.recent_activity_label)
@@ -471,6 +490,7 @@ class EyeShieldApp(QMainWindow):
 
         quick_notes_tile, quick_notes_layout = make_tile("Workflow", accent="#20c997", minimum_height=180)
         quick_notes = QLabel("• Verify patient details before analysis\n• Capture clear retinal images\n• Record follow-up actions in notes")
+        quick_notes.setObjectName("notesLabel")
         quick_notes.setStyleSheet("font-size: 13px; color: #495057; line-height: 1.35;")
         quick_notes.setWordWrap(True)
         quick_notes_layout.addWidget(quick_notes)
@@ -482,7 +502,7 @@ class EyeShieldApp(QMainWindow):
         return page
 
     @staticmethod
-    def get_medical_quote():
+    def get_medical_quote(dark=False):
         quotes = [
             ("Wherever the art of Medicine is loved, there is also a love of Humanity.", "Hippocrates"),
             ("Healing is a matter of time, but it is sometimes also a matter of opportunity.", "Hippocrates"),
@@ -506,7 +526,8 @@ class EyeShieldApp(QMainWindow):
             ("A good laugh and a long sleep are the best cures in the doctor's book.", "Irish proverb"),
         ]
         text, author = random.choice(quotes)
-        return f'"{text}"<br><span style=\'color:#007bff;\'>- {author}</span>'
+        accent = '#89b4fa' if dark else '#007bff'
+        return f'"<i>{text}</i>"<br><span style=\'color:{accent};\'>— {author}</span>'
 
     def refresh_dashboard(self):
         """Refresh recent activity from screening records"""
@@ -576,10 +597,16 @@ class EyeShieldApp(QMainWindow):
                     self.insight_label.setText("All recorded screenings appear up-to-date. Continue routine monitoring.")
 
             if recent_lines:
-                self.recent_activity_label.setStyleSheet("color: #495057; font-size: 14px;")
+                if self._dark_mode:
+                    self.recent_activity_label.setStyleSheet("color: #a6adc8; font-size: 14px;")
+                else:
+                    self.recent_activity_label.setStyleSheet("color: #495057; font-size: 14px;")
                 self.recent_activity_label.setText("\n".join(recent_lines))
             else:
-                self.recent_activity_label.setStyleSheet("color: #6c757d; font-size: 14px; font-style: italic;")
+                if self._dark_mode:
+                    self.recent_activity_label.setStyleSheet("color: #6c7086; font-size: 14px; font-style: italic;")
+                else:
+                    self.recent_activity_label.setStyleSheet("color: #6c757d; font-size: 14px; font-style: italic;")
                 self.recent_activity_label.setText("No recent clinical activity. Ready for patient screenings.")
         except Exception:
             pass
