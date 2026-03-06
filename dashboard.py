@@ -569,9 +569,8 @@ class EyeShieldApp(QMainWindow):
         # Update nav icon for the new theme
         self._update_nav_icon(self._dark_mode)
 
-        # Refresh quote label with correct accent color
-        if hasattr(self, 'quote_label'):
-            self.quote_label.setText(self.get_medical_quote(dark=self._dark_mode))
+        # Refresh entire dashboard with correct theme colors
+        self.refresh_dashboard()
 
     def closeEvent(self, event):
         """Ask for confirmation before closing the application."""
@@ -607,296 +606,622 @@ class EyeShieldApp(QMainWindow):
         self.close()
 
     def create_dashboard_page(self):
-        """Create dashboard page"""
+        """Create the redesigned clinician-focused dashboard page."""
         page = QWidget()
-        page.setStyleSheet("background: #f8f9fa;")
+        page.setObjectName("dashboardPage")
+        page.setStyleSheet("QWidget#dashboardPage { background: #f8f9fa; }")
         layout = QVBoxLayout(page)
-        layout.setContentsMargins(24, 24, 24, 24)
+        layout.setContentsMargins(24, 18, 24, 18)
         layout.setSpacing(14)
 
-        grid = QGridLayout()
-        grid.setSpacing(14)
-        grid.setColumnStretch(0, 2)
-        grid.setColumnStretch(1, 2)
-        grid.setColumnStretch(2, 1)
+        # ── Colour constants (light-theme defaults; dark overridden in refresh) ──
+        # These are used here for initial build; refresh_dashboard re-applies them.
 
-        def make_tile(title, accent="#007bff", minimum_height=120):
-            tile = QWidget()
-            tile.setObjectName("dashTile")
-            tile.setMinimumHeight(minimum_height)
-            tile.setStyleSheet(f"""
-                QWidget#dashTile {{
-                    background: white;
-                    border: 1px solid #dee2e6;
-                    border-left: 4px solid {accent};
-                    border-radius: 8px;
-                }}
-                QLabel#tileTitle {{
-                    color: #495057;
-                    font-size: 12px;
-                    font-weight: 700;
-                    letter-spacing: 0.5px;
-                    text-transform: uppercase;
-                }}
-            """)
-            tile_layout = QVBoxLayout(tile)
-            tile_layout.setContentsMargins(16, 16, 16, 16)
-            tile_layout.setSpacing(8)
-            title_label = QLabel(title)
-            title_label.setObjectName("tileTitle")
-            tile_layout.addWidget(title_label)
-            return tile, tile_layout
+        # ── 0. WELCOME ROW (greeting + role left, date right) ────────
+        self.welcome_label = QLabel(f"Welcome back, {self.username}")
+        self.welcome_label.setObjectName("welcomeGreeting")
+        self.welcome_label.setStyleSheet(
+            "color: #212529; font-size: 22px; font-weight: 600; background: transparent;"
+        )
 
-        hero_tile, hero_layout = make_tile("Overview", accent="#007bff", minimum_height=170)
-        welcome_title = QLabel(f"Welcome, {self.username}!")
-        welcome_title.setObjectName("welcomeTitle")
-        welcome_title.setStyleSheet("color: #007bff; font-size: 24px; font-weight: 700;")
-        welcome_subtitle = QLabel("Diabetic Retinopathy Screening Command Center")
-        welcome_subtitle.setObjectName("pageSubtitle")
-        welcome_subtitle.setStyleSheet("color: #6c757d; font-size: 14px;")
-        self.quote_label = QLabel(self.get_medical_quote(dark=self._dark_mode))
-        self.quote_label.setObjectName("quoteLabel")
-        self.quote_label.setStyleSheet("color: #495057; font-size: 13px; font-style: italic;")
-        self.quote_label.setTextFormat(Qt.RichText)
-        self.quote_label.setWordWrap(True)
-        hero_layout.addWidget(welcome_title)
-        hero_layout.addWidget(welcome_subtitle)
-        hero_layout.addWidget(self.quote_label)
-        grid.addWidget(hero_tile, 0, 0, 1, 2)
+        self.welcome_role_label = QLabel(f"{self.role.capitalize()}")
+        self.welcome_role_label.setObjectName("welcomeRole")
+        self.welcome_role_label.setStyleSheet(
+            "color: #6c757d; font-size: 14px; font-weight: 500; background: transparent;"
+        )
 
-        session_tile, session_layout = make_tile("Session", accent="#17a2b8", minimum_height=170)
         self.dashboard_date_label = QLabel("")
         self.dashboard_date_label.setObjectName("dashDate")
-        self.dashboard_date_label.setStyleSheet("font-size: 13px; color: #007bff; font-weight: 600;")
-        role_label = QLabel(f"Role: {self.role.capitalize()}")
-        role_label.setStyleSheet("font-size: 13px; color: #495057;")
-        self.queue_status_label = QLabel("Queue: Ready")
-        self.queue_status_label.setStyleSheet("font-size: 13px; color: #495057;")
-        session_layout.addWidget(self.dashboard_date_label)
-        session_layout.addWidget(role_label)
-        session_layout.addWidget(self.queue_status_label)
-        session_layout.addStretch()
-        grid.addWidget(session_tile, 0, 2)
+        self.dashboard_date_label.setAlignment(Qt.AlignRight)
+        self.dashboard_date_label.setStyleSheet(
+            "color: #0066cc; font-size: 14px; font-weight: 600; background: transparent;"
+        )
 
-        total_tile, total_layout = make_tile("Total Screenings", accent="#28a745")
-        self.total_screenings_value = QLabel("0")
-        self.total_screenings_value.setObjectName("bigValue")
-        self.total_screenings_value.setStyleSheet("font-size: 32px; font-weight: 700; color: #212529;")
-        total_hint = QLabel("All saved DR screenings")
-        total_hint.setObjectName("hintLabel")
-        total_hint.setStyleSheet("font-size: 12px; color: #6c757d;")
-        total_layout.addWidget(self.total_screenings_value)
-        total_layout.addWidget(total_hint)
-        total_layout.addStretch()
-        grid.addWidget(total_tile, 1, 0)
+        welcome_row = QHBoxLayout()
+        welcome_row.setSpacing(0)
+        left_col = QVBoxLayout()
+        left_col.setSpacing(2)
+        left_col.addWidget(self.welcome_label)
+        left_col.addWidget(self.welcome_role_label)
+        welcome_row.addLayout(left_col)
+        welcome_row.addStretch()
+        welcome_row.addWidget(self.dashboard_date_label, 0, Qt.AlignVCenter)
+        layout.addLayout(welcome_row)
 
-        attention_tile, attention_layout = make_tile("High Attention", accent="#dc3545")
-        self.high_attention_value = QLabel("0")
-        self.high_attention_value.setObjectName("bigValue")
-        self.high_attention_value.setStyleSheet("font-size: 32px; font-weight: 700; color: #212529;")
-        self.high_attention_hint = QLabel("Cases flagged for follow-up")
-        self.high_attention_hint.setObjectName("hintLabel")
-        self.high_attention_hint.setStyleSheet("font-size: 12px; color: #6c757d;")
-        attention_layout.addWidget(self.high_attention_value)
-        attention_layout.addWidget(self.high_attention_hint)
-        attention_layout.addStretch()
-        grid.addWidget(attention_tile, 1, 1)
+        # ── KPI STRIP (4 equal cards) ───────────────────────────────────
+        kpi_row = QHBoxLayout()
+        kpi_row.setSpacing(14)
 
-        actions_tile, actions_layout = make_tile("Clinical Actions", accent="#6f42c1", minimum_height=250)
-        actions_layout.setSpacing(10)
-
-        def make_action_btn(label, color, hover):
-            btn = QPushButton(label)
-            btn.setStyleSheet(f"""
-                QPushButton {{
-                    background: {color};
-                    color: white;
-                    border: 1px solid rgba(0, 0, 0, 0.08);
+        def make_kpi_card(object_name, title_text, accent):
+            """Build a single KPI card with title, big value, and subtitle."""
+            card = QWidget()
+            card.setObjectName(object_name)
+            card.setMinimumHeight(110)
+            card.setStyleSheet(f"""
+                QWidget#{object_name} {{
+                    background: white;
+                    border: 1px solid #dee2e6;
+                    border-top: 3px solid {accent};
                     border-radius: 8px;
-                    padding: 8px 16px;
-                    font-size: 13px;
-                    font-weight: 600;
                 }}
-                QPushButton:hover {{ background: {hover}; }}
             """)
-            return btn
+            v = QVBoxLayout(card)
+            v.setContentsMargins(16, 12, 16, 12)
+            v.setSpacing(4)
 
-        btn_new = make_action_btn("New Patient Screening", "#28a745", "#218838")
-        btn_new.clicked.connect(lambda: self.pages.setCurrentIndex(1))
+            title = QLabel(title_text)
+            title.setObjectName(f"{object_name}_title")
+            title.setStyleSheet(
+                "color: #6c757d; font-size: 11px; font-weight: 700;"
+                "letter-spacing: 0.5px; text-transform: uppercase; background: transparent;"
+            )
+            value = QLabel("—")
+            value.setObjectName(f"{object_name}_value")
+            value.setStyleSheet("font-size: 34px; font-weight: 700; color: #212529; background: transparent;")
 
-        btn_camera = make_action_btn("Open Camera", "#fd7e14", "#e66a00")
-        btn_camera.clicked.connect(lambda: self.pages.setCurrentIndex(2))
+            subtitle = QLabel("")
+            subtitle.setObjectName(f"{object_name}_sub")
+            subtitle.setStyleSheet("font-size: 11px; color: #6c757d; background: transparent;")
 
-        btn_reports = make_action_btn("Reports", "#17a2b8", "#117a8b")
-        btn_reports.clicked.connect(lambda: self.pages.setCurrentIndex(3))
+            v.addWidget(title)
+            v.addWidget(value)
+            v.addWidget(subtitle)
+            v.addStretch()
+            return card, value, subtitle
 
-        btn_users = make_action_btn("Users", "#6f42c1", "#563d7c")
-        btn_users.clicked.connect(lambda: self.pages.setCurrentIndex(4))
+        # Card 1: Total Screenings
+        card_total, self.total_screenings_value, self.total_sub = \
+            make_kpi_card("kpiTotal", "TOTAL SCREENINGS", "#0066cc")
 
-        actions_layout.addWidget(btn_new)
-        actions_layout.addWidget(btn_camera)
-        actions_layout.addWidget(btn_reports)
-        actions_layout.addWidget(btn_users)
-        actions_layout.addStretch()
+        # Card 2: Flagged for Review  (the mission-critical number)
+        card_flagged, self.high_attention_value, self.high_attention_hint = \
+            make_kpi_card("kpiFlagged", "FLAGGED FOR REVIEW", "#d32f2f")
 
-        if self.role == "clinician":
-            btn_users.setEnabled(False)
-            btn_users.setToolTip("Admins only")
+        # Card 3: Pending Review
+        card_pending, self.pending_value, self.pending_sub = \
+            make_kpi_card("kpiPending", "PENDING REVIEW", "#ed6c02")
 
-        grid.addWidget(actions_tile, 1, 2, 2, 1)
+        # Card 4: Average Confidence (with progress bar below value)
+        card_conf, self.avg_confidence_value, self.conf_sub = \
+            make_kpi_card("kpiConf", "MODEL CONFIDENCE", "#0066cc")
 
-        confidence_tile, confidence_layout = make_tile("Average Confidence", accent="#ffc107")
-        self.avg_confidence_value = QLabel("—")
-        self.avg_confidence_value.setObjectName("bigValue")
-        self.avg_confidence_value.setStyleSheet("font-size: 32px; font-weight: 700; color: #212529;")
-        confidence_hint = QLabel("Across records with confidence data")
-        confidence_hint.setObjectName("hintLabel")
-        confidence_hint.setStyleSheet("font-size: 12px; color: #6c757d;")
-        confidence_layout.addWidget(self.avg_confidence_value)
-        confidence_layout.addWidget(confidence_hint)
-        confidence_layout.addStretch()
-        grid.addWidget(confidence_tile, 2, 0)
+        # Add a visual progress bar under the confidence value
+        self.conf_bar_track = QWidget()
+        self.conf_bar_track.setFixedHeight(6)
+        self.conf_bar_track.setStyleSheet(
+            "background: #e9ecef; border-radius: 3px;"
+        )
+        self.conf_bar_fill = QWidget(self.conf_bar_track)
+        self.conf_bar_fill.setFixedHeight(6)
+        self.conf_bar_fill.setStyleSheet(
+            "background: #0066cc; border-radius: 3px;"
+        )
+        self.conf_bar_fill.setFixedWidth(0)
+        card_conf.layout().insertWidget(3, self.conf_bar_track)
 
-        insight_tile, insight_layout = make_tile("Clinical Insight", accent="#fd7e14")
-        self.insight_label = QLabel("Start a screening to generate real-time insight.")
+        kpi_row.addWidget(card_total, 1)
+        kpi_row.addWidget(card_flagged, 1)
+        kpi_row.addWidget(card_pending, 1)
+        kpi_row.addWidget(card_conf, 1)
+        layout.addLayout(kpi_row)
+
+        # ── 3. MAIN CONTENT AREA (two-column) ──────────────────────────
+        content_row = QHBoxLayout()
+        content_row.setSpacing(14)
+
+        # ── Left: Recent Screenings ──
+        activity_card = QWidget()
+        activity_card.setObjectName("activityCard")
+        activity_card.setMinimumHeight(260)
+        activity_card.setStyleSheet("""
+            QWidget#activityCard {
+                background: white;
+                border: 1px solid #dee2e6;
+                border-radius: 8px;
+            }
+        """)
+        activity_v = QVBoxLayout(activity_card)
+        activity_v.setContentsMargins(16, 14, 16, 14)
+        activity_v.setSpacing(8)
+
+        activity_header = QHBoxLayout()
+        activity_title = QLabel("RECENT SCREENINGS")
+        activity_title.setStyleSheet(
+            "color: #6c757d; font-size: 11px; font-weight: 700;"
+            "letter-spacing: 0.5px; text-transform: uppercase; background: transparent;"
+        )
+        activity_header.addWidget(activity_title)
+        activity_header.addStretch()
+
+        self.activity_count_label = QLabel("")
+        self.activity_count_label.setStyleSheet(
+            "color: #6c757d; font-size: 11px; background: transparent;"
+        )
+        activity_header.addWidget(self.activity_count_label)
+        activity_v.addLayout(activity_header)
+
+        # Column headers row
+        col_header = QWidget()
+        col_header.setObjectName("colHeader")
+        col_header.setFixedHeight(26)
+        col_header.setStyleSheet(
+            "QWidget#colHeader { background: #f1f3f5; border-radius: 4px; }"
+        )
+        ch_layout = QHBoxLayout(col_header)
+        ch_layout.setContentsMargins(8, 0, 8, 0)
+        ch_layout.setSpacing(0)
+        header_style = "font-size: 10px; font-weight: 700; color: #868e96; background: transparent; text-transform: uppercase;"
+        for text, stretch in [("", 0), ("Patient ID", 2), ("Name", 3), ("Result", 3), ("Confidence", 2)]:
+            lbl = QLabel(text)
+            lbl.setStyleSheet(header_style)
+            if stretch == 0:
+                lbl.setFixedWidth(16)
+            ch_layout.addWidget(lbl, stretch)
+        self.col_header_widget = col_header
+        activity_v.addWidget(col_header)
+
+        # Scrollable rows container
+        self.activity_rows_widget = QWidget()
+        self.activity_rows_widget.setStyleSheet("background: transparent;")
+        self.activity_rows_layout = QVBoxLayout(self.activity_rows_widget)
+        self.activity_rows_layout.setContentsMargins(0, 0, 0, 0)
+        self.activity_rows_layout.setSpacing(2)
+        activity_v.addWidget(self.activity_rows_widget, 1)
+
+        # Empty-state label (hidden when data present)
+        self.empty_activity_label = QLabel("No screening records yet. Start by running a new screening.")
+        self.empty_activity_label.setObjectName("emptyActivity")
+        self.empty_activity_label.setStyleSheet(
+            "color: #6c757d; font-size: 13px; font-style: italic; padding: 24px; background: transparent;"
+        )
+        self.empty_activity_label.setAlignment(Qt.AlignCenter)
+        self.empty_activity_label.setWordWrap(True)
+        activity_v.addWidget(self.empty_activity_label)
+
+        content_row.addWidget(activity_card, 7)
+
+        # ── Right: Session + Quick Actions + Insight ──
+        sidebar = QWidget()
+        sidebar.setObjectName("dashSidebar")
+        sidebar.setStyleSheet("QWidget#dashSidebar { background: transparent; }")
+        sidebar_v = QVBoxLayout(sidebar)
+        sidebar_v.setContentsMargins(0, 0, 0, 0)
+        sidebar_v.setSpacing(14)
+
+        # Quick Actions card
+        actions_card = QWidget()
+        actions_card.setObjectName("actionsCard")
+        actions_card.setStyleSheet("""
+            QWidget#actionsCard {
+                background: white;
+                border: 1px solid #dee2e6;
+                border-radius: 8px;
+            }
+        """)
+        actions_v = QVBoxLayout(actions_card)
+        actions_v.setContentsMargins(16, 12, 16, 12)
+        actions_v.setSpacing(8)
+
+        actions_title = QLabel("QUICK ACTIONS")
+        actions_title.setStyleSheet(
+            "color: #6c757d; font-size: 11px; font-weight: 700;"
+            "letter-spacing: 0.5px; background: transparent;"
+        )
+        actions_v.addWidget(actions_title)
+
+        btn_new_screening = QPushButton("  New Screening")
+        btn_new_screening.setCursor(Qt.PointingHandCursor)
+        btn_new_screening.setFixedHeight(36)
+        btn_new_screening.setStyleSheet("""
+            QPushButton {
+                background: #0066cc; color: white; border: none;
+                border-radius: 6px; font-size: 13px; font-weight: 600;
+                padding: 0 16px;
+            }
+            QPushButton:hover { background: #0052a3; }
+        """)
+        btn_new_screening.clicked.connect(lambda: self.pages.setCurrentIndex(1))
+        actions_v.addWidget(btn_new_screening)
+
+        btn_view_reports = QPushButton("  View Reports")
+        btn_view_reports.setCursor(Qt.PointingHandCursor)
+        btn_view_reports.setFixedHeight(36)
+        btn_view_reports.setStyleSheet("""
+            QPushButton {
+                background: transparent; color: #0066cc;
+                border: 1px solid #0066cc; border-radius: 6px;
+                font-size: 13px; font-weight: 600; padding: 0 16px;
+            }
+            QPushButton:hover { background: #e8f0fe; }
+        """)
+        btn_view_reports.clicked.connect(lambda: self.pages.setCurrentIndex(3))
+        actions_v.addWidget(btn_view_reports)
+        self._dash_btn_new = btn_new_screening
+        self._dash_btn_reports = btn_view_reports
+        sidebar_v.addWidget(actions_card)
+
+        # Clinical Insight card
+        insight_card = QWidget()
+        insight_card.setObjectName("insightCard")
+        insight_card.setStyleSheet("""
+            QWidget#insightCard {
+                background: white;
+                border: 1px solid #dee2e6;
+                border-radius: 8px;
+            }
+        """)
+        insight_v = QVBoxLayout(insight_card)
+        insight_v.setContentsMargins(16, 12, 16, 12)
+        insight_v.setSpacing(6)
+        insight_title = QLabel("CLINICAL INSIGHT")
+        insight_title.setStyleSheet(
+            "color: #6c757d; font-size: 11px; font-weight: 700;"
+            "letter-spacing: 0.5px; background: transparent;"
+        )
+        self.insight_label = QLabel("Start a screening to generate insight.")
         self.insight_label.setObjectName("insightLabel")
-        self.insight_label.setStyleSheet("font-size: 13px; color: #495057;")
+        self.insight_label.setStyleSheet("font-size: 12px; color: #495057; background: transparent;")
         self.insight_label.setWordWrap(True)
-        insight_layout.addWidget(self.insight_label)
-        insight_layout.addStretch()
-        grid.addWidget(insight_tile, 2, 1)
+        insight_v.addWidget(insight_title)
+        insight_v.addWidget(self.insight_label)
+        insight_v.addStretch()
+        sidebar_v.addWidget(insight_card)
 
-        activity_tile, activity_layout = make_tile("Recent Clinical Activity", accent="#007bff", minimum_height=180)
-        self.recent_activity_label = QLabel("No recent clinical activity. Ready for patient screenings.")
-        self.recent_activity_label.setObjectName("activityLabel")
-        self.recent_activity_label.setStyleSheet("color: #6c757d; font-size: 14px; font-style: italic;")
-        self.recent_activity_label.setWordWrap(True)
-        activity_layout.addWidget(self.recent_activity_label)
-        activity_layout.addStretch()
-        grid.addWidget(activity_tile, 3, 0, 1, 2)
+        sidebar_v.addStretch()
+        content_row.addWidget(sidebar, 3)
+        layout.addLayout(content_row, 1)
 
-        quick_notes_tile, quick_notes_layout = make_tile("Workflow", accent="#20c997", minimum_height=180)
-        quick_notes = QLabel("• Verify patient details before analysis\n• Capture clear retinal images\n• Record follow-up actions in notes")
-        quick_notes.setObjectName("notesLabel")
-        quick_notes.setStyleSheet("font-size: 13px; color: #495057; line-height: 1.35;")
-        quick_notes.setWordWrap(True)
-        quick_notes_layout.addWidget(quick_notes)
-        quick_notes_layout.addStretch()
-        grid.addWidget(quick_notes_tile, 3, 2)
-
-        layout.addLayout(grid)
-        layout.addStretch()
         return page
 
-    @staticmethod
-    def get_medical_quote(dark=False):
-        quotes = [
-            ("Wherever the art of Medicine is loved, there is also a love of Humanity.", "Hippocrates"),
-            ("Healing is a matter of time, but it is sometimes also a matter of opportunity.", "Hippocrates"),
-            ("Life is short, art is long, opportunity fleeting, experience treacherous, judgment difficult.", "Hippocrates"),
-            ("First, do no harm.", "Hippocrates (attributed)"),
-            ("Let food be thy medicine and medicine be thy food.", "Hippocrates (attributed)"),
-            ("The good physician treats the disease; the great physician treats the patient who has the disease.", "William Osler"),
-            ("Medicine is a science of uncertainty and an art of probability.", "William Osler"),
-            ("Listen to the patient, he is telling you the diagnosis.", "William Osler"),
-            ("The practice of medicine is an art, based on science.", "William Osler"),
-            ("To study the phenomena of disease without books is to sail an uncharted sea; to study books without patients is not to go to sea at all.", "William Osler"),
-            ("Cure sometimes, treat often, comfort always.", "Ambroise Pare"),
-            ("The art of medicine consists of amusing the patient while nature cures the disease.", "Voltaire"),
-            ("The best physician is also a philosopher.", "Galen (attributed)"),
-            ("In nothing do men more nearly approach the gods than in giving health to men.", "Cicero"),
-            ("The dose makes the poison.", "Paracelsus"),
-            ("In the fields of observation, chance favors the prepared mind.", "Louis Pasteur"),
-            ("Medicine is a social science, and politics is nothing else but medicine on a large scale.", "Rudolf Virchow"),
-            ("He who takes medicine and neglects diet wastes the skill of the physician.", "Hippocrates (attributed)"),
-            ("To cure a disease after it has taken hold is like digging a well after one is thirsty.", "Chinese proverb"),
-            ("A good laugh and a long sleep are the best cures in the doctor's book.", "Irish proverb"),
-        ]
-        text, author = random.choice(quotes)
-        accent = '#89b4fa' if dark else '#007bff'
-        return f'"<i>{text}</i>"<br><span style=\'color:{accent};\'>— {author}</span>'
-
     def refresh_dashboard(self):
-        """Refresh recent activity from screening records"""
+        """Refresh all dashboard widgets with current data and correct theme colors."""
+        dark = getattr(self, "_dark_mode", False)
+
+        # ── Theme palette ──
+        if dark:
+            bg_page = "#1e1e2e"
+            card_bg = "#313244"
+            card_border = "#45475a"
+            text_primary = "#cdd6f4"
+            text_secondary = "#a6adc8"
+            text_muted = "#6c7086"
+            accent_blue = "#89b4fa"
+            sev_red = "#f38ba8"
+            sev_amber = "#fab387"
+            sev_green = "#a6e3a1"
+            col_header_bg = "#45475a"
+            col_header_text = "#a6adc8"
+            row_hover = "#3a3a4f"
+            bar_track_bg = "#45475a"
+            btn_primary_bg = "#89b4fa"
+            btn_primary_text = "#1e1e2e"
+            btn_primary_hover = "#74a8f7"
+            btn_outline_color = "#89b4fa"
+            btn_outline_hover_bg = "#313244"
+        else:
+            bg_page = "#f8f9fa"
+            card_bg = "white"
+            card_border = "#dee2e6"
+            text_primary = "#212529"
+            text_secondary = "#6c757d"
+            text_muted = "#adb5bd"
+            accent_blue = "#0066cc"
+            sev_red = "#d32f2f"
+            sev_amber = "#ed6c02"
+            sev_green = "#2e7d32"
+            col_header_bg = "#f1f3f5"
+            col_header_text = "#868e96"
+            row_hover = "#f1f3f5"
+            bar_track_bg = "#e9ecef"
+            btn_primary_bg = "#0066cc"
+            btn_primary_text = "white"
+            btn_primary_hover = "#0052a3"
+            btn_outline_color = "#0066cc"
+            btn_outline_hover_bg = "#e8f0fe"
+
+        # ── Fetch data ──
+        total = 0
+        high_attention = 0
+        pending_count = 0
+        confidence_values = []
+        rows = []
         try:
             conn = sqlite3.connect(DB_FILE)
             cur = conn.cursor()
             cur.execute(
-                """
-                SELECT patient_id, name, result, confidence
-                FROM patient_records
-                ORDER BY id DESC
-                """
+                "SELECT patient_id, name, result, confidence "
+                "FROM patient_records ORDER BY id DESC"
             )
             rows = cur.fetchall()
             conn.close()
 
             total = len(rows)
-
-            recent_lines = []
-            high_attention = 0
-            pending_count = 0
-            confidence_values = []
-
             for _, _, result, confidence_text in rows:
                 result = str(result or "")
                 if self._is_high_attention_result(result):
                     high_attention += 1
                 if not result or "pending" in result.lower():
                     pending_count += 1
-
                 conf_value = self._extract_confidence_value(str(confidence_text or ""))
                 if conf_value is not None:
                     confidence_values.append(conf_value)
-
-            for patient_id, name, result, _ in rows[:5]:
-                pid = str(patient_id or "")
-                name = str(name or "")
-                result = str(result or "")
-                recent_lines.append(f"• {pid} — {name} — {result or 'Pending'}")
-
-            avg_conf = sum(confidence_values) / len(confidence_values) if confidence_values else None
-
-            if hasattr(self, "total_screenings_value"):
-                self.total_screenings_value.setText(str(total))
-            if hasattr(self, "high_attention_value"):
-                self.high_attention_value.setText(str(high_attention))
-            if hasattr(self, "high_attention_hint"):
-                if high_attention > 0:
-                    self.high_attention_hint.setText("Cases flagged for follow-up")
-                else:
-                    self.high_attention_hint.setText("No high-attention cases detected")
-            if hasattr(self, "avg_confidence_value"):
-                self.avg_confidence_value.setText(f"{avg_conf:.1f}%" if avg_conf is not None else "—")
-            if hasattr(self, "queue_status_label"):
-                self.queue_status_label.setText(f"Queue: {pending_count} pending review")
-            if hasattr(self, "dashboard_date_label"):
-                today = datetime.now().strftime('%A, %B %d, %Y')
-                self.dashboard_date_label.setText(f"Today: {today}")
-            if hasattr(self, "insight_label"):
-                if total == 0:
-                    self.insight_label.setText("No screenings yet. Start with a new screening to populate trends.")
-                elif high_attention > 0:
-                    self.insight_label.setText(f"{high_attention} case(s) require closer follow-up. Prioritize report review.")
-                elif pending_count > 0:
-                    self.insight_label.setText("Screenings are recorded. Complete pending reviews and finalize outcomes.")
-                else:
-                    self.insight_label.setText("All recorded screenings appear up-to-date. Continue routine monitoring.")
-
-            if recent_lines:
-                if self._dark_mode:
-                    self.recent_activity_label.setStyleSheet("color: #a6adc8; font-size: 14px;")
-                else:
-                    self.recent_activity_label.setStyleSheet("color: #495057; font-size: 14px;")
-                self.recent_activity_label.setText("\n".join(recent_lines))
-            else:
-                if self._dark_mode:
-                    self.recent_activity_label.setStyleSheet("color: #6c7086; font-size: 14px; font-style: italic;")
-                else:
-                    self.recent_activity_label.setStyleSheet("color: #6c757d; font-size: 14px; font-style: italic;")
-                self.recent_activity_label.setText("No recent clinical activity. Ready for patient screenings.")
         except Exception:
             pass
+
+        avg_conf = sum(confidence_values) / len(confidence_values) if confidence_values else None
+
+        # ── Page background ──
+        if hasattr(self, "dashboard_page"):
+            self.dashboard_page.setStyleSheet(
+                f"QWidget#dashboardPage {{ background: {bg_page}; }}"
+            )
+
+        # ── 0. Welcome row ──
+        if hasattr(self, "welcome_label"):
+            self.welcome_label.setStyleSheet(
+                f"color: {text_primary}; font-size: 22px; font-weight: 600; background: transparent;"
+            )
+        if hasattr(self, "dashboard_date_label"):
+            today = datetime.now().strftime("%A, %B %d, %Y")
+            self.dashboard_date_label.setText(today)
+            self.dashboard_date_label.setStyleSheet(
+                f"color: {accent_blue}; font-size: 14px; font-weight: 600; background: transparent;"
+            )
+        if hasattr(self, "welcome_role_label"):
+            self.welcome_role_label.setStyleSheet(
+                f"color: {text_secondary}; font-size: 14px; font-weight: 500; background: transparent;"
+            )
+
+        # ── KPI cards ──
+        kpi_title_style = (
+            f"color: {text_secondary}; font-size: 11px; font-weight: 700;"
+            "letter-spacing: 0.5px; text-transform: uppercase; background: transparent;"
+        )
+        kpi_value_style = f"font-size: 34px; font-weight: 700; color: {text_primary}; background: transparent;"
+        kpi_sub_style = f"font-size: 11px; color: {text_secondary}; background: transparent;"
+
+        def style_kpi(obj_name, accent, value_widget, sub_widget, value_text, sub_text):
+            card = self.findChild(QWidget, obj_name)
+            if card:
+                card.setStyleSheet(
+                    f"QWidget#{obj_name} {{ background: {card_bg};"
+                    f"  border: 1px solid {card_border}; border-top: 3px solid {accent};"
+                    f"  border-radius: 8px; }}"
+                )
+            title_w = self.findChild(QLabel, f"{obj_name}_title")
+            if title_w:
+                title_w.setStyleSheet(kpi_title_style)
+            if value_widget:
+                value_widget.setStyleSheet(kpi_value_style)
+                value_widget.setText(value_text)
+            if sub_widget:
+                sub_widget.setStyleSheet(kpi_sub_style)
+                sub_widget.setText(sub_text)
+
+        style_kpi("kpiTotal", accent_blue,
+                  self.total_screenings_value, self.total_sub,
+                  str(total), "All saved DR screenings")
+
+        flagged_accent = sev_red if high_attention > 0 else text_muted
+        style_kpi("kpiFlagged", flagged_accent,
+                  self.high_attention_value, self.high_attention_hint,
+                  str(high_attention),
+                  "Cases flagged for follow-up" if high_attention > 0 else "No cases flagged")
+
+        style_kpi("kpiPending", sev_amber if pending_count > 0 else text_muted,
+                  self.pending_value, self.pending_sub,
+                  str(pending_count),
+                  "Awaiting review" if pending_count > 0 else "All reviews complete")
+
+        conf_display = f"{avg_conf:.1f}%" if avg_conf is not None else "—"
+        style_kpi("kpiConf", accent_blue,
+                  self.avg_confidence_value, self.conf_sub,
+                  conf_display,
+                  f"Across {len(confidence_values)} record{'s' if len(confidence_values) != 1 else ''}"
+                  if confidence_values else "No confidence data yet")
+
+        # Confidence progress bar
+        if hasattr(self, "conf_bar_track"):
+            self.conf_bar_track.setStyleSheet(
+                f"background: {bar_track_bg}; border-radius: 3px;"
+            )
+            track_w = self.conf_bar_track.width() or 200
+            fill_w = int(track_w * (avg_conf / 100.0)) if avg_conf is not None else 0
+            bar_color = sev_green if (avg_conf or 0) >= 75 else (sev_amber if (avg_conf or 0) >= 50 else sev_red)
+            self.conf_bar_fill.setStyleSheet(
+                f"background: {bar_color}; border-radius: 3px;"
+            )
+            self.conf_bar_fill.setFixedWidth(max(0, min(fill_w, track_w)))
+
+        # ── 3. Recent Screenings table ──
+        if hasattr(self, "activity_rows_layout"):
+            # Clear existing rows
+            while self.activity_rows_layout.count():
+                item = self.activity_rows_layout.takeAt(0)
+                if item.widget():
+                    item.widget().deleteLater()
+
+            # Theme the card
+            if hasattr(self, "col_header_widget"):
+                self.col_header_widget.setStyleSheet(
+                    f"QWidget#colHeader {{ background: {col_header_bg}; border-radius: 4px; }}"
+                )
+                for lbl in self.col_header_widget.findChildren(QLabel):
+                    lbl.setStyleSheet(
+                        f"font-size: 10px; font-weight: 700; color: {col_header_text};"
+                        " background: transparent; text-transform: uppercase;"
+                    )
+
+            activity_card = self.findChild(QWidget, "activityCard")
+            if activity_card:
+                activity_card.setStyleSheet(
+                    f"QWidget#activityCard {{ background: {card_bg};"
+                    f"  border: 1px solid {card_border}; border-radius: 8px; }}"
+                )
+
+            if hasattr(self, "activity_count_label"):
+                self.activity_count_label.setText(
+                    f"Showing {min(len(rows), 8)} of {total}" if total else ""
+                )
+                self.activity_count_label.setStyleSheet(
+                    f"color: {text_secondary}; font-size: 11px; background: transparent;"
+                )
+
+            # Activity title
+            for lbl in (self.findChild(QWidget, "activityCard") or QWidget()).findChildren(QLabel):
+                if lbl.text() == "RECENT SCREENINGS":
+                    lbl.setStyleSheet(
+                        f"color: {text_secondary}; font-size: 11px; font-weight: 700;"
+                        "letter-spacing: 0.5px; text-transform: uppercase; background: transparent;"
+                    )
+                    break
+
+            recent = rows[:8]
+            if recent:
+                self.empty_activity_label.setVisible(False)
+                self.col_header_widget.setVisible(True)
+                for patient_id, name, result, confidence in recent:
+                    row_w = QWidget()
+                    row_w.setFixedHeight(32)
+                    row_w.setStyleSheet(
+                        f"QWidget {{ background: transparent; }}"
+                        f"QWidget:hover {{ background: {row_hover}; border-radius: 4px; }}"
+                    )
+                    rh = QHBoxLayout(row_w)
+                    rh.setContentsMargins(8, 0, 8, 0)
+                    rh.setSpacing(0)
+
+                    result_str = str(result or "")
+                    # Severity dot
+                    if self._is_high_attention_result(result_str):
+                        dot_color = sev_red
+                    elif not result_str or "pending" in result_str.lower():
+                        dot_color = sev_amber
+                    else:
+                        dot_color = sev_green
+
+                    dot = QLabel("\u25cf")
+                    dot.setFixedWidth(16)
+                    dot.setStyleSheet(f"color: {dot_color}; font-size: 10px; background: transparent;")
+                    dot.setAlignment(Qt.AlignCenter)
+
+                    cell_style = f"font-size: 12px; color: {text_primary}; background: transparent;"
+                    cell_secondary = f"font-size: 12px; color: {text_secondary}; background: transparent;"
+
+                    pid_lbl = QLabel(str(patient_id or ""))
+                    pid_lbl.setStyleSheet(cell_style)
+
+                    name_lbl = QLabel(str(name or ""))
+                    name_lbl.setStyleSheet(cell_style)
+
+                    result_lbl = QLabel(result_str or "Pending")
+                    if self._is_high_attention_result(result_str):
+                        result_lbl.setStyleSheet(
+                            f"font-size: 12px; color: {sev_red}; font-weight: 600; background: transparent;"
+                        )
+                    elif not result_str or "pending" in result_str.lower():
+                        result_lbl.setStyleSheet(
+                            f"font-size: 12px; color: {sev_amber}; font-style: italic; background: transparent;"
+                        )
+                    else:
+                        result_lbl.setStyleSheet(cell_secondary)
+
+                    conf_val = self._extract_confidence_value(str(confidence or ""))
+                    conf_lbl = QLabel(f"{conf_val:.0f}%" if conf_val is not None else "—")
+                    conf_lbl.setStyleSheet(cell_secondary)
+
+                    rh.addWidget(dot, 0)
+                    rh.addWidget(pid_lbl, 2)
+                    rh.addWidget(name_lbl, 3)
+                    rh.addWidget(result_lbl, 3)
+                    rh.addWidget(conf_lbl, 2)
+                    self.activity_rows_layout.addWidget(row_w)
+                self.activity_rows_layout.addStretch()
+            else:
+                self.empty_activity_label.setVisible(True)
+                self.col_header_widget.setVisible(False)
+                self.empty_activity_label.setStyleSheet(
+                    f"color: {text_muted}; font-size: 13px; font-style: italic;"
+                    " padding: 24px; background: transparent;"
+                )
+
+        # ── 4. Sidebar cards ──
+        for card_name in ("actionsCard", "insightCard"):
+            card = self.findChild(QWidget, card_name)
+            if card:
+                card.setStyleSheet(
+                    f"QWidget#{card_name} {{ background: {card_bg};"
+                    f"  border: 1px solid {card_border}; border-radius: 8px; }}"
+                )
+
+        # Style section title labels in sidebar
+        for card_name in ("actionsCard", "insightCard"):
+            card = self.findChild(QWidget, card_name)
+            if card:
+                for lbl in card.findChildren(QLabel):
+                    if lbl.text() in ("QUICK ACTIONS", "CLINICAL INSIGHT"):
+                        lbl.setStyleSheet(
+                            f"color: {text_secondary}; font-size: 11px; font-weight: 700;"
+                            "letter-spacing: 0.5px; background: transparent;"
+                        )
+
+        # Quick-action buttons
+        if hasattr(self, "_dash_btn_new"):
+            self._dash_btn_new.setStyleSheet(f"""
+                QPushButton {{
+                    background: {btn_primary_bg}; color: {btn_primary_text}; border: none;
+                    border-radius: 6px; font-size: 13px; font-weight: 600; padding: 0 16px;
+                }}
+                QPushButton:hover {{ background: {btn_primary_hover}; }}
+            """)
+        if hasattr(self, "_dash_btn_reports"):
+            self._dash_btn_reports.setStyleSheet(f"""
+                QPushButton {{
+                    background: transparent; color: {btn_outline_color};
+                    border: 1px solid {btn_outline_color}; border-radius: 6px;
+                    font-size: 13px; font-weight: 600; padding: 0 16px;
+                }}
+                QPushButton:hover {{ background: {btn_outline_hover_bg}; }}
+            """)
+
+        # Clinical insight text
+        if hasattr(self, "insight_label"):
+            if total == 0:
+                insight = "No screenings yet. Run a new screening to see trends here."
+            elif high_attention > 0:
+                pct = (high_attention / total * 100) if total else 0
+                insight = (
+                    f"{high_attention} of {total} screening{'s' if total != 1 else ''} "
+                    f"({pct:.0f}%) flagged. Prioritize report review."
+                )
+            elif pending_count > 0:
+                insight = f"{pending_count} screening{'s' if pending_count != 1 else ''} pending review. Complete assessments to clear the queue."
+            else:
+                insight = "All screenings reviewed — no action needed. Continue routine monitoring."
+            self.insight_label.setText(insight)
+            self.insight_label.setStyleSheet(
+                f"font-size: 12px; color: {text_secondary}; background: transparent;"
+            )
 
     @staticmethod
     def _is_high_attention_result(result_text):

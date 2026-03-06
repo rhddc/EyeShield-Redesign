@@ -11,11 +11,273 @@ from PySide6.QtWidgets import (
     QWidget, QLabel, QPushButton, QLineEdit, QVBoxLayout, QHBoxLayout,
     QFileDialog, QFormLayout, QGroupBox, QComboBox, QDateEdit, QMessageBox,
     QDoubleSpinBox, QSpinBox, QCheckBox, QTextEdit, QCalendarWidget, QStackedWidget,
-    QGridLayout
+    QGridLayout, QFrame, QStyle, QDialog, QScrollArea
 )
-from PySide6.QtGui import QPixmap, QFont, QRegularExpressionValidator
-from PySide6.QtCore import Qt, QDate, QRegularExpression
+from PySide6.QtGui import QPixmap, QFont, QRegularExpressionValidator, QPainter, QPen, QColor
+from PySide6.QtCore import Qt, QDate, QRegularExpression, QSize, QEvent
 from auth import DB_FILE
+
+
+class DrawableZoomLabel(QLabel):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.base_pixmap = QPixmap()
+        self.zoom_factor = 1.0
+        self.draw_enabled = False
+        self.strokes = []
+        self.current_stroke = []
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+    def set_base_pixmap(self, pixmap):
+        self.base_pixmap = pixmap
+        self.strokes = []
+        self.current_stroke = []
+        self._update_display()
+
+    def set_zoom_factor(self, factor):
+        self.zoom_factor = factor
+        self._update_display()
+
+    def set_draw_enabled(self, enabled):
+        self.draw_enabled = enabled
+        self.setCursor(Qt.CursorShape.CrossCursor if enabled else Qt.CursorShape.ArrowCursor)
+
+    def clear_drawings(self):
+        self.strokes = []
+        self.current_stroke = []
+        self._update_display()
+
+    def _map_to_image_point(self, position):
+        if self.base_pixmap.isNull():
+            return (0.0, 0.0)
+
+        max_x = max(0.0, float(self.base_pixmap.width() - 1))
+        max_y = max(0.0, float(self.base_pixmap.height() - 1))
+        point_x = min(max(position.x() / self.zoom_factor, 0.0), max_x)
+        point_y = min(max(position.y() / self.zoom_factor, 0.0), max_y)
+        return (point_x, point_y)
+
+    def _update_display(self):
+        if self.base_pixmap.isNull():
+            self.setPixmap(QPixmap())
+            return
+
+        canvas = self.base_pixmap.scaled(
+            max(1, int(self.base_pixmap.width() * self.zoom_factor)),
+            max(1, int(self.base_pixmap.height() * self.zoom_factor)),
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+
+        painter = QPainter(canvas)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        pen = QPen(QColor("#c81e1e"), max(2, int(2 * self.zoom_factor)), Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin)
+        painter.setPen(pen)
+
+        for stroke in self.strokes + ([self.current_stroke] if self.current_stroke else []):
+            for index in range(1, len(stroke)):
+                start_x, start_y = stroke[index - 1]
+                end_x, end_y = stroke[index]
+                painter.drawLine(
+                    int(start_x * self.zoom_factor),
+                    int(start_y * self.zoom_factor),
+                    int(end_x * self.zoom_factor),
+                    int(end_y * self.zoom_factor),
+                )
+
+        painter.end()
+        self.setPixmap(canvas)
+        self.resize(canvas.size())
+
+    def mousePressEvent(self, event):
+        if self.draw_enabled and event.button() == Qt.MouseButton.LeftButton and not self.base_pixmap.isNull():
+            self.current_stroke = [self._map_to_image_point(event.position())]
+            self._update_display()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self.draw_enabled and event.buttons() & Qt.MouseButton.LeftButton and self.current_stroke:
+            self.current_stroke.append(self._map_to_image_point(event.position()))
+            self._update_display()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if self.draw_enabled and event.button() == Qt.MouseButton.LeftButton and self.current_stroke:
+            self.current_stroke.append(self._map_to_image_point(event.position()))
+            self.strokes.append(self.current_stroke)
+            self.current_stroke = []
+            self._update_display()
+            return
+        super().mouseReleaseEvent(event)
+
+
+class ImageZoomDialog(QDialog):
+    ZOOM_STEP = 1.2
+
+    def __init__(self, pixmap, title, parent=None):
+        super().__init__(parent)
+        self.original_pixmap = pixmap
+        self.zoom_factor = 1.0
+
+        self.setWindowTitle(title)
+        self.resize(1100, 800)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(14, 14, 14, 14)
+        layout.setSpacing(10)
+
+        controls = QHBoxLayout()
+        controls.setSpacing(8)
+
+        zoom_in_btn = QPushButton()
+        zoom_in_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_ArrowUp))
+        zoom_in_btn.setIconSize(QSize(18, 18))
+        zoom_in_btn.setToolTip("Zoom in")
+        zoom_in_btn.setFixedSize(38, 38)
+        zoom_in_btn.clicked.connect(self.zoom_in)
+        controls.addWidget(zoom_in_btn)
+
+        zoom_out_btn = QPushButton()
+        zoom_out_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_ArrowDown))
+        zoom_out_btn.setIconSize(QSize(18, 18))
+        zoom_out_btn.setToolTip("Zoom out")
+        zoom_out_btn.setFixedSize(38, 38)
+        zoom_out_btn.clicked.connect(self.zoom_out)
+        controls.addWidget(zoom_out_btn)
+
+        reset_btn = QPushButton()
+        reset_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_BrowserReload))
+        reset_btn.setIconSize(QSize(18, 18))
+        reset_btn.setToolTip("Reset zoom")
+        reset_btn.setFixedSize(38, 38)
+        reset_btn.clicked.connect(self.reset_zoom)
+        controls.addWidget(reset_btn)
+
+        draw_btn = QPushButton("✎")
+        draw_btn.setCheckable(True)
+        draw_btn.setToolTip("Draw annotations")
+        draw_btn.setFixedSize(38, 38)
+        draw_btn.toggled.connect(self.toggle_draw_mode)
+        controls.addWidget(draw_btn)
+
+        clear_draw_btn = QPushButton()
+        clear_draw_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogDiscardButton))
+        clear_draw_btn.setIconSize(QSize(18, 18))
+        clear_draw_btn.setToolTip("Clear drawings")
+        clear_draw_btn.setFixedSize(38, 38)
+        clear_draw_btn.clicked.connect(self.clear_drawings)
+        controls.addWidget(clear_draw_btn)
+
+        controls.addStretch()
+
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(self.accept)
+        controls.addWidget(close_btn)
+
+        layout.addLayout(controls)
+
+        self.scroll_area = QScrollArea()
+        self.scroll_area.setWidgetResizable(False)
+        self.scroll_area.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(self.scroll_area, 1)
+
+        self.image_label = DrawableZoomLabel()
+        self.scroll_area.setWidget(self.image_label)
+        self.scroll_area.viewport().installEventFilter(self)
+        self.image_label.installEventFilter(self)
+        self.image_label.set_base_pixmap(self.original_pixmap)
+
+        self._update_preview()
+
+    def eventFilter(self, watched, event):
+        if watched in (self.scroll_area.viewport(), self.image_label) and event.type() == QEvent.Type.Wheel:
+            if event.angleDelta().y() > 0:
+                self.zoom_in()
+            elif event.angleDelta().y() < 0:
+                self.zoom_out()
+            return True
+        return super().eventFilter(watched, event)
+
+    def _update_preview(self):
+        if self.original_pixmap.isNull():
+            self.image_label.setPixmap(QPixmap())
+            return
+        self.image_label.set_zoom_factor(self.zoom_factor)
+
+    def zoom_in(self):
+        self.zoom_factor = min(5.0, self.zoom_factor * self.ZOOM_STEP)
+        self._update_preview()
+
+    def zoom_out(self):
+        self.zoom_factor = max(0.2, self.zoom_factor / self.ZOOM_STEP)
+        self._update_preview()
+
+    def reset_zoom(self):
+        self.zoom_factor = 1.0
+        self._update_preview()
+
+    def toggle_draw_mode(self, enabled):
+        self.image_label.set_draw_enabled(enabled)
+
+    def clear_drawings(self):
+        self.image_label.clear_drawings()
+
+
+class ClickableImageLabel(QLabel):
+    def __init__(self, empty_text="", viewer_title="Image Viewer", parent=None):
+        super().__init__(empty_text, parent)
+        self.viewer_title = viewer_title
+        self.full_pixmap = QPixmap()
+        self.setCursor(Qt.CursorShape.ArrowCursor)
+        self.open_badge = QLabel(self)
+        self.open_badge.setPixmap(self.style().standardIcon(QStyle.StandardPixmap.SP_DirOpenIcon).pixmap(16, 16))
+        self.open_badge.setFixedSize(28, 28)
+        self.open_badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.open_badge.setStyleSheet("background: rgba(13, 110, 253, 0.92); border-radius: 14px; border: 1px solid rgba(255, 255, 255, 0.65);")
+        self.open_badge.hide()
+
+    def set_viewable_pixmap(self, pixmap, max_width, max_height):
+        self.full_pixmap = pixmap
+        scaled = pixmap.scaled(
+            max_width,
+            max_height,
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+        self.setPixmap(scaled)
+        self.setText("")
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setToolTip("Click to open and zoom")
+        self.open_badge.show()
+        self.open_badge.raise_()
+        self._position_badge()
+
+    def clear_view(self, text):
+        self.full_pixmap = QPixmap()
+        self.setPixmap(QPixmap())
+        self.setText(text)
+        self.setCursor(Qt.CursorShape.ArrowCursor)
+        self.setToolTip("")
+        self.open_badge.hide()
+
+    def resizeEvent(self, event):
+        self._position_badge()
+        super().resizeEvent(event)
+
+    def _position_badge(self):
+        self.open_badge.move(
+            max(8, self.width() - self.open_badge.width() - 10),
+            max(8, self.height() - self.open_badge.height() - 10),
+        )
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton and not self.full_pixmap.isNull():
+            dialog = ImageZoomDialog(self.full_pixmap, self.viewer_title, self)
+            dialog.exec()
+            return
+        super().mousePressEvent(event)
 
 
 class ScreeningPage(QWidget):
@@ -125,6 +387,58 @@ class ScreeningPage(QWidget):
             QLabel#statusLabel {
                 color: #495057;
                 font-size: 12px;
+            }
+            QLabel#pageSubtitle {
+                color: #6c757d;
+                font-size: 13px;
+            }
+            QFrame#resultHero, QFrame#resultStatCard, QFrame#actionRail {
+                background: #ffffff;
+                border: 1px solid #dee2e6;
+                border-radius: 12px;
+            }
+            QFrame#resultHero {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 #ffffff, stop:1 #f3f8ff);
+            }
+            QLabel#resultChip {
+                background: #e8f1ff;
+                color: #0b5ed7;
+                border: 1px solid #cfe2ff;
+                border-radius: 999px;
+                padding: 6px 12px;
+                font-size: 12px;
+                font-weight: 700;
+            }
+            QLabel#resultStatTitle {
+                color: #6c757d;
+                font-size: 12px;
+                font-weight: 600;
+            }
+            QLabel#resultStatValue {
+                color: #1f2937;
+                font-size: 20px;
+                font-weight: 700;
+            }
+            QLabel#surfaceLabel {
+                border: 2px dashed #ced4da;
+                background: #f8f9fa;
+                border-radius: 12px;
+                color: #6c757d;
+                padding: 16px;
+                font-size: 12px;
+            }
+            QLabel#heatmapPlaceholder {
+                border: 2px dashed #9ec5fe;
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                    stop:0 #eef5ff, stop:1 #e2ecff);
+                border-radius: 12px;
+                color: #0b5ed7;
+                padding: 16px;
+                font-size: 12px;
+            }
+            QFrame#actionRail {
+                background: #f8fbff;
             }
         """)
 
@@ -730,6 +1044,7 @@ class ScreeningPage(QWidget):
             )
             self.image_label.setPixmap(pixmap)
             self.btn_analyze.setEnabled(True)
+
     def open_results_window(self):
         if not self._validate_patient_basics():
             return
@@ -748,7 +1063,12 @@ class ScreeningPage(QWidget):
         # Show results inside the same window
         self.last_result_class = "No DR Detected"
         self.last_result_conf = "Confidence: 93.8%"
-        self.results_page.set_results(self.p_name.text(), self.current_image)
+        self.results_page.set_results(
+            self.p_name.text(),
+            self.current_image,
+            self.last_result_class,
+            self.last_result_conf,
+        )
         self.stacked_widget.setCurrentIndex(1)
 
     def clear_image(self):
@@ -826,68 +1146,179 @@ class ResultsWindow(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.parent_page = parent
-        self.setMinimumSize(600, 500)
+        self.setMinimumSize(980, 700)
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(14)
 
         self.title_label = QLabel("Results")
         self.title_label.setFont(QFont("Calibri", 16, QFont.Weight.Bold))
         self.title_label.setObjectName("pageHeader")
         layout.addWidget(self.title_label)
 
+        self.subtitle_label = QLabel("Review the screening summary, image preview, and heatmap output area.")
+        self.subtitle_label.setObjectName("pageSubtitle")
+        self.subtitle_label.setWordWrap(True)
+        layout.addWidget(self.subtitle_label)
+
+        main_row = QHBoxLayout()
+        main_row.setSpacing(14)
+
+        review_column = QVBoxLayout()
+        review_column.setSpacing(12)
+
+        preview_row = QHBoxLayout()
+        preview_row.setSpacing(12)
+
+        source_group = QGroupBox("Source Image")
+        source_layout = QVBoxLayout(source_group)
+        source_layout.setContentsMargins(14, 16, 14, 14)
+        source_layout.setSpacing(10)
+        self.source_label = ClickableImageLabel("", "Source Image")
+        self.source_label.setObjectName("surfaceLabel")
+        self.source_label.setMinimumSize(440, 340)
+        self.source_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.source_label.setWordWrap(True)
+        source_layout.addWidget(self.source_label)
+        self.source_note = QLabel("This panel preserves the original fundus image for comparison against the model visualization. Click the image to inspect and zoom.")
+        self.source_note.setObjectName("statusLabel")
+        self.source_note.setWordWrap(True)
+        source_layout.addWidget(self.source_note)
+
         heatmap_group = QGroupBox("Heatmap Output")
         heatmap_layout = QVBoxLayout(heatmap_group)
-        self.heatmap_label = QLabel("Heatmap will appear here once the backend is connected.")
+        heatmap_layout.setContentsMargins(14, 16, 14, 14)
+        heatmap_layout.setSpacing(10)
+        self.heatmap_label = ClickableImageLabel("", "Heatmap Output")
+        self.heatmap_label.setObjectName("heatmapPlaceholder")
+        self.heatmap_label.setMinimumSize(440, 340)
         self.heatmap_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.heatmap_label.setStyleSheet("border: 2px dashed #0078d7; background-color: #e6f2ff; font-size: 11pt;")
-        self.heatmap_label.setMinimumHeight(260)
+        self.heatmap_label.setWordWrap(True)
         heatmap_layout.addWidget(self.heatmap_label)
-        layout.addWidget(heatmap_group)
+        self.heatmap_note = QLabel("Reserved for the lesion-attention or explainability overlay generated by the model. When a heatmap image is available, it will also open on click.")
+        self.heatmap_note.setObjectName("statusLabel")
+        self.heatmap_note.setWordWrap(True)
+        heatmap_layout.addWidget(self.heatmap_note)
 
-        explanation_group = QGroupBox("AI Explanation")
-        explanation_layout = QVBoxLayout(explanation_group)
-        self.explanation = QLabel("AI explanation will appear here once available.")
-        self.explanation.setWordWrap(True)
-        self.explanation.setStyleSheet("font-size: 11pt; color: #333;")
-        explanation_layout.addWidget(self.explanation)
-        layout.addWidget(explanation_group)
+        preview_row.addWidget(source_group, 1)
+        preview_row.addWidget(heatmap_group, 1)
+        review_column.addLayout(preview_row, 1)
 
-        button_layout = QHBoxLayout()
-        button_layout.addStretch()
+        stats_row = QHBoxLayout()
+        stats_row.setSpacing(12)
+        classification_card, self.classification_value = self._create_stat_card("Classification")
+        confidence_card, self.confidence_value = self._create_stat_card("Confidence")
+        recommendation_card, self.recommendation_value = self._create_stat_card("Recommendation")
+        stats_row.addWidget(classification_card)
+        stats_row.addWidget(confidence_card)
+        stats_row.addWidget(recommendation_card)
+        review_column.addLayout(stats_row)
+
+        main_row.addLayout(review_column, 1)
+
+        action_rail = QFrame()
+        action_rail.setObjectName("actionRail")
+        action_layout = QVBoxLayout(action_rail)
+        action_layout.setContentsMargins(14, 14, 14, 14)
+        action_layout.setSpacing(10)
+
+        rail_label = QLabel("Actions")
+        rail_label.setObjectName("resultStatTitle")
+        action_layout.addWidget(rail_label)
+
         self.btn_save = QPushButton("Save Patient")
         self.btn_save.setObjectName("primaryAction")
         self.btn_save.setAutoDefault(True)
         self.btn_save.setDefault(True)
+        self.btn_save.setMinimumHeight(42)
+        self.btn_save.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogSaveButton))
+        self.btn_save.setIconSize(QSize(18, 18))
         self.btn_save.clicked.connect(self.save_patient)
-        button_layout.addWidget(self.btn_save)
+        action_layout.addWidget(self.btn_save)
+
         self.btn_new = QPushButton("New Patient")
+        self.btn_new.setMinimumHeight(42)
+        self.btn_new.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogNewFolder))
+        self.btn_new.setIconSize(QSize(18, 18))
         self.btn_new.clicked.connect(self.new_patient)
-        button_layout.addWidget(self.btn_new)
+        action_layout.addWidget(self.btn_new)
+
         self.btn_back = QPushButton("Back to Screening")
         self.btn_back.setObjectName("dangerAction")
+        self.btn_back.setMinimumHeight(42)
+        self.btn_back.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_ArrowBack))
+        self.btn_back.setIconSize(QSize(18, 18))
         self.btn_back.clicked.connect(self.go_back)
-        button_layout.addWidget(self.btn_back)
-        layout.addLayout(button_layout)
+        action_layout.addWidget(self.btn_back)
 
-        layout.addStretch()
+        action_layout.addStretch()
 
-    def set_results(self, patient_name, image_path):
+        main_row.addWidget(action_rail)
+        layout.addLayout(main_row, 1)
+
+        explanation_group = QGroupBox("Clinical Summary")
+        explanation_layout = QVBoxLayout(explanation_group)
+        explanation_layout.setContentsMargins(14, 16, 14, 14)
+        explanation_layout.setSpacing(10)
+        self.explanation = QLabel("AI explanation will appear here once available.")
+        self.explanation.setWordWrap(True)
+        self.explanation.setStyleSheet("font-size: 11pt; color: #333; line-height: 1.45;")
+        explanation_layout.addWidget(self.explanation)
+        self.explanation_hint = QLabel("Use this area for screening rationale, referral guidance, and any findings tied to the future heatmap.")
+        self.explanation_hint.setObjectName("statusLabel")
+        self.explanation_hint.setWordWrap(True)
+        explanation_layout.addWidget(self.explanation_hint)
+        layout.addWidget(explanation_group)
+
+    def _create_stat_card(self, title_text):
+        card = QFrame()
+        card.setObjectName("resultStatCard")
+        card_layout = QVBoxLayout(card)
+        card_layout.setContentsMargins(16, 14, 16, 14)
+        card_layout.setSpacing(4)
+
+        title = QLabel(title_text)
+        title.setObjectName("resultStatTitle")
+        value = QLabel("Pending")
+        value.setObjectName("resultStatValue")
+        value.setWordWrap(True)
+
+        card_layout.addWidget(title)
+        card_layout.addWidget(value)
+        return card, value
+
+    def set_results(self, patient_name, image_path, result_class="Pending", confidence_text="Pending"):
         if patient_name:
             self.title_label.setText(f"Results for {patient_name}")
         else:
             self.title_label.setText("Results")
+
+        self.classification_value.setText(result_class)
+        self.confidence_value.setText(confidence_text)
+
+        recommendation = "Routine follow-up"
+        if "no dr" not in result_class.lower():
+            recommendation = "Clinical review advised"
+        self.recommendation_value.setText(recommendation)
+        self.subtitle_label.setText(
+            f"Current output shows {result_class.lower()} with {confidence_text.lower()}. The layout is ready for the final heatmap and explanation output."
+        )
+
         if image_path:
-            heatmap_pixmap = QPixmap(image_path).scaled(500, 350, Qt.AspectRatioMode.KeepAspectRatio)
-            self.heatmap_label.setPixmap(heatmap_pixmap)
-            self.heatmap_label.setText("")
+            source_pixmap = QPixmap(image_path)
+            self.source_label.set_viewable_pixmap(source_pixmap, 460, 360)
+            self.heatmap_label.clear_view("")
         else:
-            self.heatmap_label.setPixmap(QPixmap())
-            self.heatmap_label.setText("Heatmap will appear here once the backend is connected.")
-        self.explanation.setText("AI explanation will appear here once available.")
+            self.source_label.clear_view("")
+            self.heatmap_label.clear_view("")
+
+        self.explanation.setText(
+            f"Screening result: {result_class}. Confidence: {confidence_text}. This output area is structured for a clinician-friendly review flow, with the original image on the left, the explainability heatmap on the right, and a written summary below for findings and next-step guidance."
+        )
 
     def go_back(self):
         if self.parent_page and hasattr(self.parent_page, "stacked_widget"):
             self.parent_page.stacked_widget.setCurrentIndex(0)
-
     def save_patient(self):
         if self.parent_page and hasattr(self.parent_page, "save_screening"):
             self.parent_page.save_screening()
