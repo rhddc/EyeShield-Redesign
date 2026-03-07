@@ -252,7 +252,8 @@ class EyeShieldApp(QMainWindow):
         # Create main pages first so dashboard can query live data
         self.screening_page = ScreeningPage()
         self.camera_page = CameraPage()
-        self.reports_page = ReportsPage()
+        self.reports_page = ReportsPage(self.username, self.role)
+        self.reports_page.records_changed_callback = self.refresh_dashboard
         self.users_page = UsersPage()
         self.settings_page = SettingsPage()
         self.help_support_page = HelpSupportPage()
@@ -468,6 +469,8 @@ class EyeShieldApp(QMainWindow):
             self.camera_page.enter_page()
         else:
             self.camera_page.leave_page()
+        if index == 3:
+            self.reports_page.refresh_report()
         if index == 0:
             self.refresh_dashboard()
 
@@ -982,7 +985,7 @@ class EyeShieldApp(QMainWindow):
             cur = conn.cursor()
             cur.execute(
                 "SELECT patient_id, name, result, confidence "
-                "FROM patient_records ORDER BY id DESC"
+                "FROM patient_records WHERE archived_at IS NULL ORDER BY id DESC"
             )
             rows = cur.fetchall()
             conn.close()

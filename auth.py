@@ -111,6 +111,12 @@ def hash_password(password: str) -> str:
 
 class UserManager:
     """Manages user database operations"""
+
+    _PATIENT_RECORD_COLUMNS = {
+        "archived_at": "TEXT",
+        "archived_by": "TEXT",
+        "archive_reason": "TEXT",
+    }
     
     def __init__(self):
         self.conn = self._init_db()
@@ -149,9 +155,14 @@ class UserManager:
                 prev_treatment TEXT,
                 notes TEXT,
                 result TEXT,
-                confidence TEXT
+                confidence TEXT,
+                archived_at TEXT,
+                archived_by TEXT,
+                archive_reason TEXT
             )
         """)
+
+        UserManager._ensure_patient_record_columns(conn)
 
         conn.commit()
 
@@ -159,6 +170,20 @@ class UserManager:
         UserManager._ensure_admin_user(conn, first_run)
 
         return conn
+
+    @staticmethod
+    def _ensure_patient_record_columns(conn: sqlite3.Connection) -> None:
+        """Add archive-related columns for existing patient_records tables."""
+        cur = conn.cursor()
+        cur.execute("PRAGMA table_info(patient_records)")
+        existing_columns = {row[1] for row in cur.fetchall()}
+
+        for column_name, column_type in UserManager._PATIENT_RECORD_COLUMNS.items():
+            if column_name in existing_columns:
+                continue
+            cur.execute(
+                f"ALTER TABLE patient_records ADD COLUMN {column_name} {column_type}"
+            )
 
     @staticmethod
     def _migrate_users_json(conn: sqlite3.Connection) -> None:
