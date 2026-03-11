@@ -14,8 +14,27 @@ from PySide6.QtWidgets import (
     QGridLayout, QFrame, QStyle, QDialog, QScrollArea
 )
 from PySide6.QtGui import QPixmap, QFont, QRegularExpressionValidator, QPainter, QPen, QColor
-from PySide6.QtCore import Qt, QDate, QRegularExpression, QSize, QEvent
+from PySide6.QtCore import Qt, QDate, QRegularExpression, QSize, QEvent, QThread, Signal
+import os
 from auth import DB_FILE
+
+
+class _InferenceWorker(QThread):
+    """Run model_inference.run_inference() on a background thread."""
+    finished = Signal(str, str, str)  # label, confidence_text, heatmap_path
+    error = Signal(str)               # human-readable error message
+
+    def __init__(self, image_path: str):
+        super().__init__()
+        self._image_path = image_path
+
+    def run(self):
+        try:
+            from model_inference import run_inference
+            label, conf, heatmap_path = run_inference(self._image_path)
+            self.finished.emit(label, conf, heatmap_path)
+        except Exception as exc:
+            self.error.emit(str(exc))
 
 
 class DrawableZoomLabel(QLabel):
@@ -1069,15 +1088,20 @@ class ScreeningPage(QWidget):
         )
         self.image_label.setPixmap(pixmap)
         self.btn_analyze.setEnabled(True)
-        # Re-run analysis (placeholder — replace with real model call when ready)
-        self.last_result_class = "No DR Detected"
-        self.last_result_conf = "Confidence: 93.8%"
+
+        # Re-run inference with the new image
         self.results_page.set_results(
-            self.p_name.text(),
-            path,
-            self.last_result_class,
-            self.last_result_conf,
+            self.p_name.text(), path,
+            "Analyzing…", "Please wait",
         )
+        self._worker = _InferenceWorker(path)
+        self._worker.finished.connect(
+            lambda label, conf, hmap: self._on_inference_done(
+                label, conf, hmap, self.p_eye.currentText()
+            )
+        )
+        self._worker.error.connect(self._on_inference_error)
+        self._worker.start()
 
     def open_results_window(self):
         if not self._validate_patient_basics():
@@ -1090,24 +1114,55 @@ class ScreeningPage(QWidget):
         confirm_box.setText("Please confirm all patient information is correct before proceeding to results.")
         proceed_button = confirm_box.addButton("Proceed to Results", QMessageBox.ButtonRole.AcceptRole)
         confirm_box.addButton("Edit Information", QMessageBox.ButtonRole.RejectRole)
-        
+
         confirm_box.exec()
         if confirm_box.clickedButton() != proceed_button:
             return
-        # Show results inside the same window
+
         self._current_eye_saved = False
-        self.last_result_class = "No DR Detected"
-        self.last_result_conf = "Confidence: 93.8%"
         eye_label = self.p_eye.currentText()
+
+        # Show the results page immediately with a loading state
         self.results_page.set_results(
             self.p_name.text(),
             self.current_image,
-            self.last_result_class,
-            self.last_result_conf,
+            "Analyzing…",
+            "Please wait",
             eye_label=eye_label,
             first_eye_result=self._first_eye_result,
         )
         self.stacked_widget.setCurrentIndex(1)
+        self.btn_analyze.setEnabled(False)
+
+        # Run inference on a background thread
+        self._worker = _InferenceWorker(self.current_image)
+        self._worker.finished.connect(
+            lambda label, conf, hmap: self._on_inference_done(label, conf, hmap, eye_label)
+        )
+        self._worker.error.connect(self._on_inference_error)
+        self._worker.start()
+
+    def _on_inference_done(self, label: str, conf: str, heatmap_path: str, eye_label: str):
+        self.last_result_class = label
+        self.last_result_conf = conf
+        self.btn_analyze.setEnabled(True)
+        self.results_page.set_results(
+            self.p_name.text(),
+            self.current_image,
+            label,
+            conf,
+            eye_label=eye_label,
+            first_eye_result=self._first_eye_result,
+            heatmap_path=heatmap_path,
+        )
+
+    def _on_inference_error(self, message: str):
+        self.btn_analyze.setEnabled(True)
+        self.stacked_widget.setCurrentIndex(0)
+        QMessageBox.critical(
+            self, "Analysis Failed",
+            f"Could not run the DR model:\n\n{message}"
+        )
 
     def clear_image(self):
         self.current_image = None
@@ -1484,7 +1539,7 @@ class ResultsWindow(QWidget):
         card_layout.addWidget(value)
         return card, value
 
-    def set_results(self, patient_name, image_path, result_class="Pending", confidence_text="Pending", eye_label="", first_eye_result=None):
+    def set_results(self, patient_name, image_path, result_class="Pending", confidence_text="Pending", eye_label="", first_eye_result=None, heatmap_path=""):
         if patient_name:
             eye_suffix = f" \u2014 {eye_label}" if eye_label else ""
             self.title_label.setText(f"Results for {patient_name}{eye_suffix}")
@@ -1525,7 +1580,11 @@ class ResultsWindow(QWidget):
         if image_path:
             source_pixmap = QPixmap(image_path)
             self.source_label.set_viewable_pixmap(source_pixmap, 460, 360)
-            self.heatmap_label.clear_view("")
+            if heatmap_path and os.path.isfile(heatmap_path):
+                hmap_pixmap = QPixmap(heatmap_path)
+                self.heatmap_label.set_viewable_pixmap(hmap_pixmap, 460, 360)
+            else:
+                self.heatmap_label.clear_view("")
         else:
             self.source_label.clear_view("")
             self.heatmap_label.clear_view("")
