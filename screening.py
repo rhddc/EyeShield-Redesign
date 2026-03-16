@@ -5,6 +5,7 @@ Handles patient screening functionality and image analysis with fixed UI styling
 
 
 from datetime import datetime
+from html import escape
 import secrets
 import sqlite3
 from PySide6.QtWidgets import (
@@ -13,7 +14,7 @@ from PySide6.QtWidgets import (
     QDoubleSpinBox, QSpinBox, QCheckBox, QTextEdit, QCalendarWidget, QStackedWidget,
     QGridLayout, QFrame, QStyle, QDialog, QScrollArea, QProgressBar
 )
-from PySide6.QtGui import QPixmap, QFont, QRegularExpressionValidator, QPainter, QPen, QColor
+from PySide6.QtGui import QPixmap, QFont, QRegularExpressionValidator, QPainter, QPen, QColor, QIcon, QPalette
 from PySide6.QtCore import Qt, QDate, QRegularExpression, QSize, QEvent, QThread, Signal
 import os
 from auth import DB_FILE
@@ -1054,15 +1055,18 @@ class ScreeningPage(QWidget):
         return pid
 
     def _next_unique_patient_id(self):
+        alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
         for _ in range(25):
-            stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-            suffix = secrets.token_hex(2).upper()
+            # Short, readable ID: ES-YYMMDD-XXXXX (e.g., ES-260316-A9K2M)
+            stamp = datetime.now().strftime("%y%m%d")
+            suffix = "".join(secrets.choice(alphabet) for _ in range(5))
             candidate = f"ES-{stamp}-{suffix}"
             if not self._patient_id_exists(candidate):
                 return candidate
 
-        fallback = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
-        return f"ES-{fallback}"
+        # Fallback uses a longer, high-entropy suffix if repeated collisions happen.
+        fallback = datetime.now().strftime("%y%m%d")
+        return f"ES-{fallback}-{secrets.token_hex(4).upper()}"
 
     def _patient_id_exists(self, patient_id):
         patient_id = str(patient_id or "").strip()
@@ -1592,6 +1596,7 @@ class ResultsWindow(QWidget):
         super().__init__(parent)
         self.parent_page = parent
         self.setMinimumSize(980, 700)
+        self._icons_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icons")
 
         # Report generation state — updated by set_results()
         self._current_image_path   = ""
@@ -1756,14 +1761,12 @@ class ResultsWindow(QWidget):
         self.btn_save.setAutoDefault(True)
         self.btn_save.setDefault(True)
         self.btn_save.setMinimumHeight(42)
-        self.btn_save.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogSaveButton))
         self.btn_save.setIconSize(QSize(18, 18))
         self.btn_save.clicked.connect(self.save_patient)
         action_layout.addWidget(self.btn_save)
 
         self.btn_report = QPushButton("Generate Report")
         self.btn_report.setMinimumHeight(42)
-        self.btn_report.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogDetailedView))
         self.btn_report.setIconSize(QSize(18, 18))
         self.btn_report.setEnabled(False)
         self.btn_report.clicked.connect(self.generate_report)
@@ -1772,14 +1775,12 @@ class ResultsWindow(QWidget):
         self.btn_screen_another = QPushButton("Screen Other Eye")
         self.btn_screen_another.setObjectName("secondaryAction")
         self.btn_screen_another.setMinimumHeight(42)
-        self.btn_screen_another.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogStart))
         self.btn_screen_another.setIconSize(QSize(18, 18))
         self.btn_screen_another.clicked.connect(self._on_screen_another)
         action_layout.addWidget(self.btn_screen_another)
 
         self.btn_new = QPushButton("New Patient")
         self.btn_new.setMinimumHeight(42)
-        self.btn_new.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogNewFolder))
         self.btn_new.setIconSize(QSize(18, 18))
         self.btn_new.clicked.connect(self.new_patient)
         action_layout.addWidget(self.btn_new)
@@ -1787,12 +1788,12 @@ class ResultsWindow(QWidget):
         self.btn_back = QPushButton("Back to Screening")
         self.btn_back.setObjectName("dangerAction")
         self.btn_back.setMinimumHeight(42)
-        self.btn_back.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_ArrowBack))
         self.btn_back.setIconSize(QSize(18, 18))
         self.btn_back.clicked.connect(self.go_back)
         action_layout.addWidget(self.btn_back)
 
         action_layout.addStretch()
+        self._apply_action_icons()
 
         main_row.addWidget(action_rail)
         layout.addLayout(main_row, 1)
@@ -1810,6 +1811,52 @@ class ResultsWindow(QWidget):
         self.explanation_hint.setWordWrap(True)
         explanation_layout.addWidget(self.explanation_hint)
         layout.addWidget(explanation_group)
+
+    def _is_dark_theme(self) -> bool:
+        bg = self.palette().color(QPalette.ColorRole.Window)
+        fg = self.palette().color(QPalette.ColorRole.WindowText)
+        return bg.lightness() < fg.lightness()
+
+    def _build_action_icon(self, filename: str, fallback: QStyle.StandardPixmap) -> QIcon:
+        icon_path = os.path.join(self._icons_dir, filename)
+        base_icon = QIcon(icon_path) if os.path.isfile(icon_path) else self.style().standardIcon(fallback)
+        source = base_icon.pixmap(QSize(24, 24))
+        if source.isNull():
+            return base_icon
+
+        tint = QColor("#f8fafc") if self._is_dark_theme() else QColor("#1f2937")
+        tinted = QPixmap(source.size())
+        tinted.fill(Qt.GlobalColor.transparent)
+
+        painter = QPainter(tinted)
+        painter.drawPixmap(0, 0, source)
+        painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceIn)
+        painter.fillRect(tinted.rect(), tint)
+        painter.end()
+
+        icon = QIcon()
+        icon.addPixmap(tinted, QIcon.Mode.Normal)
+        icon.addPixmap(tinted, QIcon.Mode.Active)
+
+        disabled = QPixmap(tinted)
+        p2 = QPainter(disabled)
+        p2.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceIn)
+        p2.fillRect(disabled.rect(), QColor(tint.red(), tint.green(), tint.blue(), 110))
+        p2.end()
+        icon.addPixmap(disabled, QIcon.Mode.Disabled)
+        return icon
+
+    def _apply_action_icons(self):
+        self.btn_save.setIcon(self._build_action_icon("save_patient.svg", QStyle.StandardPixmap.SP_DialogSaveButton))
+        self.btn_report.setIcon(self._build_action_icon("generate.svg", QStyle.StandardPixmap.SP_FileDialogDetailedView))
+        self.btn_screen_another.setIcon(self._build_action_icon("another_eye.svg", QStyle.StandardPixmap.SP_FileDialogStart))
+        self.btn_new.setIcon(self._build_action_icon("new_patient.svg", QStyle.StandardPixmap.SP_FileDialogNewFolder))
+        self.btn_back.setIcon(self._build_action_icon("back_to_screening.svg", QStyle.StandardPixmap.SP_ArrowBack))
+
+    def changeEvent(self, event):
+        if event.type() in (QEvent.Type.PaletteChange, QEvent.Type.ApplicationPaletteChange):
+            self._apply_action_icons()
+        super().changeEvent(event)
 
     def _create_stat_card(self, title_text):
         card = QFrame()
@@ -2030,10 +2077,32 @@ class ResultsWindow(QWidget):
         explanation    = self.explanation.text()
         screening_date = datetime.now().strftime("%B %d, %Y  %I:%M %p")
 
+        def _safe(value: str) -> str:
+            text = str(value or "").strip()
+            return escape(text) if text else "&mdash;"
+
+        patient_id_safe = _safe(patient_id)
+        patient_name_safe = _safe(self._current_patient_name)
+        dob_safe = _safe(dob)
+        age_safe = _safe(age)
+        sex_safe = _safe(sex)
+        contact_safe = _safe(contact)
+        eye_safe = _safe(self._current_eye_label)
+        screening_date_safe = _safe(screening_date)
+        diabetes_type_safe = _safe(diabetes_type)
+        duration_safe = _safe(f"{duration} year(s)" if duration else "")
+        hba1c_safe = _safe(f"{hba1c_val}%" if hba1c_val else "")
+        prev_tx_safe = _safe(prev_tx)
+        notes_safe = _safe(notes)
+        result_safe = _safe(self._current_result_class)
+        confidence_safe = _safe(self._current_confidence)
+        recommendation_safe = _safe(recommendation)
+        explanation_safe = _safe(explanation or "No clinical analysis available.")
+
         # Build QTextDocument with embedded images
         doc = QTextDocument()
-        source_img_html  = "<p style='color:#6c757d;'>[Image not available]</p>"
-        heatmap_img_html = "<p style='color:#6c757d;'>[Heatmap not available]</p>"
+        source_img_html  = "<div class='image-empty'>Source image not available</div>"
+        heatmap_img_html = "<div class='image-empty'>Heatmap not available</div>"
 
         if self._current_image_path and os.path.isfile(self._current_image_path):
             src_px = QPixmap(self._current_image_path).scaled(
@@ -2063,105 +2132,159 @@ class ResultsWindow(QWidget):
         except Exception:
             model_info = "EyeShield AI Model — offline diabetic retinopathy classification"
 
-        notes_row = (
-            f"<tr><td class='lbl'>Clinical Notes</td><td colspan='3'>{notes}</td></tr>"
-            if notes else ""
-        )
-
         html = f"""<!DOCTYPE html><html><head><style>
-body    {{ font-family: Arial, sans-serif; font-size: 10pt; color: #212529; margin:0; padding:0; }}
-.hdr    {{ background-color: #1a56db; color: #ffffff; padding: 14px 20px; }}
-.hdr h1 {{ margin: 0; font-size: 16pt; }}
-.hdr p  {{ margin: 3px 0 0 0; font-size: 9.5pt; opacity: 0.9; }}
-.body   {{ padding: 14px 20px; }}
-h2      {{ font-size: 11pt; color: #1a56db; border-bottom: 1px solid #dee2e6;
-           padding-bottom: 3px; margin: 14px 0 7px 0; }}
-table.info  {{ width: 100%; border-collapse: collapse; margin-bottom: 6px; font-size: 9.5pt; }}
-table.info td {{ padding: 4px 7px; vertical-align: top; border: 1px solid #dee2e6; }}
-td.lbl  {{ font-weight: bold; color: #495057; background-color: #f8f9fa; width: 22%; }}
-table.imgs  {{ width: 100%; border-collapse: collapse; }}
-table.imgs td {{ width: 50%; text-align: center; padding: 6px; vertical-align: top;
-                 border: 1px solid #dee2e6; }}
-.cap    {{ font-size: 8.5pt; color: #6c757d; margin-top: 4px; }}
-.grade  {{ font-weight: bold; font-size: 13pt; color: {grade_color}; }}
-.cbox   {{ background-color: #f0f7ff; border-left: 4px solid #1a56db;
-           padding: 10px 14px; font-size: 9.5pt; color: #333; line-height: 1.55; }}
-.disc   {{ font-size: 8pt; color: #6c757d; font-style: italic;
-           border-top: 1px solid #dee2e6; padding-top: 8px; margin-top: 14px; }}
-.minfo  {{ font-size: 9pt; color: #6c757d; padding: 4px 0; }}
+body {{
+    margin: 0;
+    padding: 0;
+    color: #1f2937;
+    background: #ffffff;
+    font-family: 'Inter', 'Roboto', 'Open Sans', 'Segoe UI', Arial, sans-serif;
+    font-size: 11pt;
+    line-height: 1.4;
+}}
+.report {{ padding: 0 26px 22px 26px; }}
+.header {{
+    background: #eef4fb;
+    color: #1f2937;
+    padding: 14px 26px 12px 26px;
+    border-bottom: 2px solid #d7e3f1;
+}}
+.header h1 {{
+    margin: 0;
+    font-size: 20pt;
+    font-weight: 700;
+    letter-spacing: 0.2px;
+    color: #1f2937;
+}}
+.header p {{ margin: 4px 0 0 0; font-size: 10pt; color: #475569; }}
+.section {{ margin-top: 12px; padding-top: 10px; border-top: 1px solid #dbe3ea; }}
+.section-title {{
+    margin: 0 0 8px 0;
+    font-size: 15pt;
+    color: #0f3d66;
+    font-weight: 700;
+}}
+table.grid {{ width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 11pt; }}
+table.grid td {{ border: 1px solid #dce4ec; padding: 6px 8px; vertical-align: top; word-wrap: break-word; overflow-wrap: anywhere; }}
+td.label {{ width: 20%; background: #f6f9fc; font-weight: 700; color: #334155; }}
+td.value {{ width: 30%; font-weight: 400; color: #111827; }}
+.result-pill {{ color: {grade_color}; font-weight: 700; font-size: 13pt; }}
+.analysis {{
+    border: 1px solid #dce4ec;
+    background: #f8fbff;
+    padding: 9px 10px;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    overflow-wrap: anywhere;
+}}
+table.images {{ width: 100%; border-collapse: collapse; table-layout: fixed; }}
+table.images td {{
+    width: 50%;
+    border: 1px solid #dce4ec;
+    vertical-align: top;
+    text-align: center;
+    padding: 8px;
+}}
+.image-caption {{ margin-top: 6px; color: #475569; font-size: 10pt; font-weight: 600; }}
+.image-empty {{
+    min-height: 150px;
+    padding-top: 56px;
+    color: #64748b;
+    border: 1px dashed #cbd5e1;
+    background: #f8fafc;
+}}
+.footer {{
+    margin-top: 14px;
+    padding-top: 8px;
+    border-top: 1px solid #dce4ec;
+    font-size: 9.5pt;
+    color: #4b5563;
+}}
+.brand {{ text-align: center; margin-top: 8px; font-size: 8.5pt; color: #94a3b8; }}
 </style></head><body>
-<div class="hdr">
-  <h1>EyeShield EMR — Diabetic Retinopathy Screening Report</h1>
-  <p>Generated: {screening_date}</p>
+<div class="header">
+    <h1>Patient Report</h1>
+    <p>Generated: {screening_date_safe}</p>
 </div>
-<div class="body">
+<div class="report">
 
-<h2>Patient Information</h2>
-<table class="info">
+<div class="section">
+    <h2 class="section-title">Patient Information</h2>
+    <table class="grid">
   <tr>
-    <td class="lbl">Patient ID</td><td>{patient_id or "—"}</td>
-    <td class="lbl">Patient Name</td><td>{self._current_patient_name or "—"}</td>
+          <td class="label">Patient Name</td><td class="value">{patient_name_safe}</td>
+          <td class="label">Patient Record</td><td class="value">{patient_id_safe}</td>
   </tr>
   <tr>
-    <td class="lbl">Date of Birth</td><td>{dob or "—"}</td>
-    <td class="lbl">Age</td><td>{age or "—"}</td>
+        <td class="label">Date of Birth</td><td class="value">{dob_safe}</td>
+        <td class="label">Age</td><td class="value">{age_safe}</td>
   </tr>
   <tr>
-    <td class="lbl">Sex</td><td>{sex or "—"}</td>
-    <td class="lbl">Contact</td><td>{contact or "—"}</td>
+        <td class="label">Sex</td><td class="value">{sex_safe}</td>
+        <td class="label">Contact</td><td class="value">{contact_safe}</td>
   </tr>
   <tr>
-    <td class="lbl">Eye Screened</td><td>{self._current_eye_label or "—"}</td>
-    <td class="lbl">Screening Date</td><td>{screening_date}</td>
+        <td class="label">Eye Screened</td><td class="value">{eye_safe}</td>
+        <td class="label">Screening Date</td><td class="value">{screening_date_safe}</td>
   </tr>
 </table>
 
-<h2>Clinical History</h2>
-<table class="info">
-  <tr>
-    <td class="lbl">Diabetes Type</td><td>{diabetes_type or "—"}</td>
-    <td class="lbl">Duration</td><td>{f"{duration} year(s)" if duration else "—"}</td>
-  </tr>
-  <tr>
-    <td class="lbl">HbA1c</td><td>{f"{hba1c_val}%" if hba1c_val else "—"}</td>
-    <td class="lbl">Previous Treatment</td><td>{prev_tx}</td>
-  </tr>
-  {notes_row}
-</table>
-
-<h2>AI Analysis Results</h2>
-<table class="info">
-  <tr>
-    <td class="lbl">Classification</td>
-    <td colspan="3"><span class="grade">{self._current_result_class}</span></td>
-  </tr>
-  <tr>
-    <td class="lbl">Confidence</td>
-    <td>{self._current_confidence or "—"}</td>
-    <td class="lbl">Recommendation</td>
-    <td>{recommendation}</td>
-  </tr>
-</table>
-
-<h2>Fundus Images</h2>
-<table class="imgs">
-  <tr>
-    <td>{source_img_html}<div class="cap">Source Fundus Image</div></td>
-    <td>{heatmap_img_html}<div class="cap">Grad-CAM++ Heatmap Overlay</div></td>
-  </tr>
-</table>
-
-<h2>Clinical Summary</h2>
-<div class="cbox">{explanation or "No clinical summary available."}</div>
-
-<h2>AI Model</h2>
-<div class="minfo">{model_info}</div>
-
-<div class="disc">
-This report was generated by EyeShield EMR using an offline AI model for diabetic retinopathy
-screening. It is intended as a clinical aid only and does not replace evaluation by a qualified
-ophthalmologist or healthcare professional. Always verify AI-generated results before acting on this output.
 </div>
+
+<div class="section">
+    <h2 class="section-title">Screening Results</h2>
+    <table class="grid">
+  <tr>
+        <td class="label">Classification</td>
+        <td class="value" colspan="3"><span class="result-pill">{result_safe}</span></td>
+  </tr>
+  <tr>
+        <td class="label">Confidence</td><td class="value">{confidence_safe}</td>
+        <td class="label">Recommendation</td><td class="value">{recommendation_safe}</td>
+  </tr>
+</table>
+
+</div>
+
+<div class="section">
+    <h2 class="section-title">Image / Scan Results</h2>
+    <table class="images">
+  <tr>
+        <td>{source_img_html}<div class="image-caption">Source Fundus Image</div></td>
+        <td>{heatmap_img_html}<div class="image-caption">Grad-CAM++ Heatmap Overlay</div></td>
+  </tr>
+</table>
+
+</div>
+
+<div class="section">
+    <h2 class="section-title">Clinical Notes or Analysis</h2>
+    <table class="grid">
+  <tr>
+        <td class="label">Diabetes Type</td><td class="value">{diabetes_type_safe}</td>
+        <td class="label">Duration</td><td class="value">{duration_safe}</td>
+  </tr>
+    <tr>
+        <td class="label">HbA1c</td><td class="value">{hba1c_safe}</td>
+        <td class="label">Previous Treatment</td><td class="value">{prev_tx_safe}</td>
+    </tr>
+    <tr>
+        <td class="label">Clinical Notes</td><td class="value" colspan="3">{notes_safe}</td>
+    </tr>
+</table>
+    <div class="analysis" style="margin-top: 8px;">{explanation_safe}</div>
+</div>
+
+<div class="section">
+    <h2 class="section-title">Final Assessment / Recommendation</h2>
+    <div class="analysis">{recommendation_safe}</div>
+    <div style="margin-top: 8px; font-size: 10pt; color: #475569;">{model_info}</div>
+</div>
+
+<div class="footer">
+This report supports clinical decision-making and does not replace professional medical evaluation.
+</div>
+<div class="brand">EyeShield EMR</div>
 
 </div></body></html>"""
 

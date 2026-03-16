@@ -4,6 +4,7 @@ Provides offline summary analytics from local patient_records data.
 """
 
 import csv
+from html import escape
 import os
 import sqlite3
 from datetime import datetime
@@ -788,20 +789,24 @@ class ReportsPage(QWidget):
 
         full = self._fetch_full_record(record["id"]) or record
 
-        name          = str(full.get("name")          or "—")
-        patient_id    = str(full.get("patient_id")    or "—")
-        birthdate     = str(full.get("birthdate")     or "—")
-        age           = str(full.get("age")           or "—")
-        sex           = str(full.get("sex")           or "—")
-        contact       = str(full.get("contact")       or "—")
-        eyes          = str(full.get("eyes")          or "—")
-        diabetes_type = str(full.get("diabetes_type") or "—")
-        duration      = str(full.get("duration")      or "—")
-        hba1c         = str(full.get("hba1c")         or "—")
-        prev_treatment= str(full.get("prev_treatment")or "—")
-        notes         = str(full.get("notes")         or "")
-        result        = str(full.get("result")        or "—")
-        confidence    = str(full.get("confidence")    or "—")
+        def esc(value) -> str:
+            return escape(str(value or "-"))
+
+        name = esc(full.get("name"))
+        patient_id = esc(full.get("patient_id"))
+        birthdate = esc(full.get("birthdate"))
+        age = esc(full.get("age"))
+        sex = esc(full.get("sex"))
+        contact = esc(full.get("contact"))
+        eyes = esc(full.get("eyes"))
+        diabetes_type = esc(full.get("diabetes_type"))
+        duration = str(full.get("duration") or "-")
+        hba1c = esc(full.get("hba1c"))
+        prev_treatment = esc(full.get("prev_treatment"))
+        notes = esc(full.get("notes") or "")
+        result_raw = str(full.get("result") or "")
+        result = esc(result_raw)
+        confidence = esc(full.get("confidence"))
 
         _DR_REC = {
             "No DR":            "Annual screening recommended",
@@ -835,97 +840,141 @@ class ReportsPage(QWidget):
                 "ophthalmology referral is required for evaluation and potential intervention.",
         }
 
-        recommendation = _DR_REC.get(result, "Consult a clinician")
-        grade_color    = _DR_COL.get(result, "#1f2937")
-        summary        = _DR_SUM.get(result, "Please consult a qualified ophthalmologist for interpretation.")
-        report_date    = datetime.now().strftime("%B %d, %Y  %I:%M %p")
+        recommendation = esc(_DR_REC.get(result_raw, "Consult a clinician"))
+        grade_color = _DR_COL.get(result_raw, "#374151")
+        summary = esc(_DR_SUM.get(result_raw, "Please consult a qualified ophthalmologist for interpretation."))
+        report_date = datetime.now().strftime("%B %d, %Y  %I:%M %p")
+        duration_display = f"{escape(duration)} year(s)" if duration not in ("-", "") else "-"
 
-        notes_row = (
-            f"<tr><td class='lbl'>Clinical Notes</td><td colspan='3'>{notes}</td></tr>"
-            if notes else ""
-        )
+        notes_value = notes or "&mdash;"
+        confidence_value = confidence if confidence != "-" else "&mdash;"
+        diabetes_type_value = diabetes_type if diabetes_type != "-" else "&mdash;"
+        hba1c_value = hba1c if hba1c != "-" else "&mdash;"
+        prev_treatment_value = prev_treatment if prev_treatment != "-" else "&mdash;"
+        contact_value = contact if contact != "-" else "&mdash;"
+        eye_value = eyes if eyes != "-" else "&mdash;"
 
-        html = f"""<!DOCTYPE html><html><head><style>
-body    {{ font-family: Arial, sans-serif; font-size: 10pt; color: #212529; margin:0; padding:0; }}
-.hdr    {{ background-color: #1a56db; color: #ffffff; padding: 14px 20px; }}
-.hdr h1 {{ margin: 0; font-size: 16pt; }}
-.hdr p  {{ margin: 3px 0 0 0; font-size: 9.5pt; }}
-.body   {{ padding: 14px 20px; }}
-h2      {{ font-size: 11pt; color: #1a56db; border-bottom: 1px solid #dee2e6;
-           padding-bottom: 3px; margin: 14px 0 7px 0; }}
-table.info  {{ width: 100%; border-collapse: collapse; margin-bottom: 6px; font-size: 9.5pt; }}
-table.info td {{ padding: 4px 7px; vertical-align: top; border: 1px solid #dee2e6; }}
-td.lbl  {{ font-weight: bold; color: #495057; background-color: #f8f9fa; width: 22%; }}
-.grade  {{ font-weight: bold; font-size: 13pt; color: {grade_color}; }}
-.cbox   {{ background-color: #f0f7ff; border-left: 4px solid #1a56db;
-           padding: 10px 14px; font-size: 9.5pt; color: #333; line-height: 1.55; }}
-.disc   {{ font-size: 8pt; color: #6c757d; font-style: italic;
-           border-top: 1px solid #dee2e6; padding-top: 8px; margin-top: 14px; }}
+        source_img_html = "<div class='image-empty'>Source image not available in this archived report record</div>"
+        heatmap_img_html = "<div class='image-empty'>Heatmap not available in this archived report record</div>"
+
+        html = f"""<!DOCTYPE html><html><head><meta charset=\"utf-8\"><style>
+body {{
+    margin: 0;
+    padding: 0;
+    color: #1f2937;
+    background: #ffffff;
+    font-family: 'Inter', 'Roboto', 'Open Sans', 'Segoe UI', Arial, sans-serif;
+    font-size: 11pt;
+    line-height: 1.4;
+}}
+.report {{ padding: 0 26px 22px 26px; }}
+.header {{
+    background: #eef4fb;
+    color: #1f2937;
+    padding: 14px 26px 12px 26px;
+    border-bottom: 2px solid #d7e3f1;
+}}
+.header h1 {{
+    margin: 0;
+    font-size: 20pt;
+    font-weight: 700;
+    letter-spacing: 0.2px;
+    color: #1f2937;
+}}
+.header p {{ margin: 4px 0 0 0; font-size: 10pt; color: #475569; }}
+.section {{ margin-top: 12px; padding-top: 10px; border-top: 1px solid #dbe3ea; }}
+.section-title {{ margin: 0 0 8px 0; font-size: 15pt; color: #0f3d66; font-weight: 700; }}
+table.grid {{ width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 11pt; }}
+table.grid td {{ border: 1px solid #dce4ec; padding: 6px 8px; vertical-align: top; word-wrap: break-word; overflow-wrap: anywhere; }}
+td.label {{ width: 20%; background: #f6f9fc; font-weight: 700; color: #334155; }}
+td.value {{ width: 30%; font-weight: 400; color: #111827; }}
+.result-pill {{ color: {grade_color}; font-weight: 700; font-size: 13pt; }}
+table.images {{ width: 100%; border-collapse: collapse; table-layout: fixed; }}
+table.images td {{ width: 50%; border: 1px solid #dce4ec; vertical-align: top; text-align: center; padding: 8px; }}
+.image-caption {{ margin-top: 6px; color: #475569; font-size: 10pt; font-weight: 600; }}
+.image-empty {{ min-height: 150px; padding-top: 56px; color: #64748b; border: 1px dashed #cbd5e1; background: #f8fafc; }}
+.analysis {{ border: 1px solid #dce4ec; background: #f8fbff; padding: 9px 10px; white-space: pre-wrap; word-wrap: break-word; overflow-wrap: anywhere; }}
+.footer-note {{ margin-top: 14px; padding-top: 8px; border-top: 1px solid #dce4ec; font-size: 9.5pt; color: #4b5563; }}
+.brand {{ text-align: center; margin-top: 8px; font-size: 8.5pt; color: #94a3b8; }}
 </style></head><body>
-<div class="hdr">
-  <h1>EyeShield EMR — Patient Screening Report</h1>
-  <p>Generated: {report_date}</p>
+<div class="header">
+    <h1>Patient Report</h1>
+    <p>Generated: {report_date}</p>
 </div>
-<div class="body">
+<div class="report">
 
-<h2>Patient Information</h2>
-<table class="info">
-  <tr>
-    <td class="lbl">Patient ID</td><td>{patient_id}</td>
-    <td class="lbl">Patient Name</td><td>{name}</td>
-  </tr>
-  <tr>
-    <td class="lbl">Date of Birth</td><td>{birthdate}</td>
-    <td class="lbl">Age</td><td>{age}</td>
-  </tr>
-  <tr>
-    <td class="lbl">Sex</td><td>{sex}</td>
-    <td class="lbl">Contact</td><td>{contact}</td>
-  </tr>
-  <tr>
-    <td class="lbl">Eye(s) Screened</td><td colspan="3">{eyes}</td>
-  </tr>
-</table>
-
-<h2>Clinical History</h2>
-<table class="info">
-  <tr>
-    <td class="lbl">Diabetes Type</td><td>{diabetes_type}</td>
-    <td class="lbl">Duration</td><td>{f"{duration} year(s)" if duration not in ("—","") else "—"}</td>
-  </tr>
-  <tr>
-    <td class="lbl">HbA1c</td><td>{hba1c}</td>
-    <td class="lbl">Previous Treatment</td><td>{prev_treatment}</td>
-  </tr>
-  {notes_row}
-</table>
-
-<h2>Screening Results</h2>
-<table class="info">
-  <tr>
-    <td class="lbl">Classification</td>
-    <td colspan="3"><span class="grade">{result}</span></td>
-  </tr>
-  <tr>
-    <td class="lbl">Confidence</td>
-    <td>{confidence}</td>
-    <td class="lbl">Recommendation</td>
-    <td>{recommendation}</td>
-  </tr>
-  <tr>
-    <td class="lbl">Screening Date</td>
-    <td colspan="3">{report_date}</td>
-  </tr>
-</table>
-
-<h2>Clinical Summary</h2>
-<div class="cbox">{summary}</div>
-
-<div class="disc">
-This report was generated by EyeShield EMR from locally saved screening records.
-It is intended as a clinical aid only and does not replace evaluation by a qualified ophthalmologist
-or healthcare professional. Always verify results before acting on this output.
+<div class="section">
+    <h2 class="section-title">Patient Information</h2>
+    <table class="grid">
+        <tr>
+            <td class="label">Patient Name</td><td class="value">{name}</td>
+            <td class="label">Patient Record</td><td class="value">{patient_id}</td>
+        </tr>
+        <tr>
+            <td class="label">Date of Birth</td><td class="value">{birthdate}</td>
+            <td class="label">Age</td><td class="value">{age}</td>
+        </tr>
+        <tr>
+            <td class="label">Sex</td><td class="value">{sex}</td>
+            <td class="label">Contact Number</td><td class="value">{contact_value}</td>
+        </tr>
+        <tr>
+            <td class="label">Eye(s) Screened</td><td class="value">{eye_value}</td>
+            <td class="label">Report Date</td><td class="value">{report_date}</td>
+        </tr>
+    </table>
 </div>
+
+<div class="section">
+    <h2 class="section-title">Screening Results</h2>
+    <table class="grid">
+        <tr>
+            <td class="label">Classification</td><td class="value" colspan="3"><span class="result-pill">{result}</span></td>
+        </tr>
+        <tr>
+            <td class="label">Confidence</td><td class="value">{confidence_value}</td>
+            <td class="label">Recommendation</td><td class="value">{recommendation}</td>
+        </tr>
+    </table>
+</div>
+
+<div class="section">
+    <h2 class="section-title">Image / Scan Results</h2>
+    <table class="images">
+        <tr>
+            <td>{source_img_html}<div class="image-caption">Source Fundus Image</div></td>
+            <td>{heatmap_img_html}<div class="image-caption">Grad-CAM++ Heatmap Overlay</div></td>
+        </tr>
+    </table>
+</div>
+
+<div class="section">
+    <h2 class="section-title">Clinical Notes or Analysis</h2>
+    <table class="grid">
+        <tr>
+            <td class="label">Diabetes Type</td><td class="value">{diabetes_type_value}</td>
+            <td class="label">Duration</td><td class="value">{duration_display}</td>
+        </tr>
+        <tr>
+            <td class="label">HbA1c</td><td class="value">{hba1c_value}</td>
+            <td class="label">Previous Treatment</td><td class="value">{prev_treatment_value}</td>
+        </tr>
+        <tr>
+            <td class="label">Clinical Notes</td><td class="value" colspan="3">{notes_value}</td>
+        </tr>
+    </table>
+    <div class="analysis" style="margin-top: 8px;">{summary}</div>
+</div>
+
+<div class="section">
+    <h2 class="section-title">Final Assessment / Recommendation</h2>
+    <div class="analysis">{recommendation}</div>
+</div>
+
+<div class="footer-note">
+This report supports clinical decision-making and does not replace professional medical evaluation.
+</div>
+<div class="brand">EyeShield EMR</div>
 
 </div></body></html>"""
 
