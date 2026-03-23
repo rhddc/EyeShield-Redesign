@@ -7,6 +7,7 @@ import csv
 import json
 from html import escape
 import os
+from pathlib import Path
 import sqlite3
 from datetime import datetime
 
@@ -562,7 +563,9 @@ class ReportsPage(QWidget):
                        blood_pressure_systolic, blood_pressure_diastolic,
                        fasting_blood_sugar, random_blood_sugar,
                        symptom_blurred_vision, symptom_floaters,
-                       symptom_flashes, symptom_vision_loss
+                      symptom_flashes, symptom_vision_loss,
+                      source_image_path, heatmap_image_path,
+                      image_sha256, image_saved_at
                 FROM patient_records WHERE id=?
             """, (record_id,))
             row = cur.fetchone()
@@ -579,6 +582,8 @@ class ReportsPage(QWidget):
                 "fbs":row[19],"rbs":row[20],
                 "symptom_blurred":row[21],"symptom_floaters":row[22],
                 "symptom_flashes":row[23],"symptom_vision_loss":row[24],
+                "source_image_path":row[25],"heatmap_image_path":row[26],
+                "image_sha256":row[27],"image_saved_at":row[28],
             }
         except Exception:
             return None
@@ -695,18 +700,47 @@ class ReportsPage(QWidget):
             )
 
         # ── image cell helper ─────────────────────────────────────────────────
-        def img_cell(caption, placeholder_text):
+        def resolve_image_uri(path_value: str) -> str:
+            raw = str(path_value or "").strip()
+            if not raw:
+                return ""
+            if os.path.isabs(raw):
+                candidate = raw
+            else:
+                candidate = os.path.join(os.path.dirname(os.path.abspath(__file__)), raw)
+            if not os.path.isfile(candidate):
+                return ""
+            try:
+                return Path(candidate).resolve().as_uri()
+            except OSError:
+                return ""
+
+        def img_cell(caption, placeholder_text, image_uri: str):
+            if image_uri:
+                body = (
+                    f'<tr><td height="180" bgcolor="#f9fafb" align="center" valign="middle" '
+                    f'style="padding:8px;">'
+                    f'<img src="{image_uri}" style="max-width:100%;max-height:170px;" />'
+                    f'</td></tr>'
+                )
+            else:
+                body = (
+                    f'<tr><td height="180" bgcolor="#f9fafb" align="center" valign="middle" '
+                    f'style="font-size:9pt;color:#9ca3af;font-style:italic;padding:16px;">'
+                    f'{placeholder_text}</td></tr>'
+                )
             return (
                 f'<table width="100%" cellpadding="0" cellspacing="0" '
                 f'style="border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;">'
-                f'<tr><td height="180" bgcolor="#f9fafb" align="center" valign="middle" '
-                f'style="font-size:9pt;color:#9ca3af;font-style:italic;padding:16px;">'
-                f'{placeholder_text}</td></tr>'
+                f'{body}'
                 f'<tr><td bgcolor="#f3f4f6" style="border-top:1px solid #e5e7eb;padding:6px 12px;'
                 f'font-size:7.5pt;font-weight:bold;color:#6b7280;text-align:center;'
                 f'letter-spacing:0.8px;text-transform:uppercase;">{caption}</td></tr>'
                 f'</table>'
             )
+
+        source_image_uri = resolve_image_uri(full.get("source_image_path", ""))
+        heatmap_image_uri = resolve_image_uri(full.get("heatmap_image_path", ""))
 
         # ── info grid row helper ──────────────────────────────────────────────
         def info_row(cells, bg="#ffffff"):
@@ -829,10 +863,10 @@ body{{font-family:'Segoe UI','Calibri',Arial,sans-serif;font-size:10pt;color:#11
 <table width="100%" cellpadding="0" cellspacing="0">
 <tr>
 <td width="50%" valign="top" style="padding-right:12px;">
-    {img_cell("Source Fundus Image", "Source image not stored in this record")}
+    {img_cell("Source Fundus Image", "Source image not stored in this record", source_image_uri)}
 </td>
 <td width="50%" valign="top" style="padding-left:12px;">
-    {img_cell("Grad-CAM++ Heatmap", "Heatmap not stored in this record")}
+    {img_cell("Grad-CAM++ Heatmap", "Heatmap not stored in this record", heatmap_image_uri)}
 </td>
 </tr>
 </table>

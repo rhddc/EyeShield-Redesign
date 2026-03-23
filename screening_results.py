@@ -230,9 +230,11 @@ class ResultsWindow(QWidget):
         classification_card, self.classification_value = self._create_stat_card("Classification")
         confidence_card, self.confidence_value = self._create_stat_card("Confidence")
         recommendation_card, self.recommendation_value = self._create_stat_card("Recommendation")
+        followup_card, self.followup_value = self._create_stat_card("Follow-up")
         stats_row.addWidget(classification_card)
         stats_row.addWidget(confidence_card)
         stats_row.addWidget(recommendation_card)
+        stats_row.addWidget(followup_card)
         review_column.addLayout(stats_row)
 
         # Bilateral comparison card (hidden until second eye is being reviewed)
@@ -415,15 +417,15 @@ class ResultsWindow(QWidget):
                 color: #b91c1c;
             }
             QPushButton {
-                background: #e5e7eb;
-                color: #1f2937;
-                border: 1px solid #cbd5e1;
+                background: #eaf2ff;
+                color: #005ecb;
+                border: 1px solid #bdd7ff;
                 border-radius: 8px;
                 padding: 8px 12px;
-                font-weight: 600;
+                font-weight: 700;
             }
             QPushButton:hover {
-                background: #dbe1e9;
+                background: #dce9ff;
             }
             QPushButton:disabled {
                 background: #eef2f7;
@@ -431,20 +433,20 @@ class ResultsWindow(QWidget):
                 border-color: #dbe3ec;
             }
             QPushButton#primaryAction {
-                background: #0f5f9d;
+                background: #007bff;
                 color: #ffffff;
-                border: 1px solid #0b4f83;
+                border: 1px solid #0066d4;
             }
             QPushButton#primaryAction:hover {
-                background: #0d5288;
+                background: #006ee6;
             }
             QPushButton#secondaryAction {
-                background: #eef6fb;
-                color: #0f5f9d;
-                border: 1px solid #b7d3ea;
+                background: #dcecff;
+                color: #005ecb;
+                border: 1px solid #a9c7ff;
             }
             QPushButton#secondaryAction:hover {
-                background: #e3f0f9;
+                background: #cfe3ff;
             }
             QPushButton#dangerAction {
                 background: #fff1f2;
@@ -571,6 +573,8 @@ class ResultsWindow(QWidget):
         if is_loading:
             recommendation = "—"
         self.recommendation_value.setText(recommendation)
+        if is_loading:
+            self.followup_value.setText("Pending")
 
         # Subtitle
         if is_loading:
@@ -640,6 +644,19 @@ class ResultsWindow(QWidget):
             self.bilateral_second_saved_lbl.setText("✓ Saved")
             self.bilateral_second_saved_lbl.setStyleSheet("font-weight:700;font-size:12px;")
             self.bilateral_second_saved_lbl.setObjectName("successLabel")
+
+    def set_followup(self, followup_date: str, followup_label: str):
+        """Show follow-up details generated after save."""
+        try:
+            dt = datetime.strptime(followup_date, "%Y-%m-%d")
+            formatted = dt.strftime("%b %d, %Y")
+        except ValueError:
+            formatted = followup_date
+
+        text = formatted
+        if followup_label:
+            text = f"{formatted} ({followup_label})"
+        self.followup_value.setText(text)
 
     def go_back(self):
         if not self.parent_page:

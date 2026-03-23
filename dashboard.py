@@ -201,6 +201,7 @@ class EyeShieldApp(QMainWindow):
                 continue
             w, btn, label = nav_button_with_label(nav_item["icon"], nav_item["label"])
             btn.setProperty("pageIndex", nav_item["page_index"])
+            btn.setProperty("navKey", nav_item["label"])
             label.setProperty("pageIndex", nav_item["page_index"])
             nav_layout.addWidget(w)
             nav_layout.addStretch(1)
@@ -379,7 +380,7 @@ class EyeShieldApp(QMainWindow):
         if not hasattr(self, "nav_buttons"):
             return
         dark = getattr(self, "_dark_mode", False)
-        active_color = "#89b4fa" if dark else "#007bff"
+        active_color = "#89b4fa" if dark else "#ffffff"
         inactive_color = "#a6adc8" if dark else "#495057"
         disabled_color = "#6c7086" if dark else "#adb5bd"
         icon_size = QSize(24, 24)
@@ -557,31 +558,56 @@ class EyeShieldApp(QMainWindow):
         else:
             active_btn_style = """
                 QPushButton {
-                    color: #007bff;
+                    color: #ffffff;
                     text-align: center;
                     padding: 4px 0px;
-                    border: 1px solid transparent;
+                    border: 1px solid #005ecb;
                     border-radius: 8px;
                     font-size: 22px;
                     font-weight: 500;
-                    background: #e8f0fe;
+                    background: #007bff;
                     text-decoration: none;
                 }
-                QPushButton:hover { background: #dbe4f8; }
-                QPushButton:focus { outline: none; border: 1px solid transparent; }
+                QPushButton:hover { background: #006fe6; }
+                QPushButton:focus { outline: none; border: 1px solid #0056b3; }
+            """
+            screening_active_btn_style = """
+                QPushButton {
+                    color: #ffffff;
+                    text-align: center;
+                    padding: 4px 0px;
+                    border: 1px solid #0056b3;
+                    border-radius: 8px;
+                    font-size: 22px;
+                    font-weight: 700;
+                    background: #0066ff;
+                    text-decoration: none;
+                }
+                QPushButton:hover { background: #005ce6; }
+                QPushButton:focus { outline: none; border: 1px solid #004ba8; }
             """
             inactive_btn_style = self.get_nav_button_style(icon_only=True)
-            active_label = "font-size: 10px; color: #007bff; margin-top: 0px; text-decoration: none; border: none;"
+            active_label = "font-size: 10px; color: #005ecb; font-weight: 700; margin-top: 0px; text-decoration: none; border: none;"
+            screening_active_label = "font-size: 10px; color: #0066ff; font-weight: 800; margin-top: 0px; text-decoration: none; border: none;"
             inactive_label = "font-size: 10px; color: #495057; margin-top: 0px; text-decoration: none; border: none;"
 
         for btn in self.nav_buttons:
-            if int(btn.property("pageIndex") or -1) == index:
-                btn.setStyleSheet(active_btn_style)
+            btn_index = int(btn.property("pageIndex") or -1)
+            is_screening_btn = str(btn.property("navKey") or "") == "Screening"
+            if btn_index == index:
+                if not dark and is_screening_btn and index == 1:
+                    btn.setStyleSheet(screening_active_btn_style)
+                else:
+                    btn.setStyleSheet(active_btn_style)
             elif btn.isEnabled():
                 btn.setStyleSheet(inactive_btn_style)
         for i, label in enumerate(self.nav_labels):
             if int(label.property("pageIndex") or -1) == index:
-                label.setStyleSheet(active_label)
+                is_screening_label = str(self.nav_buttons[i].property("navKey") or "") == "Screening"
+                if not dark and is_screening_label and index == 1:
+                    label.setStyleSheet(screening_active_label)
+                else:
+                    label.setStyleSheet(active_label)
             elif self.nav_buttons[i].isEnabled():
                 label.setStyleSheet(inactive_label)
         self._refresh_nav_button_icons(index)

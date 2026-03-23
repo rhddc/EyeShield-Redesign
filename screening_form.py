@@ -5,9 +5,11 @@ Extracted from screening.py for better modularity.
 
 from datetime import datetime
 from html import escape
+import hashlib
 import os
 import re
 import secrets
+import shutil
 import sqlite3
 
 from PySide6.QtWidgets import (
@@ -32,6 +34,12 @@ from screening_styles import (
 from screening_worker import _InferenceWorker
 from screening_widgets import ClickableImageLabel
 from screening_results import ResultsWindow
+from logic_improvements import (
+    ScreeningFlowGuard,
+    DuplicateDetector,
+    DuplicateDialog,
+    FollowUpScheduler,
+)
 from auth import DB_FILE
 
 
@@ -170,22 +178,37 @@ QComboBox::drop-down {
     border-bottom-right-radius:6px;
 }
 QComboBox::down-arrow { width:10px; height:10px; }
+QComboBox#sexDropdown, QComboBox#eyeDropdown, QComboBox#diabetesTypeDropdown {
+    padding-right: 34px;
+}
+QComboBox#sexDropdown::drop-down, QComboBox#eyeDropdown::drop-down, QComboBox#diabetesTypeDropdown::drop-down {
+    width: 28px;
+    border-left: 1px solid #9fb4cc;
+    background: #e8f1ff;
+    border-top-right-radius: 6px;
+    border-bottom-right-radius: 6px;
+}
+QComboBox#sexDropdown::down-arrow, QComboBox#eyeDropdown::down-arrow, QComboBox#diabetesTypeDropdown::down-arrow {
+    width: 12px;
+    height: 12px;
+    margin-right: 6px;
+}
 QSpinBox::up-button, QSpinBox::down-button, QDoubleSpinBox::up-button, QDoubleSpinBox::down-button { width:18px; border:none; background:transparent; }
 QScrollArea { border:none; background:transparent; }
 QScrollBar:vertical { background:#f2f5f8; width:6px; border-radius:3px; }
 QScrollBar::handle:vertical { background:#c2ccd8; border-radius:3px; min-height:20px; }
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height:0; }
 QSplitter::handle { background:#e7ecf1; width:1px; }
-QPushButton#btnPrimary { background:#3f7ca7; color:#ffffff; border:none; border-radius:6px; padding:8px 16px; font-weight:600; font-size:13px; }
-QPushButton#btnPrimary:hover { background:#356c92; }
+QPushButton#btnPrimary { background:#007bff; color:#ffffff; border:1px solid #0066d4; border-radius:6px; padding:8px 16px; font-weight:700; font-size:13px; }
+QPushButton#btnPrimary:hover { background:#006ee6; }
 QPushButton#btnDanger { background:#fef2f2; color:#ef4444; border:1.5px solid #fecaca; border-radius:6px; padding:8px 16px; font-weight:600; font-size:13px; }
 QPushButton#btnDanger:hover { background:#fee2e2; }
 QPushButton#btnAnalyze {
-    background:qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 #356c92,stop:0.6 #3f7ca7,stop:1 #4e8fb9);
-    color:#ffffff; border:none; border-radius:6px; padding:11px 16px; font-weight:700; font-size:14px;
+    background:qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 #0066ff,stop:0.6 #007bff,stop:1 #2a9dff);
+    color:#ffffff; border:1px solid #005bd9; border-radius:6px; padding:11px 16px; font-weight:800; font-size:14px;
 }
 QPushButton#btnAnalyze:hover {
-    background:qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 #315f80,stop:1 #3f7ca7);
+    background:qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 #005ce6,stop:1 #0077f0);
 }
 QCheckBox { color:#475569; spacing:8px; font-size:12px; }
 QCheckBox::indicator { width:16px; height:16px; border:1.5px solid #94a3b8; border-radius:3px; background:#ffffff; }
@@ -198,6 +221,7 @@ class ScreeningPage(QWidget):
 
     def __init__(self):
         super().__init__()
+        FollowUpScheduler.migrate_db()
         self.current_image = None
         self.patient_counter = 0
         self.min_dob_date = QDate(1900, 1, 1)
@@ -206,6 +230,9 @@ class ScreeningPage(QWidget):
         self.last_result_conf = "Pending"
         self._current_eye_saved = False
         self._first_eye_result = None
+        self._flow_guard = ScreeningFlowGuard(self)
+        self._duplicate_detector = DuplicateDetector()
+        self._followup_scheduler = FollowUpScheduler()
         self.stacked_widget = QStackedWidget()
         self.init_ui()
 
@@ -253,6 +280,42 @@ class ScreeningPage(QWidget):
     def _apply_ui_polish(self):
         self.setStyleSheet(_REDESIGN_STYLESHEET)
 
+    def _apply_visible_dropdown_style(self, combo: QComboBox):
+        arrow_icon_path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            "icons",
+            "dropdown_arrow.svg",
+        ).replace("\\", "/")
+        combo.setStyleSheet(
+            f"""
+            QComboBox {{
+                background:#ffffff;
+                border:1.5px solid #c5d2e0;
+                border-radius:6px;
+                padding:6px 34px 6px 10px;
+                color:#1f2937;
+                min-height:28px;
+            }}
+            QComboBox:focus {{
+                border:1.5px solid #3f7ca7;
+            }}
+            QComboBox::drop-down {{
+                subcontrol-origin: padding;
+                subcontrol-position: top right;
+                width:28px;
+                border-left:1px solid #9fb4cc;
+                background:#e8f1ff;
+                border-top-right-radius:6px;
+                border-bottom-right-radius:6px;
+            }}
+            QComboBox::down-arrow {{
+                image: url(\"{arrow_icon_path}\");
+                width:12px;
+                height:8px;
+            }}
+            """
+        )
+
     def create_unified_page(self):
         root = QWidget()
         root.setStyleSheet(_REDESIGN_STYLESHEET)
@@ -262,7 +325,7 @@ class ScreeningPage(QWidget):
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.setChildrenCollapsible(False)
-        splitter.setHandleWidth(10)
+        splitter.setHandleWidth(0)
         root_layout.addWidget(splitter)
 
         def make_card():
@@ -360,9 +423,13 @@ class ScreeningPage(QWidget):
         self.p_age.setSpecialValueText(" ")
 
         self.p_sex = QComboBox()
+        self.p_sex.setObjectName("sexDropdown")
         self.p_sex.addItems(["", "Male", "Female", "Prefer not to say"])
+        self._apply_visible_dropdown_style(self.p_sex)
         self.p_eye = QComboBox()
+        self.p_eye.setObjectName("eyeDropdown")
         self.p_eye.addItems(["", "Right Eye", "Left Eye"])
+        self._apply_visible_dropdown_style(self.p_eye)
         c1.addLayout(row3(field("Age", self.p_age), field("Sex", self.p_sex), field("Eye to be Screened", self.p_eye)))
 
         self.p_contact = QLineEdit()
@@ -446,7 +513,9 @@ class ScreeningPage(QWidget):
         card2, c2 = make_card()
         section_title(c2, "Clinical History")
         self.diabetes_type = QComboBox()
+        self.diabetes_type.setObjectName("diabetesTypeDropdown")
         self.diabetes_type.addItems(["Select", "Type 1", "Type 2", "Gestational", "Other"])
+        self._apply_visible_dropdown_style(self.diabetes_type)
         self.diabetes_diagnosis_date = QLineEdit()
         self.diabetes_diagnosis_date.setPlaceholderText("dd/mm/yyyy")
         self.diabetes_diagnosis_date.setMaxLength(10)
@@ -532,6 +601,9 @@ class ScreeningPage(QWidget):
         splitter.setStretchFactor(0, 6)
         splitter.setStretchFactor(1, 5)
         splitter.setSizes([640, 520])
+        handle = splitter.handle(1)
+        handle.setDisabled(True)
+        handle.setCursor(Qt.CursorShape.ArrowCursor)
         self._set_tab_order_unified()
         return root
 
@@ -1133,6 +1205,7 @@ class ScreeningPage(QWidget):
         self.last_result_conf = "Pending"
         self._current_eye_saved = False
         self._first_eye_result = None
+        self._flow_guard.reset()
         self.btn_analyze.setEnabled(False)
         self.stacked_widget.setCurrentIndex(0)
 
@@ -1211,9 +1284,14 @@ class ScreeningPage(QWidget):
     def open_results_window(self):
         if not self._validate_patient_basics():
             return
-        if not self.current_image:
-            QMessageBox.warning(self, "Error", "No image loaded")
+
+        ok, message = self._flow_guard.validate()
+        if not ok:
+            QMessageBox.warning(self, "Incomplete Form", message)
             return
+
+        self._resolve_duplicate_patient()
+
         confirm_box = QMessageBox(self)
         confirm_box.setWindowTitle("Confirm Details")
         confirm_box.setText("Please confirm all patient information is correct before proceeding to results.")
@@ -1252,6 +1330,19 @@ class ScreeningPage(QWidget):
         self._worker.ungradable.connect(self._on_image_ungradable)
         self._worker.start()
 
+    def _resolve_duplicate_patient(self):
+        match = self._duplicate_detector.find_duplicate(
+            name=self.p_name.text().strip(),
+            dob=self.p_dob.text().strip(),
+            contact=self.p_contact.text().strip(),
+        )
+        if not match:
+            return
+
+        dialog = DuplicateDialog(match, parent=self)
+        if dialog.exec() == DuplicateDialog.USE_EXISTING and match.get("patient_id"):
+            self.p_id.setText(str(match["patient_id"]))
+
     def _on_prediction_ready(self, label: str, conf: str, eye_label: str, patient_data: dict | None = None):
         self.last_result_class = label
         self.last_result_conf = conf
@@ -1269,6 +1360,8 @@ class ScreeningPage(QWidget):
     def _on_inference_done(self, label: str, conf: str, heatmap_path: str, eye_label: str, patient_data: dict | None = None):
         self.last_result_class = label
         self.last_result_conf = conf
+        if eye_label:
+            self._flow_guard.mark_eye_done(eye_label)
         self.btn_analyze.setEnabled(True)
         self.results_page.set_results(
             self.p_name.text(),
@@ -1349,6 +1442,42 @@ class ScreeningPage(QWidget):
             self._apply_upload_placeholder_style()
         self.btn_analyze.setEnabled(False)
 
+    def _persist_screening_assets(self, patient_id: str, eye_label: str) -> tuple[str, str, str, str]:
+        """Copy source/heatmap images into app-managed storage and return DB-ready metadata."""
+        source_path = str(getattr(self, "current_image", "") or "").strip()
+        heatmap_path = str(getattr(self.results_page, "_current_heatmap_path", "") or "").strip()
+
+        if not source_path or not os.path.isfile(source_path):
+            raise FileNotFoundError("Source fundus image is missing and cannot be saved.")
+
+        base_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "stored_images", patient_id)
+        os.makedirs(base_dir, exist_ok=True)
+
+        eye_tag = re.sub(r"[^a-z0-9]+", "_", eye_label.lower()).strip("_") or "eye"
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+        src_ext = os.path.splitext(source_path)[1].lower() or ".jpg"
+        dst_source = os.path.join(base_dir, f"{stamp}_{eye_tag}_source{src_ext}")
+        shutil.copy2(source_path, dst_source)
+
+        dst_heatmap = ""
+        if heatmap_path and os.path.isfile(heatmap_path):
+            h_ext = os.path.splitext(heatmap_path)[1].lower() or ".png"
+            dst_heatmap = os.path.join(base_dir, f"{stamp}_{eye_tag}_heatmap{h_ext}")
+            shutil.copy2(heatmap_path, dst_heatmap)
+
+        hasher = hashlib.sha256()
+        with open(dst_source, "rb") as src_file:
+            for chunk in iter(lambda: src_file.read(1024 * 1024), b""):
+                hasher.update(chunk)
+
+        app_root = os.path.dirname(os.path.abspath(__file__))
+        rel_source = os.path.relpath(dst_source, app_root).replace("\\", "/")
+        rel_heatmap = os.path.relpath(dst_heatmap, app_root).replace("\\", "/") if dst_heatmap else ""
+        image_sha256 = hasher.hexdigest()
+        image_saved_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        return rel_source, rel_heatmap, image_sha256, image_saved_at
+
     def save_screening(self, reset_after=True):
         if not self._validate_patient_basics():
             return
@@ -1362,7 +1491,7 @@ class ScreeningPage(QWidget):
         name = self.p_name.text().strip()
 
         pid = self.p_id.text().strip()
-        if not pid or self._patient_id_exists(pid):
+        if not pid:
             pid = self.generate_patient_id()
 
         dob_date = self._get_dob_date()
@@ -1400,6 +1529,15 @@ class ScreeningPage(QWidget):
         if symptom_other:
             notes = (notes + f"\nOther symptom: {symptom_other}").strip() if notes else f"Other symptom: {symptom_other}"
 
+        try:
+            source_image_path, heatmap_image_path, image_sha256, image_saved_at = self._persist_screening_assets(
+                pid,
+                eye,
+            )
+        except (OSError, FileNotFoundError) as exc:
+            QMessageBox.warning(self, "Save Failed", f"Unable to store screening images:\n\n{exc}")
+            return
+
         patient_data = [
             pid,
             name,
@@ -1427,11 +1565,22 @@ class ScreeningPage(QWidget):
             symptom_floaters_flag,
             symptom_flashes_flag,
             symptom_vision_loss_flag,
+            source_image_path,
+            heatmap_image_path,
+            image_sha256,
+            image_saved_at,
         ]
 
         if not self._save_screening_to_db(patient_data):
             QMessageBox.warning(self, "Save Failed", "Unable to save screening record. Please try again.")
             return
+
+        followup_date, followup_label = self._followup_scheduler.schedule(
+            patient_id=pid,
+            dr_grade=result,
+            screened_at=datetime.now().strftime("%Y-%m-%d"),
+        )
+        self.results_page.set_followup(followup_date, followup_label)
 
         self._current_eye_saved = True
         if reset_after:
@@ -1576,8 +1725,10 @@ class ScreeningPage(QWidget):
                     fasting_blood_sugar, random_blood_sugar,
                     diabetes_diagnosis_date,
                     symptom_blurred_vision, symptom_floaters,
-                    symptom_flashes, symptom_vision_loss
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    symptom_flashes, symptom_vision_loss,
+                    source_image_path, heatmap_image_path,
+                    image_sha256, image_saved_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 patient_data,
             )
