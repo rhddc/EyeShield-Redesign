@@ -1,4 +1,4 @@
-"""
+﻿"""
 Temporary camera page for EyeShield EMR.
 Uses system webcam until fundus camera integration is available.Includes patient handoff safety, device resilience, and capture workflow."""
 
@@ -280,11 +280,11 @@ class CameraPage(QWidget):
         capture_validate_row.addWidget(self.validate_btn)
 
         controls_layout.addLayout(capture_validate_row)
-        
+
         # Capture workflow buttons: Preview + ReCapture
         capture_workflow_row = QHBoxLayout()
         capture_workflow_row.setSpacing(6)
-        
+
         preview_btn = QPushButton("Preview Saved Image")
         preview_btn.setEnabled(False)
         preview_btn.clicked.connect(self._preview_saved_capture)
@@ -292,7 +292,7 @@ class CameraPage(QWidget):
         preview_btn.setIconSize(QSize(18, 18))
         self._preview_capture_btn = preview_btn
         capture_workflow_row.addWidget(preview_btn)
-        
+
         recapture_btn = QPushButton("Retake Image")
         recapture_btn.setEnabled(False)
         recapture_btn.clicked.connect(self._retry_capture)
@@ -300,7 +300,7 @@ class CameraPage(QWidget):
         recapture_btn.setIconSize(QSize(18, 18))
         self._recapture_btn = recapture_btn
         capture_workflow_row.addWidget(recapture_btn)
-        
+
         self.send_btn = QPushButton("Send to Screening")
         self.send_btn.clicked.connect(self._send_to_screening)
         self.send_btn.setIcon(self._button_icon("send_to_screening.svg", tint="#1f6fe5"))
@@ -513,7 +513,7 @@ class CameraPage(QWidget):
           1. Render the SVG onto a transparent ARGB image using QSvgRenderer.
           2. Paint a solid tint colour over a *second* image using
              CompositionMode_SourceIn so only pixels that already have alpha > 0
-             are coloured — this preserves the icon shape exactly.
+             are coloured â€” this preserves the icon shape exactly.
           3. Return a QIcon from the composited result.
 
         The old pixel-by-pixel loop set every pixel to the tint colour regardless
@@ -534,7 +534,7 @@ class CameraPage(QWidget):
                     if not renderer.isValid():
                         continue
 
-                    # Step 1 – render SVG onto a transparent canvas.
+                    # Step 1 â€“ render SVG onto a transparent canvas.
                     base = QImage(SIZE, SIZE, QImage.Format_ARGB32_Premultiplied)
                     base.fill(Qt.transparent)
                     p = QPainter(base)
@@ -544,7 +544,7 @@ class CameraPage(QWidget):
                     if tint_color is None:
                         return QIcon(QPixmap.fromImage(base))
 
-                    # Step 2 – paint the tint colour only where the SVG has pixels
+                    # Step 2 â€“ paint the tint colour only where the SVG has pixels
                     # (CompositionMode_SourceIn keeps dst alpha, replaces dst colour).
                     tint_layer = QImage(SIZE, SIZE, QImage.Format_ARGB32_Premultiplied)
                     tint_layer.fill(Qt.transparent)
