@@ -2020,7 +2020,9 @@ class ScreeningPage(QWidget):
             QMessageBox.warning(self, "Camera Unavailable", "Camera page is not available in this session.")
             return
 
-        operator = str(os.environ.get("EYESHIELD_CURRENT_USER", "")).strip()
+        operator = str(os.environ.get("EYESHIELD_CURRENT_NAME", "")).strip() or str(
+            os.environ.get("EYESHIELD_CURRENT_USER", "")
+        ).strip()
         main_window.camera_page.set_capture_context(
             patient_id=patient_id,
             patient_name=self.p_name.text().strip(),
@@ -2039,6 +2041,22 @@ class ScreeningPage(QWidget):
                 self,
                 "Capture Failed",
                 "Captured image could not be loaded. Please retake and save again.",
+            )
+            return
+
+        packet_patient_id = str((capture_packet or {}).get("patient_id") or "").strip()
+        current_patient_id = self.p_id.text().strip()
+        if packet_patient_id and current_patient_id and packet_patient_id != current_patient_id:
+            QMessageBox.critical(
+                self,
+                "Patient Mismatch",
+                "Captured image patient ID does not match the active Screening patient.\n\n"
+                "Please restart capture from the current patient record.",
+            )
+            write_activity(
+                "ERROR",
+                "CAMERA_CAPTURE_PATIENT_MISMATCH",
+                f"packet_patient_id={packet_patient_id}; current_patient_id={current_patient_id}; path={image_path}",
             )
             return
 
@@ -2528,7 +2546,13 @@ class ScreeningPage(QWidget):
 
         src_ext = os.path.splitext(source_path)[1].lower() or ".jpg"
         dst_source = os.path.join(base_dir, f"{stamp}_{eye_tag}_source{src_ext}")
-        shutil.copy2(source_path, dst_source)
+
+        norm_source = source_path.replace("\\", "/").lower()
+        pending_marker = "/stored_images/pending/"
+        if pending_marker in norm_source:
+            shutil.move(source_path, dst_source)
+        else:
+            shutil.copy2(source_path, dst_source)
 
         dst_heatmap = ""
         if heatmap_path and os.path.isfile(heatmap_path):
