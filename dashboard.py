@@ -57,6 +57,11 @@ class EyeShieldApp(QMainWindow):
         self._current_language = "English"
         self._inactivity_timeout_enabled = True
         self._inactivity_timeout_minutes = 15
+        self._inactivity_warning_seconds = 30
+        self._inactivity_warning_remaining_sec = 0
+        self._inactivity_warning_dialog = None
+        self._inactivity_warning_timer = None
+        self._inactivity_warning_active = False
         self._dashboard_clock_timer = None
         self._active_nav_key = ""
 
@@ -777,6 +782,8 @@ class EyeShieldApp(QMainWindow):
             self.refresh_dashboard()
         if index == 7:
             self.refresh_referrals_page()
+        if index == 8 and hasattr(self, "activity_log_page") and hasattr(self.activity_log_page, "load_activity_log"):
+            self.activity_log_page.load_activity_log()
 
     def _set_active_nav(self, index: int):
         """Highlight the active navigation button and dim the rest."""
@@ -1118,20 +1125,27 @@ class EyeShieldApp(QMainWindow):
         self._inactivity_timer.setSingleShot(True)
         self._inactivity_timer.timeout.connect(self._on_inactivity_timeout)
 
+        self._inactivity_warning_timer = QTimer(self)
+        self._inactivity_warning_timer.setInterval(1000)
+        self._inactivity_warning_timer.timeout.connect(self._tick_inactivity_warning)
+
         runtime_enabled = bool(self.settings_page.auto_logout_check.isChecked())
         runtime_minutes = int(self.settings_page.timeout_spin.value())
+        runtime_warning_seconds = int(getattr(self.settings_page, "warning_spin", None).value()) if hasattr(self.settings_page, "warning_spin") else 30
         if hasattr(self.settings_page, "get_runtime_inactivity_settings"):
-            runtime_enabled, runtime_minutes = self.settings_page.get_runtime_inactivity_settings()
+            runtime_enabled, runtime_minutes, runtime_warning_seconds = self.settings_page.get_runtime_inactivity_settings()
 
-        self.apply_inactivity_settings(runtime_enabled, runtime_minutes)
+        self.apply_inactivity_settings(runtime_enabled, runtime_minutes, runtime_warning_seconds)
 
         app = QGuiApplication.instance()
         if app is not None:
             app.installEventFilter(self)
 
-    def apply_inactivity_settings(self, enabled: bool, timeout_minutes: int):
+    def apply_inactivity_settings(self, enabled: bool, timeout_minutes: int, warning_seconds: int = 30):
         self._inactivity_timeout_enabled = bool(enabled)
         self._inactivity_timeout_minutes = max(1, int(timeout_minutes or 1))
+        self._inactivity_warning_seconds = max(10, min(300, int(warning_seconds or 30)))
+        self._dismiss_inactivity_warning(restart_timer=False)
         if self._inactivity_timeout_enabled:
             self._restart_inactivity_timer()
         elif hasattr(self, "_inactivity_timer"):
@@ -1150,11 +1164,85 @@ class EyeShieldApp(QMainWindow):
         if not self.isVisible():
             self._restart_inactivity_timer()
             return
-        QMessageBox.information(
-            self,
-            "Session Timeout",
-            f"No activity detected for {self._inactivity_timeout_minutes} minute(s). You will be logged out automatically.",
+        self._show_inactivity_warning()
+
+    def _show_inactivity_warning(self):
+        if self._inactivity_warning_active:
+            return
+
+        self._inactivity_warning_active = True
+        self._inactivity_warning_remaining_sec = max(10, int(self._inactivity_warning_seconds or 30))
+
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle("Inactivity Warning")
+        box.setStandardButtons(QMessageBox.StandardButton.NoButton)
+        box.setWindowModality(Qt.WindowModality.ApplicationModal)
+        box.setWindowFlag(Qt.WindowType.WindowCloseButtonHint, False)
+
+        stay_btn = box.addButton("Stay Signed In", QMessageBox.ButtonRole.AcceptRole)
+        logout_btn = box.addButton("Log Out Now", QMessageBox.ButtonRole.DestructiveRole)
+        box.setDefaultButton(stay_btn)
+
+        stay_btn.clicked.connect(self._continue_session_after_warning)
+        logout_btn.clicked.connect(self._trigger_auto_logout)
+        box.destroyed.connect(lambda *_: self._clear_warning_dialog_reference())
+
+        self._inactivity_warning_dialog = box
+        self._refresh_inactivity_warning_text()
+        if self._inactivity_warning_timer is not None:
+            self._inactivity_warning_timer.start()
+        box.show()
+
+    def _clear_warning_dialog_reference(self):
+        self._inactivity_warning_dialog = None
+
+    def _refresh_inactivity_warning_text(self):
+        if self._inactivity_warning_dialog is None:
+            return
+        mins = self._inactivity_warning_remaining_sec // 60
+        secs = self._inactivity_warning_remaining_sec % 60
+        self._inactivity_warning_dialog.setText(
+            "No activity detected in your session."
         )
+        self._inactivity_warning_dialog.setInformativeText(
+            f"Automatic logout in {mins:02d}:{secs:02d}. Click 'Stay Signed In' to continue."
+        )
+
+    def _tick_inactivity_warning(self):
+        if not self._inactivity_warning_active:
+            if self._inactivity_warning_timer is not None:
+                self._inactivity_warning_timer.stop()
+            return
+
+        self._inactivity_warning_remaining_sec = max(0, self._inactivity_warning_remaining_sec - 1)
+        self._refresh_inactivity_warning_text()
+        if self._inactivity_warning_remaining_sec <= 0:
+            self._trigger_auto_logout()
+
+    def _dismiss_inactivity_warning(self, restart_timer: bool = True):
+        if self._inactivity_warning_timer is not None:
+            self._inactivity_warning_timer.stop()
+        self._inactivity_warning_active = False
+        self._inactivity_warning_remaining_sec = 0
+        if self._inactivity_warning_dialog is not None:
+            self._inactivity_warning_dialog.close()
+            self._inactivity_warning_dialog = None
+        if restart_timer:
+            self._restart_inactivity_timer()
+
+    def _continue_session_after_warning(self):
+        self._dismiss_inactivity_warning(restart_timer=True)
+
+    def _trigger_auto_logout(self):
+        self._dismiss_inactivity_warning(restart_timer=False)
+
+        try:
+            import user_store
+            user_store.log_activity(self.username, "Logout (Inactivity Timeout)")
+        except Exception:
+            pass
+
         self._logging_out = True
         from login import LoginWindow
         self.login = LoginWindow()
@@ -1163,6 +1251,8 @@ class EyeShieldApp(QMainWindow):
 
     def eventFilter(self, watched, event):
         if hasattr(self, "_inactivity_timer") and self._inactivity_timeout_enabled:
+            if self._inactivity_warning_active:
+                return super().eventFilter(watched, event)
             event_type = event.type()
             reset_types = {
                 QEvent.Type.MouseButtonPress,

@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout, QPushButton, QLineEdit, QComboBox, QMessageBox,
     QGroupBox, QFormLayout, QAbstractItemView, QDialog, QApplication,
     QHeaderView, QInputDialog, QMenu, QCheckBox, QTimeEdit,
-    QFileDialog, QDateEdit,
+    QFileDialog, QDateEdit, QGridLayout,
     QSizePolicy
 )
 from PySide6.QtGui import QFont, QAction, QIcon, QColor
@@ -148,6 +148,40 @@ _PAGE_STYLE = """
         font-weight: 500;
         background: transparent;
     }
+    QLabel#usrActivityTitle {
+        color: #0b4aa2;
+        font-size: 24px;
+        font-weight: 800;
+        font-family: 'Bahnschrift', 'Segoe UI Semibold', 'Trebuchet MS';
+        letter-spacing: 0.2px;
+    }
+    QGroupBox#usrAuditSummary {
+        background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #f6faff, stop:1 #fdfefe);
+        border: 1px solid #d7e5f6;
+        border-radius: 12px;
+        padding-top: 12px;
+    }
+    QGroupBox#usrAuditSummary::title {
+        color: #365272;
+        font-size: 12px;
+        font-weight: 700;
+    }
+    QGroupBox#usrActivityPanel {
+        border-radius: 12px;
+        border: 1px solid #dce5ef;
+        padding-top: 12px;
+    }
+    QWidget#usrActivityFilters {
+        background: #f7fbff;
+        border: 1px solid #d8e7f7;
+        border-radius: 12px;
+    }
+    QLabel#usrFilterLabel {
+        color: #4f637b;
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.3px;
+    }
     QLineEdit, QComboBox {
         background: #ffffff;
         border: 1px solid #ced4da;
@@ -193,6 +227,28 @@ _PAGE_STYLE = """
     QPushButton#warningBtn:hover { background: #dc6a0a; }
     QPushButton#neutralBtn   { background: #e9ecef; color: #495057; border: 1px solid #ced4da; }
     QPushButton#neutralBtn:hover { background: #dee2e6; }
+    QPushButton#smallBtn {
+        background: #ffffff;
+        color: #35506f;
+        border: 1px solid #c5d8ec;
+        border-radius: 9px;
+        padding: 6px 10px;
+        font-size: 11px;
+        font-weight: 700;
+    }
+    QPushButton#smallBtn:hover {
+        background: #edf5ff;
+        border-color: #aecaeb;
+    }
+    QPushButton#pagerBtn {
+        background: #f8fafc;
+        color: #3f5168;
+        border: 1px solid #d6e0ea;
+        min-width: 64px;
+    }
+    QPushButton#pagerBtn:hover {
+        background: #edf2f7;
+    }
     QLineEdit#usrSearchInput {
         background: #ffffff;
         border: 1px solid #cfe0f2;
@@ -243,6 +299,15 @@ _PAGE_STYLE = """
         color: #495057;
         background: #f1f3f5;
         border-color: #dee2e6;
+    }
+    QLabel#usrActivityMeta {
+        color: #3d5b7a;
+        background: #ebf3ff;
+        border: 1px solid #d3e1f3;
+        border-radius: 12px;
+        padding: 6px 10px;
+        font-size: 11px;
+        font-weight: 700;
     }
     QPushButton#usrStatTotal:checked,
     QPushButton#usrStatAdmin:checked,
@@ -1829,6 +1894,15 @@ class ActivityLogPage(QWidget):
     MAX_EXPORT_ROWS = 10000
     LARGE_EXPORT_THRESHOLD = 2000
     PAGE_SIZE = 100
+    EVENT_FILTERS = [
+        ("All Events", ""),
+        ("Security", "LOGIN"),
+        ("Logouts", "LOGOUT"),
+        ("User Management", "CREATE_USER"),
+        ("Activity Exports", "ACTIVITY_LOG_EXPORT_CSV"),
+        ("Report Exports", "REPORT_EXPORT_CSV"),
+        ("Referrals", "REFERRAL_ASSIGNED"),
+    ]
 
     def __init__(self):
         super().__init__()
@@ -1844,15 +1918,13 @@ class ActivityLogPage(QWidget):
 
         header_row = QHBoxLayout()
         self._title_lbl = QLabel("Activity Log")
-        self._title_lbl.setStyleSheet(
-            "font-size:22px;font-weight:700;color:#0d6efd;"
-            "font-family:'Segoe UI','Inter','Arial';"
-        )
+        self._title_lbl.setObjectName("usrActivityTitle")
         header_row.addWidget(self._title_lbl)
         header_row.addStretch()
         main_layout.addLayout(header_row)
 
         compliance_group = QGroupBox("Audit Summary")
+        compliance_group.setObjectName("usrAuditSummary")
         compliance_layout = QHBoxLayout(compliance_group)
         compliance_layout.setContentsMargins(10, 8, 10, 8)
         compliance_layout.setSpacing(20)
@@ -1877,47 +1949,58 @@ class ActivityLogPage(QWidget):
         main_layout.addWidget(compliance_group)
 
         self._log_group = QGroupBox("Activity Log")
+        self._log_group.setObjectName("usrActivityPanel")
         log_vbox = QVBoxLayout(self._log_group)
 
-        log_hdr = QHBoxLayout()
+        log_hdr = QVBoxLayout()
         log_hdr.setContentsMargins(2, 0, 2, 2)
+        log_hdr.setSpacing(6)
 
         self._section_hint = QLabel("Latest admin, account, and clinical audit events")
         self._section_hint.setObjectName("usrSectionHint")
         log_hdr.addWidget(self._section_hint)
-        log_hdr.addStretch()
 
         toolbar_wrap = QVBoxLayout()
         toolbar_wrap.setContentsMargins(0, 0, 0, 0)
         toolbar_wrap.setSpacing(8)
 
         controls = QWidget()
-        controls_row = QHBoxLayout(controls)
-        controls_row.setContentsMargins(0, 0, 0, 0)
-        controls_row.setSpacing(8)
+        controls.setObjectName("usrActivityFilters")
+        controls_row = QGridLayout(controls)
+        controls_row.setContentsMargins(10, 8, 10, 8)
+        controls_row.setHorizontalSpacing(8)
+        controls_row.setVerticalSpacing(6)
 
         self.log_search_input = QLineEdit()
         self.log_search_input.setObjectName("usrSearchInput")
         self.log_search_input.setPlaceholderText("Search activity log")
-        self.log_search_input.setMinimumWidth(240)
-        self.log_search_input.setMaximumWidth(420)
+        self.log_search_input.setMinimumWidth(180)
+        self.log_search_input.setMaximumWidth(360)
+        self.log_search_input.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.log_search_input.textChanged.connect(self._reset_and_reload)
 
         self.date_from = QDateEdit()
         self.date_from.setCalendarPopup(True)
         self.date_from.setDisplayFormat("yyyy-MM-dd")
         self.date_from.setDate(QDate.currentDate().addDays(-30))
-        self.date_from.setMinimumWidth(130)
-        self.date_from.setMaximumWidth(140)
+        self.date_from.setMinimumWidth(118)
+        self.date_from.setMaximumWidth(130)
         self.date_from.dateChanged.connect(self._reset_and_reload)
 
         self.date_to = QDateEdit()
         self.date_to.setCalendarPopup(True)
         self.date_to.setDisplayFormat("yyyy-MM-dd")
         self.date_to.setDate(QDate.currentDate())
-        self.date_to.setMinimumWidth(130)
-        self.date_to.setMaximumWidth(140)
+        self.date_to.setMinimumWidth(118)
+        self.date_to.setMaximumWidth(130)
         self.date_to.dateChanged.connect(self._reset_and_reload)
+
+        self.event_type_filter = QComboBox()
+        self.event_type_filter.setMinimumWidth(140)
+        self.event_type_filter.setMaximumWidth(180)
+        for label, value in self.EVENT_FILTERS:
+            self.event_type_filter.addItem(label, value)
+        self.event_type_filter.currentIndexChanged.connect(self._reset_and_reload)
 
         preset_today_btn = QPushButton("Today")
         preset_today_btn.setObjectName("smallBtn")
@@ -1934,6 +2017,11 @@ class ActivityLogPage(QWidget):
         preset_30d_btn.setMinimumWidth(72)
         preset_30d_btn.clicked.connect(self._set_preset_30d)
 
+        clear_filters_btn = QPushButton("Clear")
+        clear_filters_btn.setObjectName("smallBtn")
+        clear_filters_btn.setMinimumWidth(72)
+        clear_filters_btn.clicked.connect(self._clear_filters)
+
         self.events_chip = QLabel("Events 0")
         self.events_chip.setObjectName("usrStatTotal")
 
@@ -1942,25 +2030,34 @@ class ActivityLogPage(QWidget):
         self.export_activity_btn.clicked.connect(self.export_activity_log_csv)
 
         self.prev_page_btn = QPushButton("Prev")
-        self.prev_page_btn.setObjectName("neutralBtn")
+        self.prev_page_btn.setObjectName("pagerBtn")
         self.prev_page_btn.clicked.connect(self._go_prev_page)
 
         self.next_page_btn = QPushButton("Next")
-        self.next_page_btn.setObjectName("neutralBtn")
+        self.next_page_btn.setObjectName("pagerBtn")
         self.next_page_btn.clicked.connect(self._go_next_page)
 
         self.page_chip = QLabel("Page 1/1")
-        self.page_chip.setObjectName("usrStatViewer")
+        self.page_chip.setObjectName("usrActivityMeta")
 
-        controls_row.addWidget(self.log_search_input)
-        controls_row.addWidget(QLabel("From"))
-        controls_row.addWidget(self.date_from)
-        controls_row.addWidget(QLabel("To"))
-        controls_row.addWidget(self.date_to)
-        controls_row.addWidget(preset_today_btn)
-        controls_row.addWidget(preset_7d_btn)
-        controls_row.addWidget(preset_30d_btn)
-        controls_row.addStretch()
+        controls_row.addWidget(self.log_search_input, 0, 0, 1, 4)
+        from_lbl = QLabel("From")
+        from_lbl.setObjectName("usrFilterLabel")
+        controls_row.addWidget(from_lbl, 0, 4)
+        controls_row.addWidget(self.date_from, 0, 5)
+        to_lbl = QLabel("To")
+        to_lbl.setObjectName("usrFilterLabel")
+        controls_row.addWidget(to_lbl, 0, 6)
+        controls_row.addWidget(self.date_to, 0, 7)
+        event_lbl = QLabel("Event")
+        event_lbl.setObjectName("usrFilterLabel")
+        controls_row.addWidget(event_lbl, 0, 8)
+        controls_row.addWidget(self.event_type_filter, 0, 9)
+        controls_row.addWidget(preset_today_btn, 1, 0)
+        controls_row.addWidget(preset_7d_btn, 1, 1)
+        controls_row.addWidget(preset_30d_btn, 1, 2)
+        controls_row.addWidget(clear_filters_btn, 1, 3)
+        controls_row.setColumnStretch(10, 1)
 
         controls_meta = QWidget()
         controls_meta_row = QHBoxLayout(controls_meta)
@@ -1978,17 +2075,19 @@ class ActivityLogPage(QWidget):
         log_hdr.addLayout(toolbar_wrap)
         log_vbox.addLayout(log_hdr)
 
-        self.activity_log = QTableWidget(0, 3)
+        self.activity_log = QTableWidget(0, 4)
         self.activity_log.setObjectName("usrActivityTable")
-        self.activity_log.setHorizontalHeaderLabels(["Username", "Action", "Date-Time"])
+        self.activity_log.setHorizontalHeaderLabels(["Username", "Action", "Event Type", "Date-Time"])
         self.activity_log.setSelectionMode(QAbstractItemView.NoSelection)
         self.activity_log.setEditTriggers(QTableWidget.NoEditTriggers)
         self.activity_log.verticalHeader().setVisible(False)
         self.activity_log.setShowGrid(False)
+        self.activity_log.setAlternatingRowColors(True)
         self.activity_log.horizontalHeader().setStretchLastSection(False)
         self.activity_log.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
         self.activity_log.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
         self.activity_log.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        self.activity_log.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
         self.activity_log.horizontalHeader().setMinimumSectionSize(90)
         self.activity_log.setWordWrap(True)
         self.activity_log.setMinimumHeight(200)
@@ -2006,8 +2105,14 @@ class ActivityLogPage(QWidget):
 
     def _actor_context(self):
         parent_app = getattr(self, "parent_app", None)
+        if parent_app is None:
+            parent_app = self.window() if self.window() is not self else None
         username = getattr(parent_app, "username", None)
         role = getattr(parent_app, "role", None)
+        if not username:
+            username = os.environ.get("EYESHIELD_CURRENT_USER")
+        if not role:
+            role = os.environ.get("EYESHIELD_CURRENT_ROLE")
         return username, role
 
     def _check_admin_password(self, acting_password):
@@ -2035,7 +2140,15 @@ class ActivityLogPage(QWidget):
             "query": search_text,
             "from_time": start_date.toString("yyyy-MM-dd"),
             "to_time": end_date.toString("yyyy-MM-dd"),
+            "event_type": str(self.event_type_filter.currentData() or "").strip().upper(),
         }
+
+    def _clear_filters(self):
+        self.log_search_input.clear()
+        self.date_from.setDate(QDate.currentDate().addDays(-30))
+        self.date_to.setDate(QDate.currentDate())
+        self.event_type_filter.setCurrentIndex(0)
+        self._reset_and_reload()
 
     def _reset_and_reload(self):
         self.current_page = 1
@@ -2053,18 +2166,27 @@ class ActivityLogPage(QWidget):
 
     def _set_preset_today(self):
         today = QDate.currentDate()
+        self.log_search_input.clear()
+        self.event_type_filter.setCurrentIndex(0)
         self.date_from.setDate(today)
         self.date_to.setDate(today)
+        self._reset_and_reload()
 
     def _set_preset_7d(self):
         today = QDate.currentDate()
+        self.log_search_input.clear()
+        self.event_type_filter.setCurrentIndex(0)
         self.date_from.setDate(today.addDays(-7))
         self.date_to.setDate(today)
+        self._reset_and_reload()
 
     def _set_preset_30d(self):
         today = QDate.currentDate()
+        self.log_search_input.clear()
+        self.event_type_filter.setCurrentIndex(0)
         self.date_from.setDate(today.addDays(-30))
         self.date_to.setDate(today)
+        self._reset_and_reload()
 
     def load_activity_log(self):
         filters = self._current_filters()
@@ -2074,6 +2196,7 @@ class ActivityLogPage(QWidget):
             from_time=filters["from_time"],
             to_time=filters["to_time"],
             query=filters["query"],
+            event_type=filters["event_type"],
             limit=self.PAGE_SIZE,
             offset=offset,
             acting_username=acting_username,
@@ -2089,6 +2212,7 @@ class ActivityLogPage(QWidget):
                 from_time=filters["from_time"],
                 to_time=filters["to_time"],
                 query=filters["query"],
+                event_type=filters["event_type"],
                 limit=self.PAGE_SIZE,
                 offset=offset,
                 acting_username=acting_username,
@@ -2113,21 +2237,32 @@ class ActivityLogPage(QWidget):
                 event_type=entry.get("event_type"),
                 metadata=entry.get("metadata"),
             )
+            event_type = str(entry.get("event_type") or "LEGACY").strip().upper() or "LEGACY"
             timestamp = str(entry.get("time") or "").strip()
 
             username_item = QTableWidgetItem(username)
             action_item = QTableWidgetItem(action)
+            event_item = QTableWidgetItem(event_type)
             time_item = QTableWidgetItem(timestamp)
             username_item.setFlags(username_item.flags() & ~Qt.ItemIsEditable)
             action_item.setFlags(action_item.flags() & ~Qt.ItemIsEditable)
+            event_item.setFlags(event_item.flags() & ~Qt.ItemIsEditable)
             time_item.setFlags(time_item.flags() & ~Qt.ItemIsEditable)
 
             self.activity_log.setItem(row, 0, username_item)
             self.activity_log.setItem(row, 1, action_item)
-            self.activity_log.setItem(row, 2, time_item)
+            self.activity_log.setItem(row, 2, event_item)
+            self.activity_log.setItem(row, 3, time_item)
+
+        if not entries:
+            self.activity_log.setRowCount(1)
+            empty_item = QTableWidgetItem("No audit events found for the selected filters.")
+            empty_item.setFlags(empty_item.flags() & ~Qt.ItemIsEditable)
+            self.activity_log.setItem(0, 0, empty_item)
+            self.activity_log.setSpan(0, 0, 1, 4)
 
         self.activity_log.setSortingEnabled(True)
-        self.activity_log.sortItems(2, Qt.DescendingOrder)
+        self.activity_log.sortItems(3, Qt.DescendingOrder)
         self.activity_log.resizeRowsToContents()
 
         self._update_compliance_summary(entries)
@@ -2199,6 +2334,7 @@ class ActivityLogPage(QWidget):
                 from_time=filters["from_time"],
                 to_time=filters["to_time"],
                 query=filters["query"],
+                event_type=filters["event_type"],
                 limit=500,
                 offset=offset,
                 acting_username=current_username,

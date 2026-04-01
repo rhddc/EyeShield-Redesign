@@ -1555,13 +1555,17 @@ class UserManager:
 
         if from_text:
             if len(from_text) == 10:
-                where_parts.append("SUBSTR(action_time, 1, 10) >= ?")
+                where_parts.append(
+                    "COALESCE(date(action_time, 'localtime'), SUBSTR(action_time, 1, 10)) >= ?"
+                )
             else:
                 where_parts.append("action_time >= ?")
             params.append(from_text)
         if to_text:
             if len(to_text) == 10:
-                where_parts.append("SUBSTR(action_time, 1, 10) <= ?")
+                where_parts.append(
+                    "COALESCE(date(action_time, 'localtime'), SUBSTR(action_time, 1, 10)) <= ?"
+                )
             else:
                 where_parts.append("action_time <= ?")
             params.append(to_text)
