@@ -9,13 +9,23 @@ import os
 import random
 import re
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
+
+try:
+    from zoneinfo import ZoneInfo
+except Exception:  # pragma: no cover
+    ZoneInfo = None
+
+try:
+    import winsound
+except Exception:  # pragma: no cover - platform specific
+    winsound = None
 
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QLabel, QPushButton, QVBoxLayout, QHBoxLayout,
     QStackedWidget, QGroupBox, QMessageBox, QProgressBar, QSizePolicy,
     QFrame, QMenu, QInputDialog, QTableWidget, QTableWidgetItem, QAbstractItemView,
-    QHeaderView, QDialog
+    QHeaderView, QDialog, QApplication
 )
 from PySide6.QtCore import Qt, QSize, QByteArray, QEvent, QTimer, QCoreApplication
 from PySide6.QtGui import QIcon, QPixmap, QImage, QPainter, QFont, QShortcut, QKeySequence, QColor, QGuiApplication
@@ -26,6 +36,7 @@ from reports import ReportsPage
 from users import UsersPage, ActivityLogPage
 from settings import SettingsPage, DARK_STYLESHEET
 from help_support import HelpSupportPage
+from trusted_hospitals import TrustedHospitalsPage
 from camera import CameraPage
 from auth import DB_FILE, UserManager
 from user_auth import get_user_profile
@@ -35,7 +46,7 @@ class EyeShieldApp(QMainWindow):
     """Main application window"""
 
     ROLE_PAGE_ACCESS = {
-        "admin": {4, 5, 6, 8},
+        "admin": {4, 5, 6, 8, 9},
         "clinician": {0, 1, 2, 3, 5, 6, 7},
         "viewer": {0, 5, 6},
     }
@@ -60,6 +71,7 @@ class EyeShieldApp(QMainWindow):
         self._inactivity_warning_seconds = 30
         self._inactivity_warning_remaining_sec = 0
         self._inactivity_warning_dialog = None
+        self._inactivity_warning_text_label = None
         self._inactivity_warning_timer = None
         self._inactivity_warning_active = False
         self._dashboard_clock_timer = None
@@ -223,6 +235,14 @@ class EyeShieldApp(QMainWindow):
                 "requires_admin": True,
             },
             {
+                "icon": self._resolve_existing_path(os.path.join(icons_dir, "trusted referred hospitals.svg")),
+                "label": "Trusted Referrals",
+                "display_label": "Trusted\nReferrals",
+                "page_index": 9,
+                "nav_key": "trusted_referrals",
+                "requires_admin": True,
+            },
+            {
                 "icon": self._resolve_existing_path(
                     os.path.join(icons_dir, "refferal_assignments.svg"),
                     os.path.join(icons_dir, "referral_assignments.svg"),
@@ -329,6 +349,7 @@ class EyeShieldApp(QMainWindow):
         self.settings_page = SettingsPage()
         self.help_support_page = HelpSupportPage()
         self.referrals_page = self.create_referrals_page()
+        self.trusted_hospitals_page = TrustedHospitalsPage()
 
         # Dashboard is created after the other pages so it can be refreshed
         self.dashboard_page = self.create_dashboard_page()
@@ -345,6 +366,7 @@ class EyeShieldApp(QMainWindow):
         self.pages.addWidget(self.help_support_page)
         self.pages.addWidget(self.referrals_page)
         self.pages.addWidget(self.activity_log_page)
+        self.pages.addWidget(self.trusted_hospitals_page)
         self.pages.currentChanged.connect(self._on_page_changed)
 
         main_layout.addWidget(self.pages)
@@ -1110,7 +1132,12 @@ class EyeShieldApp(QMainWindow):
 
         try:
             import user_store
-            user_store.log_activity(self.username, "Logout")
+            user_store.log_activity_event(
+                self.username,
+                "LOGOUT",
+                metadata={"source": "manual"},
+                action_text="Logout",
+            )
         except Exception:
             pass
 
@@ -1173,16 +1200,83 @@ class EyeShieldApp(QMainWindow):
         self._inactivity_warning_active = True
         self._inactivity_warning_remaining_sec = max(10, int(self._inactivity_warning_seconds or 30))
 
-        box = QMessageBox(self)
-        box.setIcon(QMessageBox.Icon.Warning)
+        box = QDialog(self)
+        box.setObjectName("inactivityWarningToast")
         box.setWindowTitle("Inactivity Warning")
-        box.setStandardButtons(QMessageBox.StandardButton.NoButton)
-        box.setWindowModality(Qt.WindowModality.ApplicationModal)
-        box.setWindowFlag(Qt.WindowType.WindowCloseButtonHint, False)
+        box.setModal(False)
+        box.setWindowModality(Qt.WindowModality.NonModal)
+        box.setWindowFlags(
+            Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.Tool
+            | Qt.WindowType.WindowStaysOnTopHint
+        )
+        box.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+        box.setStyleSheet(
+            """
+            QDialog#inactivityWarningToast {
+                background: #fff4e5;
+                border: 1px solid #f59e0b;
+                border-radius: 12px;
+            }
+            QLabel#warningTitle {
+                color: #92400e;
+                font-size: 14px;
+                font-weight: 700;
+            }
+            QLabel#warningBody {
+                color: #7c2d12;
+                font-size: 12px;
+                font-weight: 500;
+            }
+            QPushButton#warningStayBtn {
+                background: #ffffff;
+                border: 1px solid #f59e0b;
+                border-radius: 8px;
+                color: #92400e;
+                padding: 6px 12px;
+                font-size: 12px;
+                font-weight: 600;
+            }
+            QPushButton#warningStayBtn:hover {
+                background: #fff7ed;
+            }
+            QPushButton#warningLogoutBtn {
+                background: #f59e0b;
+                border: 1px solid #d97706;
+                border-radius: 8px;
+                color: #ffffff;
+                padding: 6px 12px;
+                font-size: 12px;
+                font-weight: 600;
+            }
+            QPushButton#warningLogoutBtn:hover {
+                background: #d97706;
+            }
+            """
+        )
 
-        stay_btn = box.addButton("Stay Signed In", QMessageBox.ButtonRole.AcceptRole)
-        logout_btn = box.addButton("Log Out Now", QMessageBox.ButtonRole.DestructiveRole)
-        box.setDefaultButton(stay_btn)
+        layout = QVBoxLayout(box)
+        layout.setContentsMargins(14, 12, 14, 12)
+        layout.setSpacing(8)
+
+        title = QLabel("Inactivity warning")
+        title.setObjectName("warningTitle")
+        layout.addWidget(title)
+
+        self._inactivity_warning_text_label = QLabel()
+        self._inactivity_warning_text_label.setObjectName("warningBody")
+        self._inactivity_warning_text_label.setWordWrap(True)
+        layout.addWidget(self._inactivity_warning_text_label)
+
+        actions = QHBoxLayout()
+        actions.addStretch()
+        stay_btn = QPushButton("Stay Signed In")
+        stay_btn.setObjectName("warningStayBtn")
+        logout_btn = QPushButton("Log Out Now")
+        logout_btn.setObjectName("warningLogoutBtn")
+        actions.addWidget(stay_btn)
+        actions.addWidget(logout_btn)
+        layout.addLayout(actions)
 
         stay_btn.clicked.connect(self._continue_session_after_warning)
         logout_btn.clicked.connect(self._trigger_auto_logout)
@@ -1190,23 +1284,47 @@ class EyeShieldApp(QMainWindow):
 
         self._inactivity_warning_dialog = box
         self._refresh_inactivity_warning_text()
+        self._play_inactivity_alert_sound(urgent=False)
         if self._inactivity_warning_timer is not None:
             self._inactivity_warning_timer.start()
+        box.adjustSize()
+        self._position_inactivity_warning()
         box.show()
 
     def _clear_warning_dialog_reference(self):
         self._inactivity_warning_dialog = None
+        self._inactivity_warning_text_label = None
+
+    def _position_inactivity_warning(self):
+        if self._inactivity_warning_dialog is None:
+            return
+        anchor = self.geometry().topRight()
+        margin = 16
+        x = anchor.x() - self._inactivity_warning_dialog.width() - margin
+        y = self.geometry().top() + margin
+        self._inactivity_warning_dialog.move(max(0, x), max(0, y))
+
+    def _play_inactivity_alert_sound(self, urgent: bool = False):
+        played = False
+        if winsound is not None:
+            try:
+                tone = winsound.MB_ICONHAND if urgent else winsound.MB_ICONEXCLAMATION
+                winsound.MessageBeep(tone)
+                played = True
+            except Exception:
+                played = False
+        if not played:
+            with contextlib.suppress(Exception):
+                QApplication.beep()
 
     def _refresh_inactivity_warning_text(self):
-        if self._inactivity_warning_dialog is None:
+        if self._inactivity_warning_dialog is None or self._inactivity_warning_text_label is None:
             return
         mins = self._inactivity_warning_remaining_sec // 60
         secs = self._inactivity_warning_remaining_sec % 60
-        self._inactivity_warning_dialog.setText(
-            "No activity detected in your session."
-        )
-        self._inactivity_warning_dialog.setInformativeText(
-            f"Automatic logout in {mins:02d}:{secs:02d}. Click 'Stay Signed In' to continue."
+        self._inactivity_warning_text_label.setText(
+            "No activity detected in your session. "
+            f"Automatic logout in {mins:02d}:{secs:02d}."
         )
 
     def _tick_inactivity_warning(self):
@@ -1217,6 +1335,8 @@ class EyeShieldApp(QMainWindow):
 
         self._inactivity_warning_remaining_sec = max(0, self._inactivity_warning_remaining_sec - 1)
         self._refresh_inactivity_warning_text()
+        if self._inactivity_warning_remaining_sec in {20, 10, 5, 4, 3, 2, 1}:
+            self._play_inactivity_alert_sound(urgent=self._inactivity_warning_remaining_sec <= 5)
         if self._inactivity_warning_remaining_sec <= 0:
             self._trigger_auto_logout()
 
@@ -1228,6 +1348,7 @@ class EyeShieldApp(QMainWindow):
         if self._inactivity_warning_dialog is not None:
             self._inactivity_warning_dialog.close()
             self._inactivity_warning_dialog = None
+        self._inactivity_warning_text_label = None
         if restart_timer:
             self._restart_inactivity_timer()
 
@@ -1239,7 +1360,12 @@ class EyeShieldApp(QMainWindow):
 
         try:
             import user_store
-            user_store.log_activity(self.username, "Logout (Inactivity Timeout)")
+            user_store.log_activity_event(
+                self.username,
+                "LOGOUT",
+                metadata={"source": "inactivity_timeout"},
+                action_text="Logout (Inactivity Timeout)",
+            )
         except Exception:
             pass
 
@@ -1270,14 +1396,34 @@ class EyeShieldApp(QMainWindow):
                 self._restart_inactivity_timer()
         return super().eventFilter(watched, event)
 
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._position_inactivity_warning()
+
+    def moveEvent(self, event):
+        super().moveEvent(event)
+        self._position_inactivity_warning()
+
     @staticmethod
     def _format_dashboard_datetime(now: datetime) -> str:
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=timezone.utc)
+        now = now.astimezone(EyeShieldApp._ph_now().tzinfo)
         hour = now.strftime("%I").lstrip("0") or "0"
         return f"{now.strftime('%A , %B %d, %Y  -  ')}{hour}:{now.strftime('%M')} {now.strftime('%p').lower()}"
 
+    @staticmethod
+    def _ph_now() -> datetime:
+        if ZoneInfo is not None:
+            try:
+                return datetime.now(ZoneInfo("Asia/Manila"))
+            except Exception:
+                pass
+        return datetime.now(timezone(timedelta(hours=8)))
+
     def _update_dashboard_datetime_label(self):
         if hasattr(self, "dashboard_date_label"):
-            self.dashboard_date_label.setText(self._format_dashboard_datetime(datetime.now()))
+            self.dashboard_date_label.setText(self._format_dashboard_datetime(self._ph_now()))
 
     def _setup_dashboard_clock(self):
         self._dashboard_clock_timer = QTimer(self)

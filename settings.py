@@ -8,6 +8,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QVBoxLayout,
     QHBoxLayout,
+    QGridLayout,
     QGroupBox,
     QPushButton,
     QComboBox,
@@ -328,82 +329,117 @@ class SettingsPage(QWidget):
                 background: #ffffff;
                 color: #1f2a37;
                 font-size: 13px;
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            }
+            QScrollArea {
+                border: none;
+                background: transparent;
+            }
+            QWidget#settingsCanvas {
+                background: #ffffff;
+            }
+            QFrame#settingsHero {
+                background: #ffffff;
+                border: 1px solid #dbe7f5;
+                border-radius: 12px;
             }
             QLabel#headerTitle {
-                color: #0b63ce;
+                color: #1e40af;
                 font-size: 24px;
                 font-weight: 700;
                 background: transparent;
             }
+            QLabel#headerSubtitle {
+                color: #64748b;
+                font-size: 12px;
+                font-weight: 500;
+                background: transparent;
+            }
             QGroupBox {
                 background: #ffffff;
-                border: 1px solid #d7dde5;
-                border-radius: 10px;
-                margin-top: 12px;
+                border: 1px solid #dbe7f5;
+                border-radius: 12px;
+                margin-top: 8px;
                 font-weight: 700;
                 padding: 12px;
             }
             QGroupBox::title {
                 subcontrol-origin: margin;
                 left: 14px;
-                padding: 0 6px;
-                color: #0b63ce;
+                padding: 0 8px;
+                background: #ffffff;
+                color: #1e3a8a;
                 font-size: 12px;
                 letter-spacing: 0.5px;
             }
             QLabel#fieldLabel {
-                color: #2f4054;
+                color: #324a67;
                 font-size: 11px;
                 font-weight: 700;
                 letter-spacing: 0.5px;
             }
-            QComboBox {
+            QComboBox, QSpinBox, QTimeEdit {
                 background: #ffffff;
-                border: 1px solid #bfd0e0;
-                border-radius: 10px;
-                padding: 8px 10px;
+                border: 1px solid #c7d8ec;
+                border-radius: 9px;
+                padding: 6px 8px;
                 min-height: 20px;
             }
             QLineEdit {
                 background: #ffffff;
-                border: 1px solid #bfd0e0;
-                border-radius: 10px;
-                padding: 10px 12px;
-                min-height: 24px;
+                border: 1px solid #c7d8ec;
+                border-radius: 9px;
+                padding: 8px 10px;
+                min-height: 22px;
             }
             QLineEdit:hover {
-                border: 1px solid #90b4db;
+                border: 1px solid #93c5fd;
             }
             QLineEdit:focus {
-                border: 1px solid #0b63ce;
+                border: 1px solid #3b82f6;
             }
-            QComboBox:hover {
-                border: 1px solid #90b4db;
+            QComboBox:hover, QSpinBox:hover, QTimeEdit:hover {
+                border: 1px solid #93c5fd;
             }
-            QComboBox:focus {
-                border: 1px solid #0b63ce;
+            QComboBox:focus, QSpinBox:focus, QTimeEdit:focus {
+                border: 1px solid #3b82f6;
             }
             QPushButton {
-                background: #edf2f7;
-                color: #243447;
-                border: 1px solid #ccd8e5;
-                border-radius: 10px;
-                padding: 8px 16px;
+                background: #ffffff;
+                color: #1f2937;
+                border: 1px solid #c7d8ec;
+                border-radius: 9px;
+                padding: 7px 12px;
                 font-weight: 600;
             }
             QPushButton:hover {
-                background: #e2eaf2;
+                background: #eef4ff;
             }
             QPushButton:focus {
-                border: 1px solid #0b63ce;
+                border: 1px solid #3b82f6;
             }
             QPushButton#primaryAction {
-                background: #0b63ce;
+                background: #2563eb;
                 color: #ffffff;
-                border: 1px solid #0a58ca;
+                border: 1px solid #1d4ed8;
             }
             QPushButton#primaryAction:hover {
-                background: #0a58ca;
+                background: #1d4ed8;
+            }
+            QTableWidget {
+                background: #ffffff;
+                border: 1px solid #dbe7f5;
+                border-radius: 10px;
+                gridline-color: #f1f5f9;
+            }
+            QHeaderView::section {
+                background: #ffffff;
+                color: #1e3a8a;
+                border: none;
+                border-bottom: 1px solid #dbe7f5;
+                font-size: 11px;
+                font-weight: 700;
+                padding: 8px;
             }
             QLabel#statusLabel {
                 color: #3f556e;
@@ -416,6 +452,23 @@ class SettingsPage(QWidget):
                 color: #51667d;
                 font-size: 13px;
             }
+            QCheckBox {
+                spacing: 8px;
+                color: #23354c;
+                background: transparent;
+                font-size: 13px;
+            }
+            QCheckBox::indicator {
+                width: 16px;
+                height: 16px;
+                border: 1px solid #9fb6d1;
+                border-radius: 4px;
+                background: #ffffff;
+            }
+            QCheckBox::indicator:checked {
+                background: #3b82f6;
+                border: 1px solid #2563eb;
+            }
         """)
         _outer = QVBoxLayout(self)
         _outer.setContentsMargins(0, 0, 0, 0)
@@ -426,42 +479,61 @@ class SettingsPage(QWidget):
         self.scroll_area.setFrameShape(QFrame.NoFrame)
 
         content = QWidget()
+        content.setObjectName("settingsCanvas")
         self.scroll_area.setWidget(content)
         _outer.addWidget(self.scroll_area)
 
         layout = QVBoxLayout(content)
-        layout.setContentsMargins(18, 18, 18, 18)
-        layout.setSpacing(14)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(10)
+
+        hero_card = QFrame()
+        hero_card.setObjectName("settingsHero")
+        hero_layout = QVBoxLayout(hero_card)
+        hero_layout.setContentsMargins(12, 10, 12, 10)
+        hero_layout.setSpacing(2)
 
         self.title_label = QLabel("Settings")
         self.title_label.setObjectName("headerTitle")
-        layout.addWidget(self.title_label)
+        hero_layout.addWidget(self.title_label)
+
+        self.subtitle_label = QLabel("Configuration hub for preferences, security, and support")
+        self.subtitle_label.setObjectName("headerSubtitle")
+        hero_layout.addWidget(self.subtitle_label)
+        layout.addWidget(hero_card)
 
         pref_group = QGroupBox("Preferences")
         self.pref_group = pref_group
-        pref_layout = QVBoxLayout(pref_group)
-        pref_layout.setSpacing(8)
+        pref_layout = QGridLayout(pref_group)
+        pref_layout.setHorizontalSpacing(8)
+        pref_layout.setVerticalSpacing(6)
+        pref_layout.setColumnStretch(0, 1)
+        pref_layout.setColumnStretch(1, 1)
 
         self.theme_combo = QComboBox()
         self.theme_combo.addItems(["Light", "Dark"])
         self.theme_label = QLabel("Theme:")
         self.theme_label.setObjectName("fieldLabel")
-        pref_layout.addWidget(self.theme_label)
-        pref_layout.addWidget(self.theme_combo)
+        pref_layout.addWidget(self.theme_label, 0, 0)
+        pref_layout.addWidget(self.theme_combo, 1, 0)
 
         self.lang_combo = QComboBox()
         self.lang_combo.addItems(["English"])
         self.language_label = QLabel("Language:")
         self.language_label.setObjectName("fieldLabel")
-        pref_layout.addWidget(self.language_label)
-        pref_layout.addWidget(self.lang_combo)
+        pref_layout.addWidget(self.language_label, 0, 1)
+        pref_layout.addWidget(self.lang_combo, 1, 1)
 
-        self.session_group = QGroupBox("Session & Support")
+        self.session_group = QGroupBox("Session Settings")
         session_layout = QVBoxLayout(self.session_group)
         session_layout.setSpacing(8)
 
         self.auto_logout_check = QCheckBox("Enable auto-logout after inactivity")
         session_layout.addWidget(self.auto_logout_check)
+
+        timeout_grid = QGridLayout()
+        timeout_grid.setHorizontalSpacing(8)
+        timeout_grid.setVerticalSpacing(6)
 
         self.timeout_label = QLabel("Inactivity timeout (minutes):")
         self.timeout_label.setObjectName("fieldLabel")
@@ -469,8 +541,8 @@ class SettingsPage(QWidget):
         self.timeout_spin.setRange(1, 240)
         self.timeout_spin.setValue(15)
         self.timeout_spin.setSuffix(" min")
-        session_layout.addWidget(self.timeout_label)
-        session_layout.addWidget(self.timeout_spin)
+        timeout_grid.addWidget(self.timeout_label, 0, 0)
+        timeout_grid.addWidget(self.timeout_spin, 1, 0)
 
         self.warning_label = QLabel("Inactivity warning countdown (seconds):")
         self.warning_label.setObjectName("fieldLabel")
@@ -478,70 +550,82 @@ class SettingsPage(QWidget):
         self.warning_spin.setRange(10, 300)
         self.warning_spin.setValue(30)
         self.warning_spin.setSuffix(" sec")
-        session_layout.addWidget(self.warning_label)
-        session_layout.addWidget(self.warning_spin)
+        timeout_grid.addWidget(self.warning_label, 0, 1)
+        timeout_grid.addWidget(self.warning_spin, 1, 1)
+        session_layout.addLayout(timeout_grid)
 
         self.timeout_help_label = QLabel("")
         self.timeout_help_label.setObjectName("metaLabel")
         self.timeout_help_label.setWordWrap(True)
         session_layout.addWidget(self.timeout_help_label)
 
+        self.support_group = QGroupBox("Support")
+        support_layout = QGridLayout(self.support_group)
+        support_layout.setHorizontalSpacing(8)
+        support_layout.setVerticalSpacing(6)
+        support_layout.setColumnStretch(0, 1)
+        support_layout.setColumnStretch(1, 1)
+
         self.support_email_label = QLabel("Help Support Email:")
         self.support_email_label.setObjectName("fieldLabel")
         self.support_email_input = QLineEdit()
         self.support_email_input.setPlaceholderText("support@eyeshield.local")
-        session_layout.addWidget(self.support_email_label)
-        session_layout.addWidget(self.support_email_input)
 
         self.support_phone_label = QLabel("Help Support Phone:")
         self.support_phone_label.setObjectName("fieldLabel")
         self.support_phone_input = QLineEdit()
         self.support_phone_input.setPlaceholderText("+1-000-000-0000")
-        session_layout.addWidget(self.support_phone_label)
-        session_layout.addWidget(self.support_phone_input)
 
         self.support_hours_label = QLabel("Help Support Hours:")
         self.support_hours_label.setObjectName("fieldLabel")
         self.support_hours_input = QLineEdit()
         self.support_hours_input.setPlaceholderText("Mon-Fri, 8:00 AM - 6:00 PM")
-        session_layout.addWidget(self.support_hours_label)
-        session_layout.addWidget(self.support_hours_input)
 
-        self.admin_contact_group = QGroupBox("Admin Contact (Login Page)")
-        admin_contact_layout = QVBoxLayout(self.admin_contact_group)
-        admin_contact_layout.setSpacing(8)
+        support_layout.addWidget(self.support_email_label, 0, 0)
+        support_layout.addWidget(self.support_phone_label, 0, 1)
+        support_layout.addWidget(self.support_hours_label, 2, 0, 1, 2)
+        support_layout.addWidget(self.support_email_input, 1, 0)
+        support_layout.addWidget(self.support_phone_input, 1, 1)
+        support_layout.addWidget(self.support_hours_input, 3, 0, 1, 2)
+
+        self.admin_contact_group = QGroupBox("Admin Details")
+        admin_contact_layout = QGridLayout(self.admin_contact_group)
+        admin_contact_layout.setHorizontalSpacing(8)
+        admin_contact_layout.setVerticalSpacing(6)
+        admin_contact_layout.setColumnStretch(0, 1)
+        admin_contact_layout.setColumnStretch(1, 1)
 
         self.admin_contact_name_label = QLabel("Admin Name:")
         self.admin_contact_name_label.setObjectName("fieldLabel")
         self.admin_contact_name_input = QLineEdit()
         self.admin_contact_name_input.setPlaceholderText("Name shown in Contact Admin")
-        admin_contact_layout.addWidget(self.admin_contact_name_label)
-        admin_contact_layout.addWidget(self.admin_contact_name_input)
+        admin_contact_layout.addWidget(self.admin_contact_name_label, 0, 0)
+        admin_contact_layout.addWidget(self.admin_contact_name_input, 1, 0)
 
         self.admin_contact_email_label = QLabel("Admin Email:")
         self.admin_contact_email_label.setObjectName("fieldLabel")
         self.admin_contact_email_input = QLineEdit()
         self.admin_contact_email_input.setPlaceholderText("admin@example.com")
-        admin_contact_layout.addWidget(self.admin_contact_email_label)
-        admin_contact_layout.addWidget(self.admin_contact_email_input)
+        admin_contact_layout.addWidget(self.admin_contact_email_label, 0, 1)
+        admin_contact_layout.addWidget(self.admin_contact_email_input, 1, 1)
 
         self.admin_contact_phone_label = QLabel("Admin Phone:")
         self.admin_contact_phone_label.setObjectName("fieldLabel")
         self.admin_contact_phone_input = QLineEdit()
         self.admin_contact_phone_input.setPlaceholderText("+63 900 000 0000")
-        admin_contact_layout.addWidget(self.admin_contact_phone_label)
-        admin_contact_layout.addWidget(self.admin_contact_phone_input)
+        admin_contact_layout.addWidget(self.admin_contact_phone_label, 2, 0)
+        admin_contact_layout.addWidget(self.admin_contact_phone_input, 3, 0)
 
         self.admin_contact_location_label = QLabel("Admin Location:")
         self.admin_contact_location_label.setObjectName("fieldLabel")
         self.admin_contact_location_input = QLineEdit()
         self.admin_contact_location_input.setPlaceholderText("Office / Department")
-        admin_contact_layout.addWidget(self.admin_contact_location_label)
-        admin_contact_layout.addWidget(self.admin_contact_location_input)
+        admin_contact_layout.addWidget(self.admin_contact_location_label, 2, 1)
+        admin_contact_layout.addWidget(self.admin_contact_location_input, 3, 1)
 
-        self.referral_hospitals_group = QGroupBox("Trusted Referral Hospitals")
+        self.referral_hospitals_group = QGroupBox("Trusted referred hospitals")
         referral_layout = QVBoxLayout(self.referral_hospitals_group)
-        referral_layout.setSpacing(8)
+        referral_layout.setSpacing(6)
 
         self.referral_hospitals_hint = QLabel("Maintain an approved destination list for referral letters and reports.")
         self.referral_hospitals_hint.setObjectName("metaLabel")
@@ -560,55 +644,82 @@ class SettingsPage(QWidget):
         self.referral_hospitals_table.itemSelectionChanged.connect(self._on_referral_hospital_selected)
         self.referral_hospitals_table.setMinimumHeight(180)
         self.referral_hospitals_table.setStyleSheet(
-            "QTableWidget { background-color: #ffffff; border: 1px solid #dee2e6; }"
-            "QTableWidget::item { padding: 4px; border: none; background-color: #ffffff; }"
-            "QTableWidget::item:alternate { background-color: #f8f9fa; }"
-            "QTableWidget::item:selected { background-color: #e7f3ff; color: #1f2937; }"
-            "QHeaderView::section { background-color: #f1f5f9; padding: 6px; font-weight: bold; border: 1px solid #dee2e6; }"
+            "QTableWidget::item { padding: 6px; border: none; background-color: #ffffff; }"
+            "QTableWidget::item:alternate { background-color: #f8fbff; }"
+            "QTableWidget::item:selected { background-color: #e7f0ff; color: #1f2937; }"
         )
         referral_layout.addWidget(self.referral_hospitals_table)
+
+        hospital_form_grid = QGridLayout()
+        hospital_form_grid.setHorizontalSpacing(8)
+        hospital_form_grid.setVerticalSpacing(6)
+        hospital_form_grid.setColumnStretch(0, 1)
+        hospital_form_grid.setColumnStretch(1, 1)
 
         self.hospital_name_label = QLabel("Hospital Name:")
         self.hospital_name_label.setObjectName("fieldLabel")
         self.hospital_name_input = QLineEdit()
         self.hospital_name_input.setPlaceholderText("e.g., St. Mary's Medical Center")
-        referral_layout.addWidget(self.hospital_name_label)
-        referral_layout.addWidget(self.hospital_name_input)
+        hospital_form_grid.addWidget(self.hospital_name_label, 0, 0)
+        hospital_form_grid.addWidget(self.hospital_name_input, 1, 0)
 
         self.hospital_department_label = QLabel("Department:")
         self.hospital_department_label.setObjectName("fieldLabel")
         self.hospital_department_input = QLineEdit()
         self.hospital_department_input.setPlaceholderText("e.g., Ophthalmology Department")
-        referral_layout.addWidget(self.hospital_department_label)
-        referral_layout.addWidget(self.hospital_department_input)
+        hospital_form_grid.addWidget(self.hospital_department_label, 0, 1)
+        hospital_form_grid.addWidget(self.hospital_department_input, 1, 1)
 
         self.hospital_contact_label = QLabel("Contact Person:")
         self.hospital_contact_label.setObjectName("fieldLabel")
         self.hospital_contact_input = QLineEdit()
         self.hospital_contact_input.setPlaceholderText("Name of referral contact")
-        referral_layout.addWidget(self.hospital_contact_label)
-        referral_layout.addWidget(self.hospital_contact_input)
+        hospital_form_grid.addWidget(self.hospital_contact_label, 2, 0)
+        hospital_form_grid.addWidget(self.hospital_contact_input, 3, 0)
 
         self.hospital_phone_label = QLabel("Phone:")
         self.hospital_phone_label.setObjectName("fieldLabel")
         self.hospital_phone_input = QLineEdit()
         self.hospital_phone_input.setPlaceholderText("+63 900 000 0000")
-        referral_layout.addWidget(self.hospital_phone_label)
-        referral_layout.addWidget(self.hospital_phone_input)
+        hospital_form_grid.addWidget(self.hospital_phone_label, 2, 1)
+        hospital_form_grid.addWidget(self.hospital_phone_input, 3, 1)
 
         self.hospital_email_label = QLabel("Email:")
         self.hospital_email_label.setObjectName("fieldLabel")
         self.hospital_email_input = QLineEdit()
         self.hospital_email_input.setPlaceholderText("referrals@hospital.org")
-        referral_layout.addWidget(self.hospital_email_label)
-        referral_layout.addWidget(self.hospital_email_input)
+        hospital_form_grid.addWidget(self.hospital_email_label, 4, 0)
+        hospital_form_grid.addWidget(self.hospital_email_input, 5, 0)
 
         self.hospital_address_label = QLabel("Address:")
         self.hospital_address_label.setObjectName("fieldLabel")
         self.hospital_address_input = QLineEdit()
         self.hospital_address_input.setPlaceholderText("City / complete address")
-        referral_layout.addWidget(self.hospital_address_label)
-        referral_layout.addWidget(self.hospital_address_input)
+        hospital_form_grid.addWidget(self.hospital_address_label, 4, 1)
+        hospital_form_grid.addWidget(self.hospital_address_input, 5, 1)
+        referral_layout.addLayout(hospital_form_grid)
+
+        compact_controls = [
+            self.theme_combo,
+            self.lang_combo,
+            self.timeout_spin,
+            self.warning_spin,
+            self.support_email_input,
+            self.support_phone_input,
+            self.support_hours_input,
+            self.admin_contact_name_input,
+            self.admin_contact_email_input,
+            self.admin_contact_phone_input,
+            self.admin_contact_location_input,
+            self.hospital_name_input,
+            self.hospital_department_input,
+            self.hospital_contact_input,
+            self.hospital_phone_input,
+            self.hospital_email_input,
+            self.hospital_address_input,
+        ]
+        for control in compact_controls:
+            control.setMaximumWidth(440)
 
         flags_row = QHBoxLayout()
         self.hospital_active_check = QCheckBox("Active")
@@ -644,23 +755,28 @@ class SettingsPage(QWidget):
         account_layout = QVBoxLayout(self.account_group)
         account_layout.setSpacing(8)
 
+        account_form_grid = QGridLayout()
+        account_form_grid.setHorizontalSpacing(8)
+        account_form_grid.setVerticalSpacing(6)
+        account_form_grid.setColumnStretch(0, 1)
+        account_form_grid.setColumnStretch(1, 1)
+
         self.display_name_label = QLabel("Display Name:")
         self.display_name_label.setObjectName("fieldLabel")
         self.display_name_input = QLineEdit()
         self.display_name_input.setPlaceholderText("Display name")
-        account_layout.addWidget(self.display_name_label)
-        account_layout.addWidget(self.display_name_input)
+        account_form_grid.addWidget(self.display_name_label, 0, 0)
+        account_form_grid.addWidget(self.display_name_input, 1, 0)
 
         self.dr_prefix_check = QCheckBox("Add Dr.")
-        self.dr_prefix_check.setStyleSheet("margin-top: -2px; margin-bottom: 4px;")
-        account_layout.addWidget(self.dr_prefix_check)
+        account_form_grid.addWidget(self.dr_prefix_check, 2, 0)
 
         self.username_label = QLabel("Username:")
         self.username_label.setObjectName("fieldLabel")
         self.username_input = QLineEdit()
         self.username_input.setPlaceholderText("Username")
-        account_layout.addWidget(self.username_label)
-        account_layout.addWidget(self.username_input)
+        account_form_grid.addWidget(self.username_label, 0, 1)
+        account_form_grid.addWidget(self.username_input, 1, 1)
 
         self.new_password_label = QLabel("New Password (optional):")
         self.new_password_label.setObjectName("fieldLabel")
@@ -668,8 +784,9 @@ class SettingsPage(QWidget):
         self.new_password_input.setPlaceholderText("Leave blank to keep current password")
         self.new_password_input.setEchoMode(QLineEdit.Password)
         _add_eye_toggle(self.new_password_input)
-        account_layout.addWidget(self.new_password_label)
-        account_layout.addWidget(self.new_password_input)
+        account_form_grid.addWidget(self.new_password_label, 3, 0, 1, 2)
+        account_form_grid.addWidget(self.new_password_input, 4, 0, 1, 2)
+        account_layout.addLayout(account_form_grid)
 
         account_btn_row = QHBoxLayout()
         account_btn_row.addStretch(1)
@@ -681,7 +798,7 @@ class SettingsPage(QWidget):
 
         self.schedule_group = QGroupBox("My Schedule")
         schedule_layout = QVBoxLayout(self.schedule_group)
-        schedule_layout.setSpacing(8)
+        schedule_layout.setSpacing(6)
 
         self.schedule_hint_label = QLabel("Set your weekly clinic availability shown on your dashboard.")
         self.schedule_hint_label.setObjectName("metaLabel")
@@ -689,7 +806,7 @@ class SettingsPage(QWidget):
         schedule_layout.addWidget(self.schedule_hint_label)
 
         schedule_time_row = QHBoxLayout()
-        schedule_time_row.setSpacing(8)
+        schedule_time_row.setSpacing(6)
         self.schedule_start_label = QLabel("From:")
         self.schedule_start_label.setObjectName("fieldLabel")
         self.schedule_start_time = QTimeEdit()
@@ -700,6 +817,14 @@ class SettingsPage(QWidget):
         self.schedule_end_time = QTimeEdit()
         self.schedule_end_time.setDisplayFormat("hh:mm AP")
         self.schedule_end_time.setTime(QTime(17, 0))
+        for control in (
+            self.display_name_input,
+            self.username_input,
+            self.new_password_input,
+            self.schedule_start_time,
+            self.schedule_end_time,
+        ):
+            control.setMaximumWidth(460)
         schedule_time_row.addWidget(self.schedule_start_label)
         schedule_time_row.addWidget(self.schedule_start_time)
         schedule_time_row.addSpacing(12)
@@ -712,12 +837,30 @@ class SettingsPage(QWidget):
         self.schedule_days_label.setObjectName("fieldLabel")
         schedule_layout.addWidget(self.schedule_days_label)
 
+        days_grid = QGridLayout()
+        days_grid.setHorizontalSpacing(8)
+        days_grid.setVerticalSpacing(4)
         self.schedule_day_checks = []
         for idx, (day_key, day_label) in enumerate(_WEEKDAY_OPTIONS):
             checkbox = QCheckBox(day_label)
             checkbox.setChecked(idx < 5)
             self.schedule_day_checks.append((day_key, checkbox))
-            schedule_layout.addWidget(checkbox)
+            row = idx // 4
+            col = idx % 4
+            days_grid.addWidget(checkbox, row, col)
+        schedule_layout.addLayout(days_grid)
+
+        for card in (
+            pref_group,
+            self.session_group,
+            self.support_group,
+            self.admin_contact_group,
+            self.account_group,
+            self.schedule_group,
+        ):
+            card.setMaximumWidth(640)
+        for wide_card in (self.referral_hospitals_group,):
+            wide_card.setMaximumWidth(1020)
 
         schedule_btn_row = QHBoxLayout()
         schedule_btn_row.addStretch(1)
@@ -727,13 +870,20 @@ class SettingsPage(QWidget):
         schedule_btn_row.addWidget(self.schedule_save_btn)
         schedule_layout.addLayout(schedule_btn_row)
 
-        layout.addWidget(self.account_group)
-        layout.addWidget(self.schedule_group)
-        layout.addWidget(pref_group)
-        layout.addWidget(self.session_group)
-        layout.addWidget(self.admin_contact_group)
+        top_bento_grid = QGridLayout()
+        top_bento_grid.setHorizontalSpacing(10)
+        top_bento_grid.setVerticalSpacing(10)
+        top_bento_grid.addWidget(pref_group, 0, 0)
+        top_bento_grid.addWidget(self.session_group, 0, 1)
+        top_bento_grid.addWidget(self.support_group, 1, 0)
+        top_bento_grid.addWidget(self.admin_contact_group, 1, 1)
+        top_bento_grid.addWidget(self.account_group, 2, 0)
+        top_bento_grid.addWidget(self.schedule_group, 2, 1)
+        top_bento_grid.setColumnStretch(0, 1)
+        top_bento_grid.setColumnStretch(1, 1)
+        layout.addLayout(top_bento_grid)
 
-        # Global settings actions are shown before referral hospital management.
+        # Global settings actions.
         button_row = QHBoxLayout()
         button_row.addStretch(1)
         self.reset_btn = QPushButton("Reset Defaults")
@@ -746,8 +896,6 @@ class SettingsPage(QWidget):
         button_row.addWidget(self.reset_btn)
         button_row.addWidget(self.save_btn)
         layout.addLayout(button_row)
-
-        layout.addWidget(self.referral_hospitals_group)
 
         self.status_label = QLabel("Ready")
         self.status_label.setObjectName("statusLabel")
@@ -772,9 +920,10 @@ class SettingsPage(QWidget):
         about_layout.addWidget(self.about_version_label)
         about_layout.addWidget(self.about_copyright_label)
         about_layout.addWidget(self.about_contact_label)
-        sections_row = QHBoxLayout()
-        sections_row.setSpacing(10)
-        sections_row.addWidget(about_group, 1)
+        sections_row = QGridLayout()
+        sections_row.setHorizontalSpacing(14)
+        sections_row.setVerticalSpacing(14)
+        sections_row.addWidget(about_group, 0, 0)
 
         # ── Terms of Use ──────────────────────────────────────────────────
         terms_group = QGroupBox("Terms of Use")
@@ -790,7 +939,7 @@ class SettingsPage(QWidget):
         self.terms_label.setWordWrap(True)
         self.terms_label.setStyleSheet("color:#495057; font-size:12px; line-height:1.5;")
         terms_layout.addWidget(self.terms_label)
-        sections_row.addWidget(terms_group, 1)
+        sections_row.addWidget(terms_group, 0, 1)
 
         # ── Privacy Policy ────────────────────────────────────────────────
         privacy_group = QGroupBox("Privacy Policy")
@@ -806,7 +955,9 @@ class SettingsPage(QWidget):
         self.privacy_label.setWordWrap(True)
         self.privacy_label.setStyleSheet("color:#495057; font-size:12px; line-height:1.5;")
         privacy_layout.addWidget(self.privacy_label)
-        sections_row.addWidget(privacy_group, 1)
+        sections_row.addWidget(privacy_group, 1, 0, 1, 2)
+        sections_row.setColumnStretch(0, 1)
+        sections_row.setColumnStretch(1, 1)
         layout.addLayout(sections_row)
 
         self.load_settings()
@@ -817,7 +968,6 @@ class SettingsPage(QWidget):
         self._configure_schedule_section()
         self._configure_session_support_section()
         self._configure_admin_contact_section()
-        self._configure_referral_hospitals_section()
         self._sync_timeout_enabled_state()
 
         self.theme_combo.setFocus()
@@ -871,6 +1021,7 @@ class SettingsPage(QWidget):
         show_session_support = role in {"admin", "clinician", "viewer"}
         is_admin = role == "admin"
         self.session_group.setVisible(show_session_support)
+        self.support_group.setVisible(is_admin)
         if not show_session_support:
             return
 
@@ -1451,7 +1602,6 @@ class SettingsPage(QWidget):
         self._sync_timeout_enabled_state()
         if self._active_role() == "admin":
             self._load_admin_contact_into_fields()
-            self._reload_referral_hospitals()
             self._load_support_contact_into_fields()
         if self._active_role() == "clinician":
             self._load_schedule_fields()

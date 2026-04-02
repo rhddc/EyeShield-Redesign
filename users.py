@@ -9,16 +9,21 @@ import csv
 import os
 from datetime import date, datetime, timedelta, timezone
 
+try:
+    from zoneinfo import ZoneInfo
+except Exception:  # pragma: no cover
+    ZoneInfo = None
+
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QLabel, QTableWidget, QTableWidgetItem,
     QHBoxLayout, QPushButton, QLineEdit, QComboBox, QMessageBox,
     QGroupBox, QFormLayout, QAbstractItemView, QDialog, QApplication,
     QHeaderView, QInputDialog, QMenu, QCheckBox, QTimeEdit,
-    QFileDialog, QDateEdit, QGridLayout,
-    QSizePolicy
+    QFileDialog, QDateEdit, QGridLayout, QCalendarWidget, QSpinBox,
+    QSizePolicy, QFrame
 )
 from PySide6.QtGui import QFont, QAction, QIcon, QColor
-from PySide6.QtCore import Qt, QTime, QDate
+from PySide6.QtCore import Qt, QTime, QDate, QTimer
 import user_store
 
 
@@ -91,6 +96,243 @@ _DIALOG_STYLE = """
     QPushButton#cancelBtn:hover { background: #dee2e6; }
 """
 
+
+class ModernCalendarDateEdit(QDateEdit):
+    """Date picker styled to match screening DOB calendar behavior."""
+
+    def __init__(self, min_date: QDate, max_date: QDate, default_date: QDate | None = None, parent=None):
+        super().__init__(parent)
+        self._min_date = min_date
+        self._max_date = max_date
+
+        self.setDisplayFormat("yyyy-MM-dd")
+        self.setCalendarPopup(True)
+        self.setMinimumDate(min_date)
+        self.setMaximumDate(max_date)
+        self.setDate(default_date or max_date)
+
+        cal = QCalendarWidget(self)
+        cal.setGridVisible(False)
+        cal.setVerticalHeaderFormat(QCalendarWidget.VerticalHeaderFormat.NoVerticalHeader)
+        cal.setMinimumSize(410, 320)
+        cal.currentPageChanged.connect(self._sync_year_dropdown)
+        self.setCalendarWidget(cal)
+
+        self.setStyleSheet(
+            """
+            QDateEdit {
+                background: #ffffff;
+                color: #1f2933;
+                border: 1px solid #ced4da;
+                border-radius: 8px;
+                padding: 4px 28px 4px 10px;
+                min-height: 24px;
+            }
+            QDateEdit:focus {
+                border: 1.5px solid #0d6efd;
+            }
+            QDateEdit::drop-down {
+                subcontrol-origin: padding;
+                subcontrol-position: top right;
+                width: 22px;
+                border-left: 1px solid #dbe2ea;
+                background: #f8f9fa;
+                border-top-right-radius: 8px;
+                border-bottom-right-radius: 8px;
+            }
+            QDateEdit::down-arrow {
+                image: none;
+                border-left: 4px solid transparent;
+                border-right: 4px solid transparent;
+                border-top: 5px solid #495057;
+                width: 0;
+                height: 0;
+                margin-right: 6px;
+            }
+            """
+        )
+
+        cal.setStyleSheet(
+            """
+            QCalendarWidget {
+                background: #ffffff;
+                border: 1px solid #dce5ef;
+                border-radius: 10px;
+            }
+            QCalendarWidget QWidget#qt_calendar_navigationbar {
+                background: #f7f9fc;
+                border-bottom: 1px solid #dce5ef;
+                border-top-left-radius: 10px;
+                border-top-right-radius: 10px;
+                padding: 4px 6px;
+            }
+            QCalendarWidget QToolButton {
+                color: #1f2933;
+                background: transparent;
+                border: none;
+                border-radius: 5px;
+                font-size: 13px;
+                font-weight: 600;
+                padding: 4px 10px;
+            }
+            QCalendarWidget QToolButton:hover {
+                background: #eef3f8;
+            }
+            QCalendarWidget QToolButton::menu-indicator {
+                image: none;
+                border-left: 4px solid transparent;
+                border-right: 4px solid transparent;
+                border-top: 5px solid #6c757d;
+                width: 0;
+                height: 0;
+                right: 5px;
+            }
+            QCalendarWidget QComboBox#qt_calendar_yearcombo {
+                background: #ffffff;
+                color: #1f2933;
+                border: 1px solid #d7dde6;
+                border-radius: 5px;
+                padding: 2px 20px 2px 8px;
+                min-width: 76px;
+            }
+            QCalendarWidget QComboBox#qt_calendar_yearcombo::drop-down {
+                border: none;
+                width: 18px;
+            }
+            QCalendarWidget QComboBox#qt_calendar_yearcombo::down-arrow {
+                image: none;
+                border-left: 4px solid transparent;
+                border-right: 4px solid transparent;
+                border-top: 5px solid #6c757d;
+                width: 0;
+                height: 0;
+                margin-right: 6px;
+            }
+            QCalendarWidget QComboBox#qt_calendar_yearcombo QAbstractItemView {
+                background: #ffffff;
+                color: #1f2933;
+                border: 1px solid #dce5ef;
+                selection-background-color: #dbe5f0;
+                selection-color: #1f2933;
+            }
+            QCalendarWidget QAbstractItemView {
+                background: #ffffff;
+                color: #1f2933;
+                selection-background-color: #dbe5f0;
+                selection-color: #1f2933;
+                outline: none;
+                gridline-color: transparent;
+            }
+            QCalendarWidget QTableView::item {
+                border: none;
+                border-radius: 5px;
+                padding: 3px;
+                margin: 1px;
+            }
+            QCalendarWidget QTableView::item:hover {
+                background: #eef3f8;
+            }
+            QCalendarWidget QTableView::item:selected {
+                background: #dbe5f0;
+                color: #1f2933;
+            }
+            QCalendarWidget QTableView::item:today {
+                background: #eef3f8;
+                color: #1f2933;
+                font-weight: 600;
+            }
+            """
+        )
+
+        QTimer.singleShot(0, self._setup_year_dropdown)
+
+    def _setup_year_dropdown(self):
+        cal = self.calendarWidget()
+        if not cal:
+            return
+
+        nav = cal.findChild(QWidget, "qt_calendar_navigationbar")
+        if not nav:
+            QTimer.singleShot(0, self._setup_year_dropdown)
+            return
+
+        year_spin = nav.findChild(QSpinBox, "qt_calendar_yearedit")
+        if not year_spin:
+            return
+
+        year_combo = nav.findChild(QComboBox, "qt_calendar_yearcombo")
+        if year_combo is None:
+            year_combo = QComboBox(nav)
+            year_combo.setObjectName("qt_calendar_yearcombo")
+            year_combo.setMinimumWidth(92)
+            year_combo.setMaxVisibleItems(12)
+            year_combo.setEditable(False)
+            year_combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+
+            for year in range(self._min_date.year(), self._max_date.year() + 1):
+                year_combo.addItem(str(year), year)
+
+            year_combo.currentIndexChanged.connect(self._on_year_dropdown_changed)
+
+            nav_layout = nav.layout()
+            if nav_layout is not None:
+                idx = nav_layout.indexOf(year_spin)
+                if idx >= 0:
+                    nav_layout.insertWidget(idx, year_combo)
+                else:
+                    nav_layout.addWidget(year_combo)
+
+        year_spin.hide()
+        year_spin.setEnabled(False)
+
+        year_button = nav.findChild(QWidget, "qt_calendar_yearbutton")
+        if year_button is not None:
+            year_button.hide()
+            year_button.setEnabled(False)
+
+        self._sync_year_dropdown()
+
+    def _sync_year_dropdown(self, year: int | None = None, _month: int | None = None):
+        cal = self.calendarWidget()
+        if not cal:
+            return
+
+        if year is None:
+            year = cal.yearShown()
+
+        nav = cal.findChild(QWidget, "qt_calendar_navigationbar")
+        if not nav:
+            return
+
+        year_combo = nav.findChild(QComboBox, "qt_calendar_yearcombo")
+        if not year_combo:
+            return
+
+        idx = year_combo.findData(int(year))
+        if idx >= 0 and year_combo.currentIndex() != idx:
+            prev_state = year_combo.blockSignals(True)
+            year_combo.setCurrentIndex(idx)
+            year_combo.blockSignals(prev_state)
+
+    def _on_year_dropdown_changed(self, index: int):
+        cal = self.calendarWidget()
+        if not cal or index < 0:
+            return
+
+        nav = cal.findChild(QWidget, "qt_calendar_navigationbar")
+        if not nav:
+            return
+
+        year_combo = nav.findChild(QComboBox, "qt_calendar_yearcombo")
+        if not year_combo:
+            return
+
+        year = year_combo.itemData(index)
+        if year is None:
+            return
+
+        cal.setCurrentPage(int(year), cal.monthShown())
+
 # â”€â”€ Page stylesheet â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 _PAGE_STYLE = """
     QWidget#usersPage {
@@ -156,15 +398,15 @@ _PAGE_STYLE = """
         letter-spacing: 0.2px;
     }
     QGroupBox#usrAuditSummary {
-        background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #f6faff, stop:1 #fdfefe);
-        border: 1px solid #d7e5f6;
+        background: #ffffff;
+        border: 1px solid #e9ecef;
         border-radius: 12px;
         padding-top: 12px;
     }
     QGroupBox#usrAuditSummary::title {
-        color: #365272;
+        color: #6b7280;
         font-size: 12px;
-        font-weight: 700;
+        font-weight: 500;
     }
     QGroupBox#usrActivityPanel {
         border-radius: 12px;
@@ -343,6 +585,345 @@ _PAGE_STYLE = """
     }
     QPushButton#usrNotifyClose:hover {
         color: #0a3622;
+    }
+"""
+
+_ACTIVITY_LOG_STYLE = """
+    QWidget#usersPage {
+        background: #ffffff;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    }
+    QWidget#usrActivityContainer {
+        background: #ffffff;
+    }
+    QLabel#usrActivityTitle {
+        color: #1d4ed8;
+        font-size: 20px;
+        font-weight: 500;
+    }
+    QLabel#usrSectionHint {
+        color: #64748b;
+        font-size: 13px;
+        font-weight: 400;
+    }
+    QFrame#usrSummaryCard {
+        background: #ffffff;
+        border: 1px solid #dbeafe;
+        border-radius: 12px;
+    }
+    QFrame#usrSummaryCard QLabel {
+        background: transparent;
+    }
+    QLabel#usrSummaryLabel {
+        color: #6b7280;
+        font-size: 12px;
+        font-weight: 400;
+    }
+    QLabel#usrSummaryValue {
+        color: #1a1a1a;
+        font-size: 22px;
+        font-weight: 500;
+    }
+    QLabel#usrSummaryValuePrimary {
+        color: #2563eb;
+        font-size: 22px;
+        font-weight: 500;
+    }
+    QLabel#usrSummaryValueSmall {
+        color: #1a1a1a;
+        font-size: 15px;
+        font-weight: 500;
+    }
+    QFrame#usrActivityPanel {
+        background: #ffffff;
+        border: 1px solid #dbeafe;
+        border-radius: 12px;
+    }
+    QWidget#usrActivityFilters {
+        background: #ffffff;
+        border: none;
+        border-top-left-radius: 12px;
+        border-top-right-radius: 12px;
+    }
+    QLabel#usrFilterLabel {
+        color: #6b7280;
+        font-size: 12px;
+        font-weight: 400;
+        background: transparent;
+        border: none;
+        padding: 0;
+        margin: 0;
+    }
+    QLineEdit#usrSearchInput {
+        background: #ffffff;
+        border: 1px solid #bfdbfe;
+        border-radius: 8px;
+        min-height: 34px;
+        font-size: 13px;
+        color: #1a1a1a;
+        padding: 0 10px;
+    }
+    QLineEdit#usrSearchInput:focus {
+        border: 1px solid #60a5fa;
+    }
+    QDateEdit#usrDateInput, QComboBox#usrEventFilter {
+        background: #ffffff;
+        border: 1px solid #bfdbfe;
+        border-radius: 8px;
+        min-height: 34px;
+        font-size: 12px;
+        color: #1a1a1a;
+        padding: 0 10px;
+    }
+    QDateEdit#usrDateInput::drop-down,
+    QComboBox#usrEventFilter::drop-down {
+        border: none;
+        background: #ffffff;
+        width: 18px;
+    }
+    QDateEdit#usrDateInput::down-arrow,
+    QComboBox#usrEventFilter::down-arrow {
+        width: 8px;
+        height: 8px;
+    }
+    QPushButton#smallBtn {
+        border-radius: 999px;
+        height: 30px;
+        padding: 0 12px;
+        font-size: 12px;
+        font-weight: 500;
+        background: #ffffff;
+        border: 1px solid #bfdbfe;
+        color: #1d4ed8;
+    }
+    QPushButton#smallBtn:hover {
+        background: #eff6ff;
+    }
+    QPushButton#smallBtn:checked {
+        background: #eff6ff;
+        border: 1px solid #bfdbfe;
+        color: #2563eb;
+    }
+    QPushButton#neutralBtn {
+        background: #ffffff;
+        border: 1px solid #bfdbfe;
+        border-radius: 8px;
+        min-height: 34px;
+        padding: 0 14px;
+        font-size: 12px;
+        font-weight: 500;
+        color: #1a1a1a;
+    }
+    QPushButton#neutralBtn:hover {
+        background: #eff6ff;
+    }
+    QTableWidget#usrActivityTable {
+        background: #ffffff;
+        border: none;
+        gridline-color: transparent;
+        font-size: 13px;
+        alternate-background-color: #ffffff;
+    }
+    QTableWidget#usrActivityTable::item {
+        padding: 11px 16px;
+        border-bottom: 1px solid #f3f4f6;
+    }
+    QTableWidget#usrActivityTable::item:hover {
+        background: #eff6ff;
+    }
+    QHeaderView::section {
+        background: #ffffff;
+        border: none;
+        border-bottom: 1px solid #dbeafe;
+        padding: 10px 16px;
+        color: #1d4ed8;
+        font-size: 12px;
+        font-weight: 700;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        letter-spacing: 0.6px;
+        text-transform: uppercase;
+    }
+    QWidget#usrPaginationRow {
+        border-top: 1px solid #dbeafe;
+        background: #ffffff;
+    }
+    QLabel#usrPaginationText {
+        color: #6b7280;
+        font-size: 12px;
+        font-weight: 400;
+        background: transparent;
+        border: none;
+    }
+    QPushButton#pagerBtn {
+        height: 30px;
+        padding: 0 12px;
+        border: 1px solid #bfdbfe;
+        border-radius: 8px;
+        background: #ffffff;
+        color: #1d4ed8;
+        font-size: 12px;
+        font-weight: 500;
+    }
+    QPushButton#pagerBtn:hover {
+        background: #eff6ff;
+    }
+    QPushButton#pagerBtn:checked {
+        background: #eff6ff;
+        border: 1px solid #bfdbfe;
+        color: #2563eb;
+    }
+    QPushButton#pagerBtn:disabled {
+        color: #d1d5db;
+        border: 1px solid #f3f4f6;
+        background: #ffffff;
+    }
+    QWidget#usrUserCell {
+        background: transparent;
+        border: none;
+    }
+    QLabel#usrAvatarBlue, QLabel#usrAvatarPink {
+        min-width: 28px;
+        max-width: 28px;
+        min-height: 28px;
+        max-height: 28px;
+        border-radius: 14px;
+        font-size: 11px;
+        font-weight: 500;
+        qproperty-alignment: AlignCenter;
+    }
+    QLabel#usrAvatarBlue {
+        background: #eff6ff;
+        color: #2563eb;
+    }
+    QLabel#usrAvatarPink {
+        background: #fdf2f8;
+        color: #9d174d;
+    }
+    QLabel#usrUserName {
+        color: #1a1a1a;
+        font-size: 13px;
+        font-weight: 500;
+        background: transparent;
+        border: none;
+        padding: 0;
+        margin: 0;
+    }
+    QLabel#usrBadgeLogin, QLabel#usrBadgeLogout, QLabel#usrBadgeUpdate {
+        border-radius: 999px;
+        padding: 3px 10px;
+        font-size: 11px;
+        font-weight: 500;
+    }
+    QLabel#usrBadgeLogin {
+        background: #f0fdf4;
+        color: #166534;
+    }
+    QLabel#usrBadgeLogout {
+        background: #fffbeb;
+        color: #92400e;
+    }
+    QLabel#usrBadgeUpdate {
+        background: #eff6ff;
+        color: #1e40af;
+    }
+    QGroupBox#usrUsersPanel {
+        background: #ffffff;
+        border: 1px solid #dbeafe;
+        border-radius: 12px;
+        padding-top: 12px;
+    }
+    QGroupBox#usrUsersPanel::title {
+        color: #1d4ed8;
+        font-size: 12px;
+        font-weight: 700;
+        left: 14px;
+        padding: 0 6px;
+        background: #ffffff;
+    }
+    QTableWidget#usrUsersTable {
+        background: #ffffff;
+        border: none;
+        gridline-color: transparent;
+        font-size: 13px;
+        alternate-background-color: #ffffff;
+    }
+    QTableWidget#usrUsersTable::item {
+        padding: 11px 16px;
+        border-bottom: 1px solid #f3f4f6;
+    }
+    QTableWidget#usrUsersTable::item:hover {
+        background: #eff6ff;
+    }
+    QLabel#usrStatTotal,
+    QLabel#usrStatAdmin,
+    QLabel#usrStatSpecialists,
+    QLabel#usrStatViewer,
+    QPushButton#usrStatTotal,
+    QPushButton#usrStatAdmin,
+    QPushButton#usrStatSpecialists,
+    QPushButton#usrStatViewer {
+        border-radius: 999px;
+        padding: 6px 12px;
+        font-size: 11px;
+        font-weight: 600;
+        border: 1px solid #bfdbfe;
+        background: #ffffff;
+        color: #1d4ed8;
+    }
+    QPushButton#usrStatTotal:checked,
+    QPushButton#usrStatAdmin:checked,
+    QPushButton#usrStatSpecialists:checked,
+    QPushButton#usrStatViewer:checked {
+        background: #eff6ff;
+        color: #2563eb;
+        border-color: #93c5fd;
+    }
+    QPushButton#usrStatTotal:hover,
+    QPushButton#usrStatAdmin:hover,
+    QPushButton#usrStatSpecialists:hover,
+    QPushButton#usrStatViewer:hover {
+        background: #eff6ff;
+    }
+    QPushButton#primaryBtn {
+        background: #1d4ed8;
+        color: #ffffff;
+    }
+    QPushButton#primaryBtn:hover {
+        background: #1e40af;
+    }
+    QPushButton#warningBtn {
+        background: #ffffff;
+        border: 1px solid #bfdbfe;
+        color: #1d4ed8;
+    }
+    QPushButton#warningBtn:hover {
+        background: #eff6ff;
+    }
+    QPushButton#dangerBtn {
+        background: #ffffff;
+        border: 1px solid #fecaca;
+        color: #b91c1c;
+    }
+    QPushButton#dangerBtn:hover {
+        background: #fef2f2;
+    }
+    QWidget#usrNotifyBar {
+        background: #eff6ff;
+        border: 1px solid #bfdbfe;
+        border-radius: 10px;
+    }
+    QLabel#usrNotifyText {
+        color: #1e3a8a;
+    }
+    QPushButton#usrNotifyClose {
+        color: #1d4ed8;
+    }
+    QPushButton#usrNotifyClose:hover {
+        color: #1e3a8a;
+    }
+    QLabel#statusBar {
+        color: #64748b;
+        background: transparent;
     }
 """
 
@@ -946,26 +1527,30 @@ class UsersPage(QWidget):
     def __init__(self):
         super().__init__()
         self.setObjectName("usersPage")
-        self.setStyleSheet(_PAGE_STYLE)
+        self.setStyleSheet(f"{_PAGE_STYLE}\n{_ACTIVITY_LOG_STYLE}")
 
         main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(14, 12, 14, 12)
-        main_layout.setSpacing(10)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
+
+        page_container = QWidget()
+        page_container.setObjectName("usrActivityContainer")
+        page_layout = QVBoxLayout(page_container)
+        page_layout.setContentsMargins(14, 12, 14, 12)
+        page_layout.setSpacing(10)
+        main_layout.addWidget(page_container)
 
         # â”€â”€ Header â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         header_row = QHBoxLayout()
         self._usr_title_lbl = QLabel("User Management")
-        self._usr_title_lbl.setStyleSheet(
-            "font-size:22px;font-weight:700;color:#0d6efd;"
-            "font-family:'Segoe UI','Inter','Arial';"
-        )
+        self._usr_title_lbl.setObjectName("usrActivityTitle")
         self.count_label = QLabel("")
-        self.count_label.setStyleSheet("color:#6c757d;font-size:13px;font-weight:600;margin-left:10px;")
+        self.count_label.setObjectName("usrSectionHint")
         self.count_label.hide()
         header_row.addWidget(self._usr_title_lbl)
         header_row.addWidget(self.count_label)
         header_row.addStretch()
-        main_layout.addLayout(header_row)
+        page_layout.addLayout(header_row)
 
         self.notify_bar = QWidget()
         self.notify_bar.setObjectName("usrNotifyBar")
@@ -980,7 +1565,7 @@ class UsersPage(QWidget):
         self.notify_close_btn.clicked.connect(self.notify_bar.hide)
         notify_layout.addWidget(self.notify_close_btn)
         self.notify_bar.hide()
-        main_layout.addWidget(self.notify_bar)
+        page_layout.addWidget(self.notify_bar)
 
         self.search_input = QLineEdit()
         self.search_input.setObjectName("usrSearchInput")
@@ -1018,6 +1603,7 @@ class UsersPage(QWidget):
 
         # Users table card
         self._usr_table_group = QGroupBox("Users")
+        self._usr_table_group.setObjectName("usrUsersPanel")
         table_vbox = QVBoxLayout(self._usr_table_group)
         table_vbox.setSpacing(6)
 
@@ -1028,8 +1614,10 @@ class UsersPage(QWidget):
         users_hdr.addLayout(users_hdr_col)
         table_vbox.addLayout(users_hdr)
 
-        users_toolbar = QHBoxLayout()
-        users_toolbar.setContentsMargins(2, 0, 2, 4)
+        users_toolbar_host = QWidget()
+        users_toolbar_host.setObjectName("usrActivityFilters")
+        users_toolbar = QHBoxLayout(users_toolbar_host)
+        users_toolbar.setContentsMargins(10, 8, 10, 8)
         users_toolbar.setSpacing(8)
 
         self.search_input.setMinimumWidth(170)
@@ -1049,13 +1637,18 @@ class UsersPage(QWidget):
         self.new_user_btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         users_toolbar.addWidget(self.new_user_btn)
 
-        table_vbox.addLayout(users_toolbar)
+        table_vbox.addWidget(users_toolbar_host)
 
         self.users_table = QTableWidget(0, 7)
         self.users_table.setObjectName("usrUsersTable")
         self.users_table.setHorizontalHeaderLabels([
             "Name", "Username", "Contact", "Availability Time", "Availability Days", "Role", "Status"
         ])
+        self.users_table.horizontalHeader().setDefaultAlignment(Qt.AlignCenter | Qt.AlignVCenter)
+        for col_idx in range(self.users_table.columnCount()):
+            hdr_item = self.users_table.horizontalHeaderItem(col_idx)
+            if hdr_item is not None:
+                hdr_item.setTextAlignment(Qt.AlignCenter | Qt.AlignVCenter)
         self.users_table.setColumnCount(7)
         self.users_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.users_table.setSelectionMode(QAbstractItemView.SingleSelection)
@@ -1077,6 +1670,7 @@ class UsersPage(QWidget):
         self.users_table.horizontalHeader().setSectionResizeMode(6, QHeaderView.ResizeToContents)
         self.users_table.setColumnWidth(1, 140)
         self.users_table.setColumnWidth(3, 165)
+        self.users_table.verticalHeader().setDefaultSectionSize(44)
         self.users_table.setMinimumHeight(200)
         table_vbox.addWidget(self.users_table)
 
@@ -1100,13 +1694,13 @@ class UsersPage(QWidget):
         action_row.addWidget(self.delete_btn)
         table_vbox.addLayout(action_row)
 
-        main_layout.addWidget(self._usr_table_group, 1)
+        page_layout.addWidget(self._usr_table_group, 1)
 
         # Status bar
         self.status_label = QLabel("Ready")
         self.status_label.setObjectName("statusBar")
         self.status_label.setStyleSheet("color:#6c757d;font-size:12px;padding:2px 0;")
-        main_layout.addWidget(self.status_label)
+        self.status_label.hide()
 
         self.refresh_users()
         
@@ -1123,6 +1717,106 @@ class UsersPage(QWidget):
             f"color:{color};font-size:12px;font-weight:600;padding:2px 0;"
         )
         self.status_label.setText(f"{icon}  {message}")
+
+    def _make_summary_card(self, label: str, value: str, value_object: str = "usrSummaryValue"):
+        card = QFrame()
+        card.setObjectName("usrSummaryCard")
+        card_layout = QVBoxLayout(card)
+        card_layout.setContentsMargins(20, 16, 20, 16)
+        card_layout.setSpacing(6)
+
+        label_widget = QLabel(label)
+        label_widget.setObjectName("usrSummaryLabel")
+        value_widget = QLabel(value)
+        value_widget.setObjectName(value_object)
+
+        card_layout.addWidget(label_widget)
+        card_layout.addWidget(value_widget)
+        card_layout.addStretch()
+        return card, value_widget
+
+    def _set_active_preset(self, key: str):
+        for name, btn in self._preset_buttons.items():
+            btn.setChecked(name == key)
+
+    def _go_to_page(self, page: int):
+        if page < 1 or page > self.total_pages:
+            return
+        self.current_page = page
+        self.load_activity_log()
+
+    def _username_initials(self, username: str) -> str:
+        value = str(username or "").strip()
+        if not value:
+            return "--"
+        if len(value) <= 2:
+            return value.upper()
+        letters = [ch for ch in value if ch.isalpha()]
+        if len(letters) >= 2:
+            return f"{letters[0]}{letters[1]}".upper()
+        return value[:2].upper()
+
+    def _avatar_variant(self, username: str) -> str:
+        key = str(username or "").strip().lower()
+        if not key:
+            return "usrAvatarBlue"
+        if key not in self._avatar_palette:
+            self._avatar_palette[key] = "usrAvatarBlue" if len(self._avatar_palette) % 2 == 0 else "usrAvatarPink"
+        return self._avatar_palette[key]
+
+    def _user_cell_widget(self, username: str) -> QWidget:
+        cell = QWidget()
+        cell.setObjectName("usrUserCell")
+        row = QHBoxLayout(cell)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(8)
+
+        avatar = QLabel(self._username_initials(username))
+        avatar.setObjectName(self._avatar_variant(username))
+        name_lbl = QLabel(str(username or "").strip())
+        name_lbl.setObjectName("usrUserName")
+
+        row.addWidget(avatar)
+        row.addWidget(name_lbl)
+        row.addStretch()
+        return cell
+
+    def _event_badge_widget(self, event_type: str) -> QLabel:
+        event = str(event_type or "").strip().upper()
+        label = QLabel("Update")
+        label.setObjectName("usrBadgeUpdate")
+        if event == "LOGIN":
+            label.setText("Login")
+            label.setObjectName("usrBadgeLogin")
+        elif event == "LOGOUT":
+            label.setText("Logout")
+            label.setObjectName("usrBadgeLogout")
+        return label
+
+    def _format_action_for_grid(self, action: str, event_type: str = "", metadata=None) -> str:
+        event = str(event_type or "").strip().upper()
+        if event == "LOGIN":
+            return "Logged into the system"
+        if event == "LOGOUT":
+            return "Logged out of the system"
+        return UsersPage._format_activity_action(action, event_type=event_type, metadata=metadata)
+
+    def _format_timestamp_for_grid(self, raw_timestamp: str) -> str:
+        raw = str(raw_timestamp or "").strip()
+        if not raw:
+            return ""
+        normalized = raw.replace("Z", "+00:00")
+        try:
+            parsed = datetime.fromisoformat(normalized)
+            month_name = parsed.strftime("%B")
+            day_number = parsed.day
+            year_number = parsed.year
+            hour_text = parsed.strftime("%I").lstrip("0") or "0"
+            minute_text = parsed.strftime("%M")
+            meridiem = parsed.strftime("%p").lower()
+            return f"{month_name} {day_number}, {year_number} - {hour_text}:{minute_text} {meridiem}"
+        except ValueError:
+            return raw.replace("T", " - ")
 
     def show_notification(self, message: str):
         self.notify_text.setText(message)
@@ -1338,10 +2032,13 @@ class UsersPage(QWidget):
 
             name_item = QTableWidgetItem(user.get("full_name") or user["username"])
             name_item.setFlags(name_item.flags() & ~Qt.ItemIsEditable)
+            name_item.setTextAlignment(Qt.AlignCenter | Qt.AlignVCenter)
             username_item = QTableWidgetItem(user["username"])
             username_item.setFlags(username_item.flags() & ~Qt.ItemIsEditable)
+            username_item.setTextAlignment(Qt.AlignCenter | Qt.AlignVCenter)
             contact_item = QTableWidgetItem(str(user.get("contact") or ""))
             contact_item.setFlags(contact_item.flags() & ~Qt.ItemIsEditable)
+            contact_item.setTextAlignment(Qt.AlignCenter | Qt.AlignVCenter)
 
             availability_time_text = "Not set"
             availability_days_text = "Not set"
@@ -1389,8 +2086,10 @@ class UsersPage(QWidget):
 
             availability_time_item = QTableWidgetItem(availability_time_text)
             availability_time_item.setFlags(availability_time_item.flags() & ~Qt.ItemIsEditable)
+            availability_time_item.setTextAlignment(Qt.AlignCenter | Qt.AlignVCenter)
             availability_days_item = QTableWidgetItem(availability_days_text)
             availability_days_item.setFlags(availability_days_item.flags() & ~Qt.ItemIsEditable)
+            availability_days_item.setTextAlignment(Qt.AlignCenter | Qt.AlignVCenter)
 
             role = user["role"]
             specialization = str(user.get("specialization") or "").strip()
@@ -1854,6 +2553,15 @@ class UsersPage(QWidget):
         if event_upper == "EXTERNAL_REFERRAL_LETTER_GENERATED":
             referral_id = details.get("referral_id") or "Unknown"
             return f"Generated external referral letter {referral_id}"
+        if event_upper == "TRUSTED_REFERRAL_ADDED":
+            hospital_name = details.get("hospital_name") or "Unknown"
+            return f"Added trusted referral {hospital_name}"
+        if event_upper == "TRUSTED_REFERRAL_UPDATED":
+            hospital_name = details.get("hospital_name") or "Unknown"
+            return f"Updated trusted referral {hospital_name}"
+        if event_upper == "TRUSTED_REFERRAL_DELETED":
+            hospital_name = details.get("hospital_name") or "Unknown"
+            return f"Deleted trusted referral {hospital_name}"
         if lowered.startswith("assigned referral "):
             body = text[len("Assigned referral "):].strip()
             if " to " in body:
@@ -1896,211 +2604,259 @@ class ActivityLogPage(QWidget):
     PAGE_SIZE = 100
     EVENT_FILTERS = [
         ("All Events", ""),
-        ("Security", "LOGIN"),
-        ("Logouts", "LOGOUT"),
-        ("User Management", "CREATE_USER"),
-        ("Activity Exports", "ACTIVITY_LOG_EXPORT_CSV"),
-        ("Report Exports", "REPORT_EXPORT_CSV"),
-        ("Referrals", "REFERRAL_ASSIGNED"),
+        ("Login", "LOGIN"),
+        ("Logout", "LOGOUT"),
+        ("Update", "PROFILE_UPDATED"),
+        ("Screened Patient", "SCREENED_PATIENT"),
+        ("Role Changed", "ROLE_CHANGED"),
+        ("User Status Changed", "USER_STATUS_CHANGED"),
+        ("Report Export", "REPORT_EXPORT_CSV"),
+        ("Referral Assigned", "REFERRAL_ASSIGNED"),
+        ("Referral Status Updated", "REFERRAL_STATUS_UPDATED"),
+        ("Trusted Referral Added", "TRUSTED_REFERRAL_ADDED"),
+        ("Trusted Referral Updated", "TRUSTED_REFERRAL_UPDATED"),
+        ("Trusted Referral Deleted", "TRUSTED_REFERRAL_DELETED"),
     ]
+
+    @staticmethod
+    def _ph_tz():
+        if ZoneInfo is not None:
+            try:
+                return ZoneInfo("Asia/Manila")
+            except Exception:
+                pass
+        return timezone(timedelta(hours=8))
 
     def __init__(self):
         super().__init__()
         self.setObjectName("usersPage")
-        self.setStyleSheet(_PAGE_STYLE)
+        self.setStyleSheet(f"{_PAGE_STYLE}\n{_ACTIVITY_LOG_STYLE}")
         self.current_page = 1
         self.total_events = 0
         self.total_pages = 1
+        self._avatar_palette = {}
+        self._selected_event_filter = ""
 
-        main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(14, 12, 14, 12)
-        main_layout.setSpacing(10)
+        root_layout = QHBoxLayout(self)
+        root_layout.setContentsMargins(0, 0, 0, 0)
+        root_layout.setSpacing(0)
+        root_layout.addStretch(1)
+
+        page_container = QWidget()
+        page_container.setObjectName("usrActivityContainer")
+        page_container.setMaximumWidth(1200)
+        root_layout.addWidget(page_container)
+        root_layout.addStretch(1)
+
+        main_layout = QVBoxLayout(page_container)
+        main_layout.setContentsMargins(32, 32, 32, 32)
+        main_layout.setSpacing(16)
 
         header_row = QHBoxLayout()
-        self._title_lbl = QLabel("Activity Log")
+        self._title_lbl = QLabel("Activity log")
         self._title_lbl.setObjectName("usrActivityTitle")
         header_row.addWidget(self._title_lbl)
         header_row.addStretch()
         main_layout.addLayout(header_row)
 
-        compliance_group = QGroupBox("Audit Summary")
-        compliance_group.setObjectName("usrAuditSummary")
-        compliance_layout = QHBoxLayout(compliance_group)
-        compliance_layout.setContentsMargins(10, 8, 10, 8)
-        compliance_layout.setSpacing(20)
-
-        self._summary_total_lbl = QLabel("Total Events: —")
-        self._summary_total_lbl.setStyleSheet("font-size:11px;color:#495057;")
-
-        self._summary_admin_lbl = QLabel("Admin Actions: —")
-        self._summary_admin_lbl.setStyleSheet("font-size:11px;color:#495057;")
-
-        self._summary_clinical_lbl = QLabel("Clinical Actions: —")
-        self._summary_clinical_lbl.setStyleSheet("font-size:11px;color:#495057;")
-
-        self._summary_last_export_lbl = QLabel("Last Export: Never")
-        self._summary_last_export_lbl.setStyleSheet("font-size:11px;color:#495057;")
-
-        compliance_layout.addWidget(self._summary_total_lbl)
-        compliance_layout.addWidget(self._summary_admin_lbl)
-        compliance_layout.addWidget(self._summary_clinical_lbl)
-        compliance_layout.addWidget(self._summary_last_export_lbl)
-        compliance_layout.addStretch()
-        main_layout.addWidget(compliance_group)
-
-        self._log_group = QGroupBox("Activity Log")
-        self._log_group.setObjectName("usrActivityPanel")
-        log_vbox = QVBoxLayout(self._log_group)
-
-        log_hdr = QVBoxLayout()
-        log_hdr.setContentsMargins(2, 0, 2, 2)
-        log_hdr.setSpacing(6)
-
         self._section_hint = QLabel("Latest admin, account, and clinical audit events")
         self._section_hint.setObjectName("usrSectionHint")
-        log_hdr.addWidget(self._section_hint)
+        main_layout.addWidget(self._section_hint)
 
-        toolbar_wrap = QVBoxLayout()
-        toolbar_wrap.setContentsMargins(0, 0, 0, 0)
-        toolbar_wrap.setSpacing(8)
+        summary_grid = QGridLayout()
+        summary_grid.setHorizontalSpacing(12)
+        summary_grid.setVerticalSpacing(12)
+        for col in range(2):
+            summary_grid.setColumnStretch(col, 1)
+
+        total_card, self._summary_total_lbl = self._make_summary_card("Total events", "261", value_object="usrSummaryValuePrimary")
+        export_card, self._summary_last_export_lbl = self._make_summary_card("Last export", "Never", value_object="usrSummaryValueSmall")
+
+        summary_grid.addWidget(total_card, 0, 0)
+        summary_grid.addWidget(export_card, 0, 1)
+        main_layout.addLayout(summary_grid)
+
+        self._log_group = QFrame()
+        self._log_group.setObjectName("usrActivityPanel")
+        log_vbox = QVBoxLayout(self._log_group)
+        log_vbox.setContentsMargins(0, 0, 0, 0)
+        log_vbox.setSpacing(0)
 
         controls = QWidget()
         controls.setObjectName("usrActivityFilters")
-        controls_row = QGridLayout(controls)
-        controls_row.setContentsMargins(10, 8, 10, 8)
-        controls_row.setHorizontalSpacing(8)
-        controls_row.setVerticalSpacing(6)
+        controls_row = QHBoxLayout(controls)
+        controls_row.setContentsMargins(16, 14, 16, 14)
+        controls_row.setSpacing(10)
 
         self.log_search_input = QLineEdit()
         self.log_search_input.setObjectName("usrSearchInput")
-        self.log_search_input.setPlaceholderText("Search activity log")
-        self.log_search_input.setMinimumWidth(180)
-        self.log_search_input.setMaximumWidth(360)
+        self.log_search_input.setPlaceholderText("Search activity log...")
+        self.log_search_input.setMinimumWidth(160)
         self.log_search_input.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.log_search_input.textChanged.connect(self._reset_and_reload)
+        search_icon = QIcon.fromTheme("edit-find")
+        if search_icon.isNull():
+            search_icon = QIcon(os.path.join(os.path.dirname(__file__), "icons", "activity_log.svg"))
+        self.log_search_input.addAction(search_icon, QLineEdit.ActionPosition.LeadingPosition)
 
-        self.date_from = QDateEdit()
-        self.date_from.setCalendarPopup(True)
-        self.date_from.setDisplayFormat("yyyy-MM-dd")
-        self.date_from.setDate(QDate.currentDate().addDays(-30))
-        self.date_from.setMinimumWidth(118)
-        self.date_from.setMaximumWidth(130)
+        self.date_from = ModernCalendarDateEdit(
+            QDate(2000, 1, 1),
+            QDate.currentDate().addYears(20),
+            QDate.currentDate().addDays(-7),
+            self,
+        )
+        self.date_from.setObjectName("usrDateInput")
+        self.date_from.setMinimumWidth(120)
+        self.date_from.setMaximumWidth(120)
+        self.date_from.setStyleSheet(
+            "QDateEdit#usrDateInput {background:#ffffff;border:1px solid #e9ecef;border-radius:8px;padding:0 10px;color:#1a1a1a;}"
+            "QDateEdit#usrDateInput::drop-down {background:#ffffff;border:none;width:18px;}"
+        )
         self.date_from.dateChanged.connect(self._reset_and_reload)
 
-        self.date_to = QDateEdit()
-        self.date_to.setCalendarPopup(True)
-        self.date_to.setDisplayFormat("yyyy-MM-dd")
-        self.date_to.setDate(QDate.currentDate())
-        self.date_to.setMinimumWidth(118)
-        self.date_to.setMaximumWidth(130)
+        self.date_to = ModernCalendarDateEdit(
+            QDate(2000, 1, 1),
+            QDate.currentDate().addYears(20),
+            QDate.currentDate(),
+            self,
+        )
+        self.date_to.setObjectName("usrDateInput")
+        self.date_to.setMinimumWidth(120)
+        self.date_to.setMaximumWidth(120)
+        self.date_to.setStyleSheet(
+            "QDateEdit#usrDateInput {background:#ffffff;border:1px solid #e9ecef;border-radius:8px;padding:0 10px;color:#1a1a1a;}"
+            "QDateEdit#usrDateInput::drop-down {background:#ffffff;border:none;width:18px;}"
+        )
         self.date_to.dateChanged.connect(self._reset_and_reload)
 
         self.event_type_filter = QComboBox()
-        self.event_type_filter.setMinimumWidth(140)
-        self.event_type_filter.setMaximumWidth(180)
+        self.event_type_filter.setObjectName("usrEventFilter")
+        self.event_type_filter.setMinimumWidth(120)
+        self.event_type_filter.setMaximumWidth(140)
         for label, value in self.EVENT_FILTERS:
             self.event_type_filter.addItem(label, value)
-        self.event_type_filter.currentIndexChanged.connect(self._reset_and_reload)
+        self.event_type_filter.currentTextChanged.connect(self._on_event_filter_changed)
 
         preset_today_btn = QPushButton("Today")
         preset_today_btn.setObjectName("smallBtn")
-        preset_today_btn.setMinimumWidth(72)
+        preset_today_btn.setCheckable(True)
         preset_today_btn.clicked.connect(self._set_preset_today)
 
         preset_7d_btn = QPushButton("7 Days")
         preset_7d_btn.setObjectName("smallBtn")
-        preset_7d_btn.setMinimumWidth(72)
+        preset_7d_btn.setCheckable(True)
         preset_7d_btn.clicked.connect(self._set_preset_7d)
 
         preset_30d_btn = QPushButton("30 Days")
         preset_30d_btn.setObjectName("smallBtn")
-        preset_30d_btn.setMinimumWidth(72)
+        preset_30d_btn.setCheckable(True)
         preset_30d_btn.clicked.connect(self._set_preset_30d)
-
-        clear_filters_btn = QPushButton("Clear")
-        clear_filters_btn.setObjectName("smallBtn")
-        clear_filters_btn.setMinimumWidth(72)
-        clear_filters_btn.clicked.connect(self._clear_filters)
-
-        self.events_chip = QLabel("Events 0")
-        self.events_chip.setObjectName("usrStatTotal")
+        self._preset_buttons = {
+            "today": preset_today_btn,
+            "7d": preset_7d_btn,
+            "30d": preset_30d_btn,
+        }
 
         self.export_activity_btn = QPushButton("Export CSV")
         self.export_activity_btn.setObjectName("neutralBtn")
         self.export_activity_btn.clicked.connect(self.export_activity_log_csv)
+        self.export_activity_btn.setIcon(QIcon(os.path.join(os.path.dirname(__file__), "icons", "export.svg")))
 
-        self.prev_page_btn = QPushButton("Prev")
+        self.prev_page_btn = QPushButton("<- Prev")
         self.prev_page_btn.setObjectName("pagerBtn")
         self.prev_page_btn.clicked.connect(self._go_prev_page)
 
-        self.next_page_btn = QPushButton("Next")
+        self.next_page_btn = QPushButton("Next ->")
         self.next_page_btn.setObjectName("pagerBtn")
         self.next_page_btn.clicked.connect(self._go_next_page)
 
-        self.page_chip = QLabel("Page 1/1")
-        self.page_chip.setObjectName("usrActivityMeta")
+        self.page_btn_1 = QPushButton("1")
+        self.page_btn_1.setObjectName("pagerBtn")
+        self.page_btn_1.setCheckable(True)
+        self.page_btn_1.clicked.connect(lambda: self._go_to_page(1))
 
-        controls_row.addWidget(self.log_search_input, 0, 0, 1, 4)
+        self.page_btn_2 = QPushButton("2")
+        self.page_btn_2.setObjectName("pagerBtn")
+        self.page_btn_2.setCheckable(True)
+        self.page_btn_2.clicked.connect(lambda: self._go_to_page(2))
+
+        self.page_btn_3 = QPushButton("3")
+        self.page_btn_3.setObjectName("pagerBtn")
+        self.page_btn_3.setCheckable(True)
+        self.page_btn_3.clicked.connect(lambda: self._go_to_page(3))
+
+        self._page_buttons = [self.page_btn_1, self.page_btn_2, self.page_btn_3]
+
+        controls_row.addWidget(self.log_search_input)
         from_lbl = QLabel("From")
         from_lbl.setObjectName("usrFilterLabel")
-        controls_row.addWidget(from_lbl, 0, 4)
-        controls_row.addWidget(self.date_from, 0, 5)
+        controls_row.addWidget(from_lbl)
+        controls_row.addWidget(self.date_from)
         to_lbl = QLabel("To")
         to_lbl.setObjectName("usrFilterLabel")
-        controls_row.addWidget(to_lbl, 0, 6)
-        controls_row.addWidget(self.date_to, 0, 7)
-        event_lbl = QLabel("Event")
-        event_lbl.setObjectName("usrFilterLabel")
-        controls_row.addWidget(event_lbl, 0, 8)
-        controls_row.addWidget(self.event_type_filter, 0, 9)
-        controls_row.addWidget(preset_today_btn, 1, 0)
-        controls_row.addWidget(preset_7d_btn, 1, 1)
-        controls_row.addWidget(preset_30d_btn, 1, 2)
-        controls_row.addWidget(clear_filters_btn, 1, 3)
-        controls_row.setColumnStretch(10, 1)
-
-        controls_meta = QWidget()
-        controls_meta_row = QHBoxLayout(controls_meta)
-        controls_meta_row.setContentsMargins(0, 0, 0, 0)
-        controls_meta_row.setSpacing(8)
-        controls_meta_row.addStretch()
-        controls_meta_row.addWidget(self.events_chip)
-        controls_meta_row.addWidget(self.page_chip)
-        controls_meta_row.addWidget(self.prev_page_btn)
-        controls_meta_row.addWidget(self.next_page_btn)
-        controls_meta_row.addWidget(self.export_activity_btn)
-
-        toolbar_wrap.addWidget(controls)
-        toolbar_wrap.addWidget(controls_meta)
-        log_hdr.addLayout(toolbar_wrap)
-        log_vbox.addLayout(log_hdr)
+        controls_row.addWidget(to_lbl)
+        controls_row.addWidget(self.date_to)
+        controls_row.addWidget(self.event_type_filter)
+        controls_row.addWidget(preset_today_btn)
+        controls_row.addWidget(preset_7d_btn)
+        controls_row.addWidget(preset_30d_btn)
+        controls_row.addWidget(self.export_activity_btn)
+        log_vbox.addWidget(controls)
 
         self.activity_log = QTableWidget(0, 4)
         self.activity_log.setObjectName("usrActivityTable")
-        self.activity_log.setHorizontalHeaderLabels(["Username", "Action", "Event Type", "Date-Time"])
+        self.activity_log.setHorizontalHeaderLabels(["User", "Action", "Event Type", "Date & Time"])
+        action_header_item = self.activity_log.horizontalHeaderItem(1)
+        if action_header_item is not None:
+            action_header_item.setTextAlignment(Qt.AlignCenter | Qt.AlignVCenter)
+        header_item = self.activity_log.horizontalHeaderItem(3)
+        if header_item is not None:
+            header_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
         self.activity_log.setSelectionMode(QAbstractItemView.NoSelection)
         self.activity_log.setEditTriggers(QTableWidget.NoEditTriggers)
         self.activity_log.verticalHeader().setVisible(False)
         self.activity_log.setShowGrid(False)
-        self.activity_log.setAlternatingRowColors(True)
+        self.activity_log.setAlternatingRowColors(False)
         self.activity_log.horizontalHeader().setStretchLastSection(False)
-        self.activity_log.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        self.activity_log.horizontalHeader().setSectionResizeMode(0, QHeaderView.Fixed)
         self.activity_log.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
-        self.activity_log.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
-        self.activity_log.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        self.activity_log.horizontalHeader().setSectionResizeMode(2, QHeaderView.Fixed)
+        self.activity_log.horizontalHeader().setSectionResizeMode(3, QHeaderView.Fixed)
         self.activity_log.horizontalHeader().setMinimumSectionSize(90)
+        self.activity_log.setColumnWidth(0, 220)
+        self.activity_log.setColumnWidth(2, 120)
+        self.activity_log.setColumnWidth(3, 180)
         self.activity_log.setWordWrap(True)
         self.activity_log.setMinimumHeight(200)
-        self.activity_log.setSortingEnabled(True)
+        self.activity_log.setSortingEnabled(False)
         log_vbox.addWidget(self.activity_log)
+
+        pagination_row = QWidget()
+        pagination_row.setObjectName("usrPaginationRow")
+        pagination_layout = QHBoxLayout(pagination_row)
+        pagination_layout.setContentsMargins(16, 12, 16, 12)
+        pagination_layout.setSpacing(8)
+
+        self.pagination_meta_lbl = QLabel("0 events · Page 1 of 1")
+        self.pagination_meta_lbl.setObjectName("usrPaginationText")
+        pagination_layout.addWidget(self.pagination_meta_lbl)
+        pagination_layout.addStretch()
+        pagination_layout.addWidget(self.prev_page_btn)
+        pagination_layout.addWidget(self.page_btn_1)
+        pagination_layout.addWidget(self.page_btn_2)
+        pagination_layout.addWidget(self.page_btn_3)
+        pagination_layout.addWidget(self.next_page_btn)
+        log_vbox.addWidget(pagination_row)
 
         main_layout.addWidget(self._log_group, 1)
 
         self.status_label = QLabel("Ready")
         self.status_label.setObjectName("statusBar")
-        self.status_label.setStyleSheet("color:#6c757d;font-size:12px;padding:2px 0;")
-        main_layout.addWidget(self.status_label)
+        self.status_label.setStyleSheet("color:#6b7280;font-size:12px;padding:2px 0;")
+        self.status_label.hide()
 
+        self._selected_event_filter = self._resolve_event_filter_value(self.event_type_filter.currentText())
+        self._set_active_preset("7d")
         self.load_activity_log()
 
     def _actor_context(self):
@@ -2130,6 +2886,126 @@ class ActivityLogPage(QWidget):
         )
         self.status_label.setText(f"{icon}  {message}")
 
+    def _resolve_event_filter_value(self, label: str) -> str:
+        del label
+        return str(self.event_type_filter.currentData() or "").strip().upper()
+
+    def _on_event_filter_changed(self, *_args):
+        self._selected_event_filter = self._resolve_event_filter_value(self.event_type_filter.currentText())
+        self._reset_and_reload()
+
+    def _make_summary_card(self, label: str, value: str, value_object: str = "usrSummaryValue"):
+        card = QFrame()
+        card.setObjectName("usrSummaryCard")
+        card_layout = QVBoxLayout(card)
+        card_layout.setContentsMargins(20, 16, 20, 16)
+        card_layout.setSpacing(6)
+
+        label_widget = QLabel(label)
+        label_widget.setObjectName("usrSummaryLabel")
+        value_widget = QLabel(value)
+        value_widget.setObjectName(value_object)
+
+        card_layout.addWidget(label_widget)
+        card_layout.addWidget(value_widget)
+        card_layout.addStretch()
+        return card, value_widget
+
+    def _set_active_preset(self, key: str):
+        for name, btn in self._preset_buttons.items():
+            btn.setChecked(name == key)
+
+    def _go_to_page(self, page: int):
+        if page < 1 or page > self.total_pages:
+            return
+        self.current_page = page
+        self.load_activity_log()
+
+    def _username_initials(self, username: str) -> str:
+        value = str(username or "").strip()
+        if not value:
+            return "--"
+        if len(value) <= 2:
+            return value.upper()
+        letters = [ch for ch in value if ch.isalpha()]
+        if len(letters) >= 2:
+            return f"{letters[0]}{letters[1]}".upper()
+        return value[:2].upper()
+
+    def _avatar_variant(self, username: str) -> str:
+        key = str(username or "").strip().lower()
+        if not key:
+            return "usrAvatarBlue"
+        if key not in self._avatar_palette:
+            self._avatar_palette[key] = "usrAvatarBlue" if len(self._avatar_palette) % 2 == 0 else "usrAvatarPink"
+        return self._avatar_palette[key]
+
+    def _user_cell_widget(self, username: str) -> QWidget:
+        cell = QWidget()
+        cell.setObjectName("usrUserCell")
+        row = QHBoxLayout(cell)
+        row.setContentsMargins(6, 0, 6, 0)
+        row.setSpacing(8)
+
+        username_text = str(username or "").strip()
+        avatar = QLabel(self._username_initials(username_text))
+        avatar.setObjectName(self._avatar_variant(username))
+        avatar.setAlignment(Qt.AlignCenter)
+
+        name_lbl = QLabel()
+        name_lbl.setObjectName("usrUserName")
+        name_lbl.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        name_lbl.setToolTip(username_text)
+
+        available = max(40, self.activity_log.columnWidth(0) - 28 - 8 - 20)
+        elided = name_lbl.fontMetrics().elidedText(username_text, Qt.TextElideMode.ElideRight, available)
+        name_lbl.setText(elided)
+
+        row.addWidget(avatar)
+        row.addWidget(name_lbl)
+        row.addStretch()
+        return cell
+
+    def _event_badge_widget(self, event_type: str) -> QLabel:
+        event = str(event_type or "").strip().upper()
+        label = QLabel("Update")
+        label.setObjectName("usrBadgeUpdate")
+        if event == "LOGIN":
+            label.setText("Login")
+            label.setObjectName("usrBadgeLogin")
+        elif event == "LOGOUT":
+            label.setText("Logout")
+            label.setObjectName("usrBadgeLogout")
+        return label
+
+    def _format_action_for_grid(self, action: str, event_type: str = "", metadata=None) -> str:
+        event = str(event_type or "").strip().upper()
+        if event == "LOGIN":
+            return "Logged into the system"
+        if event == "LOGOUT":
+            return "Logged out of the system"
+        return UsersPage._format_activity_action(action, event_type=event_type, metadata=metadata)
+
+    def _format_timestamp_for_grid(self, raw_timestamp: str) -> str:
+        raw = str(raw_timestamp or "").strip()
+        if not raw:
+            return ""
+        normalized = raw.replace("Z", "+00:00")
+        try:
+            parsed = datetime.fromisoformat(normalized)
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            parsed = parsed.astimezone(self._ph_tz())
+            month_name = parsed.strftime("%B")
+            day_number = parsed.day
+            year_number = parsed.year
+            hour_text = parsed.strftime("%I").lstrip("0") or "0"
+            minute_text = parsed.strftime("%M")
+            meridiem = parsed.strftime("%p").lower()
+            return f"{month_name} {day_number}, {year_number} - {hour_text}:{minute_text} {meridiem}"
+        except ValueError:
+            return raw.replace("T", " - ")
+
     def _current_filters(self):
         search_text = self.log_search_input.text().strip()
         start_date = self.date_from.date()
@@ -2140,7 +3016,7 @@ class ActivityLogPage(QWidget):
             "query": search_text,
             "from_time": start_date.toString("yyyy-MM-dd"),
             "to_time": end_date.toString("yyyy-MM-dd"),
-            "event_type": str(self.event_type_filter.currentData() or "").strip().upper(),
+            "event_type": str(self._selected_event_filter or "").strip().upper(),
         }
 
     def _clear_filters(self):
@@ -2148,6 +3024,7 @@ class ActivityLogPage(QWidget):
         self.date_from.setDate(QDate.currentDate().addDays(-30))
         self.date_to.setDate(QDate.currentDate())
         self.event_type_filter.setCurrentIndex(0)
+        self._set_active_preset("30d")
         self._reset_and_reload()
 
     def _reset_and_reload(self):
@@ -2170,6 +3047,7 @@ class ActivityLogPage(QWidget):
         self.event_type_filter.setCurrentIndex(0)
         self.date_from.setDate(today)
         self.date_to.setDate(today)
+        self._set_active_preset("today")
         self._reset_and_reload()
 
     def _set_preset_7d(self):
@@ -2178,6 +3056,7 @@ class ActivityLogPage(QWidget):
         self.event_type_filter.setCurrentIndex(0)
         self.date_from.setDate(today.addDays(-7))
         self.date_to.setDate(today)
+        self._set_active_preset("7d")
         self._reset_and_reload()
 
     def _set_preset_30d(self):
@@ -2186,6 +3065,7 @@ class ActivityLogPage(QWidget):
         self.event_type_filter.setCurrentIndex(0)
         self.date_from.setDate(today.addDays(-30))
         self.date_to.setDate(today)
+        self._set_active_preset("30d")
         self._reset_and_reload()
 
     def load_activity_log(self):
@@ -2220,10 +3100,13 @@ class ActivityLogPage(QWidget):
             )
             self.total_events = total
 
-        self.events_chip.setText(f"Events {self.total_events}")
-        self.page_chip.setText(f"Page {self.current_page}/{self.total_pages}")
+        self.pagination_meta_lbl.setText(f"{self.total_events} events · Page {self.current_page} of {self.total_pages}")
         self.prev_page_btn.setEnabled(self.current_page > 1)
         self.next_page_btn.setEnabled(self.current_page < self.total_pages)
+        for idx, page_btn in enumerate(self._page_buttons, start=1):
+            page_btn.setEnabled(idx <= self.total_pages)
+            page_btn.setVisible(idx <= max(3, self.total_pages))
+            page_btn.setChecked(idx == self.current_page)
 
         self.activity_log.setSortingEnabled(False)
         self.activity_log.setRowCount(0)
@@ -2232,37 +3115,44 @@ class ActivityLogPage(QWidget):
             self.activity_log.insertRow(row)
 
             username = str(entry.get("username") or "").strip()
-            action = UsersPage._format_activity_action(
+            action = self._format_action_for_grid(
                 entry.get("action"),
                 event_type=entry.get("event_type"),
                 metadata=entry.get("metadata"),
             )
             event_type = str(entry.get("event_type") or "LEGACY").strip().upper() or "LEGACY"
-            timestamp = str(entry.get("time") or "").strip()
+            timestamp = self._format_timestamp_for_grid(str(entry.get("time") or "").strip())
 
-            username_item = QTableWidgetItem(username)
             action_item = QTableWidgetItem(action)
-            event_item = QTableWidgetItem(event_type)
             time_item = QTableWidgetItem(timestamp)
-            username_item.setFlags(username_item.flags() & ~Qt.ItemIsEditable)
+
+            username_item = QTableWidgetItem("")
             action_item.setFlags(action_item.flags() & ~Qt.ItemIsEditable)
-            event_item.setFlags(event_item.flags() & ~Qt.ItemIsEditable)
             time_item.setFlags(time_item.flags() & ~Qt.ItemIsEditable)
+            username_item.setFlags(username_item.flags() & ~Qt.ItemIsEditable)
+            username_item.setToolTip(username)
+            action_item.setTextAlignment(Qt.AlignCenter | Qt.AlignVCenter)
+            time_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
 
             self.activity_log.setItem(row, 0, username_item)
             self.activity_log.setItem(row, 1, action_item)
-            self.activity_log.setItem(row, 2, event_item)
+            self.activity_log.setItem(row, 2, QTableWidgetItem(event_type))
             self.activity_log.setItem(row, 3, time_item)
+            self.activity_log.setCellWidget(row, 0, self._user_cell_widget(username))
+            self.activity_log.setCellWidget(row, 2, self._event_badge_widget(event_type))
+
+            action_item.setForeground(QColor("#6b7280"))
+            time_item.setForeground(QColor("#9ca3af"))
 
         if not entries:
             self.activity_log.setRowCount(1)
             empty_item = QTableWidgetItem("No audit events found for the selected filters.")
             empty_item.setFlags(empty_item.flags() & ~Qt.ItemIsEditable)
+            empty_item.setForeground(QColor("#6b7280"))
             self.activity_log.setItem(0, 0, empty_item)
             self.activity_log.setSpan(0, 0, 1, 4)
 
-        self.activity_log.setSortingEnabled(True)
-        self.activity_log.sortItems(3, Qt.DescendingOrder)
+        self.activity_log.setSortingEnabled(False)
         self.activity_log.resizeRowsToContents()
 
         self._update_compliance_summary(entries)
@@ -2270,55 +3160,23 @@ class ActivityLogPage(QWidget):
     def _update_compliance_summary(self, entries):
         """Update the audit compliance summary card with stats from the current view."""
         if not entries:
-            self._summary_total_lbl.setText("Total Events: 0")
-            self._summary_admin_lbl.setText("Admin Actions: 0")
-            self._summary_clinical_lbl.setText("Clinical Actions: 0")
-            self._summary_last_export_lbl.setText("Last Export: Never")
+            self._summary_total_lbl.setText("0")
+            self._summary_last_export_lbl.setText("Never")
             return
 
-        admin_count = 0
-        clinical_count = 0
         last_export_time = None
 
         for entry in entries:
             event_type = str(entry.get("event_type") or "").strip().upper()
-            username = str(entry.get("username") or "").strip()
-
-            if event_type in [
-                "CREATE_USER",
-                "UPDATE_USER_ROLE",
-                "DELETE_USER",
-                "RESET_PASSWORD",
-                "UPDATE_USER_ACTIVE_STATUS",
-                "UPDATE_USER_AVAILABILITY",
-                "ACTIVITY_LOG_EXPORT_CSV",
-            ]:
-                admin_count += 1
-            elif event_type in [
-                "SCREENED_PATIENT",
-                "RECORD_OPENED",
-                "RECORD_ARCHIVED",
-                "RECORD_RESTORED",
-                "REPORT_PDF_GENERATED",
-                "REPORT_EXPORT_CSV",
-                "REFERRAL_ASSIGNED",
-                "REFERRAL_REASSIGNED",
-                "REFERRAL_STATUS_UPDATED",
-                "REFERRAL_NOTE_UPDATED",
-                "EXTERNAL_REFERRAL_LETTER_GENERATED",
-            ]:
-                clinical_count += 1
 
             if event_type == "ACTIVITY_LOG_EXPORT_CSV" and last_export_time is None:
                 last_export_time = str(entry.get("time") or "").strip()
 
-        self._summary_total_lbl.setText(f"Total Events: {self.total_events}")
-        self._summary_admin_lbl.setText(f"Admin Actions: {admin_count}")
-        self._summary_clinical_lbl.setText(f"Clinical Actions: {clinical_count}")
+        self._summary_total_lbl.setText(str(self.total_events))
         if last_export_time:
-            self._summary_last_export_lbl.setText(f"Last Export: {last_export_time}")
+            self._summary_last_export_lbl.setText(self._format_timestamp_for_grid(last_export_time))
         else:
-            self._summary_last_export_lbl.setText("Last Export: Never")
+            self._summary_last_export_lbl.setText("Never")
 
     def export_activity_log_csv(self):
         current_username, current_role = self._actor_context()
