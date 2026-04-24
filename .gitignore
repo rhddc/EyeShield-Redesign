@@ -6,3 +6,14 @@ __pycache__/
 *.pyc
 *.pyo
 .aider*
+
+# Local data / artifacts
+app/stored_images/
+app/uploads/
+data/backups/
+data/**/*.db
+
+# Allow committing the seed user database
+!users.db
+!app/users.db
+!data/users.db

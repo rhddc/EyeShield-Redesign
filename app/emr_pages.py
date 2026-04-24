@@ -1146,6 +1146,12 @@ class EmrVisitsPage(QWidget):
         controls_layout.addLayout(top_row)
 
         row = QHBoxLayout()
+        self.btn_new_patient_visit = QPushButton("➕  New Patient / Visit")
+        self.btn_new_patient_visit.setObjectName("queuePrimary")
+        self.btn_new_patient_visit.setCursor(Qt.PointingHandCursor)
+        self.btn_new_patient_visit.clicked.connect(self._go_to_new_patient_intake)
+        self.btn_new_patient_visit.setVisible(self._is_front())
+        row.addWidget(self.btn_new_patient_visit)
         b_refresh = QPushButton("Refresh")
         b_refresh.setObjectName("queueNeutral")
         b_refresh.clicked.connect(self.refresh)
@@ -1962,3 +1968,23 @@ class EmrVisitsPage(QWidget):
     def showEvent(self, event):  # noqa: N802
         super().showEvent(event)
         self.refresh()
+
+    def _go_to_new_patient_intake(self) -> None:
+        """Frontdesk shortcut: jump to Assessment intake without changing flow."""
+        app = getattr(self, "_app", None)
+        if not app:
+            return
+        # Prefer existing navigation method (keeps sidebar state consistent).
+        if hasattr(app, "_navigate_to"):
+            try:
+                app._navigate_to(1, nav_key="Screening")
+            except TypeError:
+                app._navigate_to(1)
+        elif hasattr(app, "pages"):
+            app.pages.setCurrentIndex(1)
+        sp = getattr(app, "screening_page", None)
+        if sp is not None and hasattr(sp, "reset_screening"):
+            try:
+                sp.reset_screening(confirm_unsaved=False)
+            except TypeError:
+                sp.reset_screening()

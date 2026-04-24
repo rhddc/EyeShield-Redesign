@@ -270,16 +270,47 @@ class ScreeningComparisonDialog(QDialog):
         return ""
 
     def _build_eye_map(self, record: dict) -> dict[str, dict]:
-        """Map: {'od': eye_detail, 'os': eye_detail}. Falls back to record itself."""
+        """Map: {'od': eye_detail, 'os': eye_detail}.
+
+        Important: some patients are screened on a single eye, but upstream data may still
+        contain an `eye_details` placeholder for the other side. We only consider a side
+        "available" if the detail looks like a real screening payload (image/result/etc.).
+        """
         eye_details = list((record or {}).get("eye_details") or [])
         out: dict[str, dict] = {}
         for d in eye_details:
             if not isinstance(d, dict):
                 continue
+            if not self._has_real_eye_payload(d):
+                continue
             side = self._guess_side(d)
             if side and side not in out:
                 out[side] = d
         return out
+
+    @staticmethod
+    def _has_real_eye_payload(detail: dict) -> bool:
+        """Heuristic: returns True when the eye detail is not just a placeholder."""
+        if not isinstance(detail, dict) or not detail:
+            return False
+
+        # Media paths are the strongest indicator.
+        for k in ("source_image_path", "heatmap_image_path", "image_path", "fundus_image_path"):
+            if str(detail.get(k) or "").strip():
+                return True
+
+        # Otherwise accept any meaningful model/diagnosis content.
+        for k in (
+            "final_diagnosis_icdr",
+            "doctor_classification",
+            "ai_classification",
+            "result",
+            "confidence",
+        ):
+            if str(detail.get(k) or "").strip():
+                return True
+
+        return False
 
     @staticmethod
     def _trend_label(prev_sev: str, latest_sev: str) -> tuple[str, str]:

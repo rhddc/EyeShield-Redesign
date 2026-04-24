@@ -1611,8 +1611,13 @@ class EyeShieldApp(QMainWindow):
             b.clicked.connect(slot)
             return b
 
-        qa_v.addWidget(_primary_btn("➕  New Screening",
-                                    lambda: self._navigate_to(1, nav_key="Screening")))
+        role_l = str(getattr(self, "role", "") or "").strip().lower()
+        if role_l in {"frontdesk"}:
+            qa_v.addWidget(_primary_btn("➕  New Patient / Visit",
+                                        lambda: self._navigate_to(1, nav_key="Screening")))
+        else:
+            qa_v.addWidget(_primary_btn("➕  New Screening",
+                                        lambda: self._navigate_to(1, nav_key="Screening")))
         qa_v.addWidget(_ghost_btn("📊  View Reports",
                                    lambda: self._navigate_to(3, nav_key="Reports")))
         sb_v.addWidget(qa_card)
