@@ -1,0 +1,21 @@
+"""
+EyeShield EMR - Segmented module structure
+"""
+
+try:
+    from .login import LoginWindow
+    from .dashboard import EyeShieldApp
+    from .screening import ScreeningPage
+    from .reports import ReportsPage
+except ImportError:
+    from login import LoginWindow
+    from dashboard import EyeShieldApp
+    from screening import ScreeningPage
+    from reports import ReportsPage
+
+__all__ = [
+    'LoginWindow',
+    'EyeShieldApp',
+    'ScreeningPage',
+    'ReportsPage'
+]

@@ -1,16 +1,3 @@
-from pathlib import Path
-import sys
-
-
-APP_DIR = Path(__file__).resolve().parent / "app"
-if str(APP_DIR) not in sys.path:
-    sys.path.insert(0, str(APP_DIR))
-
-from app.main import main
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
 """
 Main entry point for EyeShield EMR with segmented modules.
 Run this file to start the application with the segmented code structure.
@@ -21,23 +8,33 @@ import sys
 import traceback
 from pathlib import Path
 
-# Add parent directory to path to import auth module when running from project root
-sys.path.insert(0, str(Path(__file__).parent.parent))
+APP_DIR = Path(__file__).resolve().parent
+if str(APP_DIR) not in sys.path:
+    sys.path.insert(0, str(APP_DIR))
 
 
 from PySide6.QtWidgets import QApplication, QMessageBox
 from PySide6.QtGui import QIcon, QPixmap, QImage, QPainter, QFont, QFontDatabase
 from PySide6.QtSvg import QSvgRenderer
-from auth import UserManager
-from login import LoginWindow
-from safety_runtime import get_results_dir, write_activity, write_crash_log
+try:
+    from .auth import UserManager
+    from .login import LoginWindow
+    from .app_paths import ICONS_DIR, ensure_repo_dirs
+    from .db import ensure_patient_records_db
+    from .safety_runtime import get_results_dir, write_activity, write_crash_log
+except ImportError:
+    from auth import UserManager
+    from login import LoginWindow
+    from app_paths import ICONS_DIR, ensure_repo_dirs
+    from db import ensure_patient_records_db
+    from safety_runtime import get_results_dir, write_activity, write_crash_log
 
 
 def _hide_detached_windows_console():
-    """Hide the transient console window when launched outside a real terminal."""
+    """Hide the Windows console host unless explicitly kept for debugging."""
     if os.name != "nt":
         return
-    if any(os.environ.get(name) for name in ("TERM", "WT_SESSION", "VSCODE_PID", "PYCHARM_HOSTED")):
+    if os.environ.get("EYESHIELD_KEEP_CONSOLE") == "1":
         return
     try:
         import ctypes
@@ -62,8 +59,9 @@ def load_svg_icon(svg_path, size=256):
     return QIcon(QPixmap.fromImage(image))
 
 
-if __name__ == "__main__":
+def main() -> int:
     _hide_detached_windows_console()
+    ensure_repo_dirs()
     app = QApplication(sys.argv)
 
     def _crash_hook(exc_type, exc_value, exc_tb):
@@ -87,9 +85,8 @@ if __name__ == "__main__":
     app.setStyleSheet("* { font-family: 'Segoe UI Variable', 'Segoe UI', 'Inter', 'Arial', sans-serif; font-size: 13px; text-decoration: none; }")
 
     # Set application-wide icon
-    _icon_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icons")
-    _logo_path = os.path.join(_icon_dir, "Logo.png")
-    _fallback_icon_path = os.path.join(_icon_dir, "eyeshield_icon.svg")
+    _logo_path = str(ICONS_DIR / "Logo.png")
+    _fallback_icon_path = str(ICONS_DIR / "eyeshield_icon.svg")
     if os.path.isfile(_logo_path):
         app.setWindowIcon(QIcon(_logo_path))
     else:
@@ -97,6 +94,16 @@ if __name__ == "__main__":
 
     # Initialize the database
     UserManager._init_db()
+    ok_records, records_err = ensure_patient_records_db()
+    if not ok_records:
+        msg = QMessageBox()
+        msg.setIcon(QMessageBox.Icon.Critical)
+        msg.setWindowTitle("Database Error")
+        msg.setText("Cannot initialize patient records database.")
+        msg.setInformativeText(str(records_err))
+        msg.addButton("Exit", QMessageBox.ButtonRole.RejectRole)
+        msg.exec()
+        sys.exit(1)
 
     # Validate write access to local results directory on launch.
     _results_dir_display = "unknown path"
@@ -115,7 +122,10 @@ if __name__ == "__main__":
 
     # Begin loading the DR model in the background so it is warm before the
     # user navigates to the Screening page (eliminates first-scan delay).
-    from model_inference import preload_model_async, is_model_available, MODEL_PATH
+    try:
+        from .model_inference import preload_model_async, is_model_available, MODEL_PATH
+    except ImportError:
+        from model_inference import preload_model_async, is_model_available, MODEL_PATH
     if not is_model_available():
         msg = QMessageBox()
         msg.setIcon(QMessageBox.Icon.Critical)
@@ -137,4 +147,8 @@ if __name__ == "__main__":
     win = LoginWindow()
     win.show()
 
-    sys.exit(app.exec())
+    return app.exec()
+
+
+if __name__ == "__main__":
+    sys.exit(main())

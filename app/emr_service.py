@@ -1,0 +1,1685 @@
+"""
+EyeShield EMR data access — patients, queue, screenings (emr_* tables in users.db).
+"""
+
+from __future__ import annotations
+
+import contextlib
+import json
+import os
+import shutil
+import sqlite3
+import threading
+from datetime import date, datetime
+from pathlib import Path
+import re
+from typing import Any, Optional
+
+import numpy as np
+from PIL import Image
+
+from auth import UserManager, get_connection
+from activity_logger import log_action as log_activity
+
+# -------------------- M5 configurable thresholds (named constants; env can override) --------------------
+BLUR_THRESHOLD = float(os.environ.get("EYESHIELD_BLUR_THRESHOLD", os.environ.get("EYESHIELD_QUALITY_BLUR_MIN", "100.0")))
+ILLUMINATION_MIN = float(os.environ.get("EYESHIELD_ILLUMINATION_MIN", os.environ.get("EYESHIELD_QUALITY_ILLUM_MIN", "40.0")))
+ILLUMINATION_MAX = float(os.environ.get("EYESHIELD_ILLUMINATION_MAX", os.environ.get("EYESHIELD_QUALITY_ILLUM_MAX", "220.0")))
+ENTROPY_THRESHOLD = float(os.environ.get("EYESHIELD_ENTROPY_THRESHOLD", os.environ.get("EYESHIELD_QUALITY_ENTROPY_MIN", "4.5")))
+UNCERTAINTY_THRESHOLD = float(
+    os.environ.get("EYESHIELD_UNCERTAINTY_THRESHOLD", os.environ.get("EYESHIELD_UNCERTAINTY_REJECT_THRESHOLD", "0.25"))
+)
+# Legacy aliases
+QUALITY_BLUR_MIN = BLUR_THRESHOLD
+QUALITY_ILLUM_MIN = ILLUMINATION_MIN
+QUALITY_ILLUM_MAX = ILLUMINATION_MAX
+QUALITY_ENTROPY_MIN = ENTROPY_THRESHOLD
+UNCERTAINTY_REJECT_THRESHOLD = UNCERTAINTY_THRESHOLD
+
+AI_TREATMENT_BY_GRADE = {
+    0: "No DR detected. Recommend annual screening.",
+    1: "Mild NPDR detected. Optimize glycemic and blood pressure control. Rescreen in 12 months.",
+    2: "Moderate NPDR detected. Refer to ophthalmologist. Rescreen in 6 months.",
+    3: "Severe NPDR detected. Urgent ophthalmology referral required. Do not delay.",
+    4: "Proliferative DR detected. Immediate ophthalmology referral required.",
+}
+
+
+def _open_conn() -> sqlite3.Connection:
+    conn = get_connection()
+    UserManager._ensure_emr_schema(conn)
+    return conn
+
+
+def _role_for_user_id(user_id: Optional[int]) -> str:
+    if not user_id:
+        return ""
+    conn = _open_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT role, is_active FROM users WHERE id = ?", (int(user_id),))
+        row = cur.fetchone()
+        if not row:
+            return ""
+        if int(row[1] or 0) != 1:
+            return ""
+        return str(row[0] or "").strip().lower()
+    except sqlite3.Error:
+        return ""
+    finally:
+        conn.close()
+
+
+def _is_allowed(user_id: Optional[int], allowed: set[str]) -> bool:
+    role = _role_for_user_id(user_id)
+    return bool(role and role in {r.lower() for r in allowed})
+
+
+def get_user_id(username: str) -> Optional[int]:
+    u = (username or "").strip()
+    if not u:
+        return None
+    conn = _open_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT id FROM users WHERE lower(username) = lower(?)", (u,))
+        row = cur.fetchone()
+        return int(row[0]) if row else None
+    finally:
+        conn.close()
+
+
+def log_emr_action(
+    user_id: Optional[int],
+    action: str,
+    target_type: str = "",
+    target_id: Optional[int] = None,
+    detail: str = "",
+    ip_address: Optional[str] = None,
+) -> None:
+    conn = _open_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute("PRAGMA table_info(emr_action_logs)")
+        cols = {row[1] for row in cur.fetchall()}
+        if "ip_address" in cols:
+            cur.execute(
+                """
+                INSERT INTO emr_action_logs (user_id, action, target_type, target_id, detail, ip_address)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (user_id, action, target_type or None, target_id, detail or None, ip_address or "local"),
+            )
+        else:
+            cur.execute(
+                """
+                INSERT INTO emr_action_logs (user_id, action, target_type, target_id, detail)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (user_id, action, target_type or None, target_id, detail or None),
+            )
+        conn.commit()
+    except sqlite3.Error:
+        pass
+    finally:
+        conn.close()
+    # Mirror to canonical audit trail (auth.activity_logs) best-effort.
+    try:
+        log_activity(
+            user_id=user_id,
+            action=str(action),
+            target_type=str(target_type or ""),
+            target_id=target_id,
+            detail={"detail": detail, "ip": ip_address or "local"} if detail or ip_address else {},
+            event_type="EMR",
+        )
+    except Exception:
+        pass
+
+
+def next_patient_code() -> str:
+    year = date.today().year
+    prefix = f"EYS-{year}-"
+    conn = _open_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT COUNT(*) FROM emr_patients WHERE patient_code LIKE ?",
+            (f"{prefix}%",),
+        )
+        row = cur.fetchone()
+        n = int(row[0] or 0) + 1
+        return f"{prefix}{n:05d}"
+    finally:
+        conn.close()
+
+
+def find_duplicate_patient(first_name: str, last_name: str, date_of_birth: str) -> Optional[dict[str, Any]]:
+    fn = (first_name or "").strip()
+    ln = (last_name or "").strip()
+    dob = (date_of_birth or "").strip()[:10]
+    if not fn or not ln or not dob:
+        return None
+    conn = _open_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT patient_id, patient_code, first_name, last_name, date_of_birth
+            FROM emr_patients
+            WHERE lower(trim(first_name)) = lower(trim(?)) AND lower(trim(last_name)) = lower(trim(?)) AND date_of_birth = ?
+            LIMIT 1
+            """,
+            (fn, ln, dob),
+        )
+        row = cur.fetchone()
+        if not row:
+            return None
+        return {
+            "patient_id": row[0],
+            "patient_code": row[1],
+            "first_name": row[2],
+            "last_name": row[3],
+            "date_of_birth": row[4],
+        }
+    finally:
+        conn.close()
+
+
+def get_today_active_queue_for_patient(patient_id: int) -> Optional[dict[str, Any]]:
+    """Active = visit_date today and status in (waiting, in_progress)."""
+    vd = date.today().isoformat()
+    conn = _open_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT queue_id, patient_id, queue_number, visit_date, status, assigned_by, screening_purpose, notes
+            FROM emr_queue_entries
+            WHERE patient_id = ? AND visit_date = ? AND status IN ('waiting', 'in_progress')
+            ORDER BY queue_id DESC
+            LIMIT 1
+            """,
+            (patient_id, vd),
+        )
+        row = cur.fetchone()
+        if not row:
+            return None
+        cols = ["queue_id", "patient_id", "queue_number", "visit_date", "status", "assigned_by", "screening_purpose", "notes"]
+        return dict(zip(cols, row))
+    finally:
+        conn.close()
+
+
+def log_open_patient_record(user_id: Optional[int], queue_id: int, patient_id: int) -> None:
+    log_emr_action(
+        user_id,
+        "OPEN_PATIENT_RECORD",
+        "queue_entries",
+        queue_id,
+        json.dumps({"patient_id": patient_id}),
+    )
+
+
+def _next_queue_seq(visit_date: str) -> int:
+    conn = _open_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT COUNT(*) FROM emr_queue_entries WHERE visit_date = ?",
+            (visit_date,),
+        )
+        row = cur.fetchone()
+        return int(row[0] or 0) + 1
+    finally:
+        conn.close()
+
+
+def next_queue_label(visit_date: Optional[str] = None) -> str:
+    vd = visit_date or date.today().isoformat()
+    n = _next_queue_seq(vd)
+    return f"Q-{n:03d}"
+
+
+def create_patient(
+    created_by: int,
+    last_name: str,
+    first_name: str,
+    date_of_birth: str,
+    patient_code: str = "",
+    sex: str = "",
+    contact_number: str = "",
+    email: str = "",
+    address: str = "",
+    middle_name: str = "",
+    height_cm: Optional[float] = None,
+    weight_kg: Optional[float] = None,
+    diabetes_type: str = "",
+    dm_duration_years: Optional[float] = None,
+    hba1c: Optional[float] = None,
+    current_medications: str = "",
+    known_allergies: str = "",
+    other_conditions: str = "",
+    current_eye_treatment: str = "",
+    previous_eye_treatment: str = "",
+    last_eye_exam_date: str = "",
+) -> int:
+    code = (patient_code or "").strip() or next_patient_code()
+    last_name = (last_name or "").strip()
+    first_name = (first_name or "").strip()
+    if not last_name or not first_name:
+        raise ValueError("last_name and first_name are required")
+    dob = (date_of_birth or "").strip()
+    if not dob:
+        raise ValueError("date_of_birth is required")
+
+    age = None
+    try:
+        born = datetime.strptime(dob[:10], "%Y-%m-%d").date()
+        today = date.today()
+        age = today.year - born.year - ((today.month, today.day) < (born.month, born.day))
+    except ValueError:
+        pass
+
+    conn = _open_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO emr_patients (
+                patient_code, last_name, first_name, middle_name, date_of_birth, age, sex,
+                contact_number, email, address, height_cm, weight_kg,
+                diabetes_type, dm_duration_years, hba1c,
+                current_medications, known_allergies, other_conditions,
+                current_eye_treatment, previous_eye_treatment, last_eye_exam_date,
+                created_by
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                code,
+                last_name,
+                first_name,
+                (middle_name or "").strip() or None,
+                dob,
+                age,
+                (sex or "").strip() or None,
+                (contact_number or "").strip() or None,
+                (email or "").strip() or None,
+                (address or "").strip() or None,
+                height_cm,
+                weight_kg,
+                (diabetes_type or "").strip() or None,
+                dm_duration_years,
+                hba1c,
+                (current_medications or "").strip() or None,
+                (known_allergies or "").strip() or None,
+                (other_conditions or "").strip() or None,
+                (current_eye_treatment or "").strip() or None,
+                (previous_eye_treatment or "").strip() or None,
+                (last_eye_exam_date or "").strip() or None,
+                created_by,
+            ),
+        )
+        pid = int(cur.lastrowid)
+        conn.commit()
+        log_emr_action(created_by, "CREATE_PATIENT", "patient", pid, json.dumps({"patient_code": code}))
+        return pid
+    finally:
+        conn.close()
+
+
+def get_patient(patient_id: int) -> Optional[dict[str, Any]]:
+    conn = _open_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM emr_patients WHERE patient_id = ?", (patient_id,))
+        row = cur.fetchone()
+        if not row:
+            return None
+        cols = [d[0] for d in cur.description]
+        return dict(zip(cols, row))
+    finally:
+        conn.close()
+
+
+def get_patient_by_code(patient_code: str) -> Optional[dict[str, Any]]:
+    code = str(patient_code or "").strip()
+    if not code:
+        return None
+    conn = _open_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM emr_patients WHERE patient_code = ?", (code,))
+        row = cur.fetchone()
+        if not row:
+            return None
+        cols = [d[0] for d in cur.description]
+        return dict(zip(cols, row))
+    finally:
+        conn.close()
+
+
+def search_patients(query: str, limit: int = 50) -> list[dict[str, Any]]:
+    q = (query or "").strip()
+    if len(q) < 1:
+        return []
+    like = f"%{q}%"
+    conn = _open_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT patient_id, patient_code, last_name, first_name, date_of_birth, contact_number
+            FROM emr_patients
+            WHERE patient_code LIKE ? OR last_name LIKE ? OR first_name LIKE ?
+                OR (ifnull(first_name,'') || ' ' || ifnull(last_name,'')) LIKE ?
+            ORDER BY last_name, first_name
+            LIMIT ?
+            """,
+            (like, like, like, like, limit),
+        )
+        cols = ["patient_id", "patient_code", "last_name", "first_name", "date_of_birth", "contact_number"]
+        return [dict(zip(cols, r)) for r in cur.fetchall()]
+    finally:
+        conn.close()
+
+
+def update_patient_fields(
+    patient_id: int,
+    fields: dict[str, Any],
+    acting_user_id: int,
+    *,
+    action: str = "UPDATE_PATIENT",
+    target_type: str = "patient",
+) -> bool:
+    allowed = {
+        "last_name",
+        "first_name",
+        "middle_name",
+        "date_of_birth",
+        "age",
+        "sex",
+        "contact_number",
+        "email",
+        "address",
+        "height_cm",
+        "weight_kg",
+        "diabetes_type",
+        "dm_duration_years",
+        "hba1c",
+        "current_medications",
+        "known_allergies",
+        "other_conditions",
+        "current_eye_treatment",
+        "previous_eye_treatment",
+        "last_eye_exam_date",
+    }
+    sets = []
+    values: list[Any] = []
+    for k, v in (fields or {}).items():
+        if k not in allowed:
+            continue
+        sets.append(f"{k} = ?")
+        values.append(v)
+    if not sets:
+        return False
+    values.append(patient_id)
+    conn = _open_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            f"UPDATE emr_patients SET {', '.join(sets)} WHERE patient_id = ?",
+            values,
+        )
+        ok = cur.rowcount > 0
+        conn.commit()
+        if ok:
+            log_emr_action(acting_user_id, action, target_type, patient_id, "")
+        return ok
+    except sqlite3.Error:
+        return False
+    finally:
+        conn.close()
+
+
+def get_queue_entry(queue_id: int) -> Optional[dict[str, Any]]:
+    conn = _open_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT queue_id, patient_id, queue_number, visit_date, status, assigned_by, screening_purpose, notes
+            FROM emr_queue_entries
+            WHERE queue_id = ?
+            """,
+            (queue_id,),
+        )
+        row = cur.fetchone()
+        if not row:
+            return None
+        cols = ["queue_id", "patient_id", "queue_number", "visit_date", "status", "assigned_by", "screening_purpose", "notes"]
+        return dict(zip(cols, row))
+    finally:
+        conn.close()
+
+
+def get_visit_details(queue_id: int) -> Optional[dict[str, Any]]:
+    """Return per-visit clinical details for a queue entry (or None)."""
+    conn = _open_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM emr_visit_details WHERE queue_id = ? LIMIT 1", (int(queue_id),))
+        row = cur.fetchone()
+        if not row:
+            return None
+        cols = [d[0] for d in cur.description]
+        return dict(zip(cols, row))
+    finally:
+        conn.close()
+
+
+def upsert_visit_details(
+    *,
+    queue_id: int,
+    patient_id: int,
+    captured_by: Optional[int],
+    details: dict[str, Any],
+) -> bool:
+    """
+    Create or update per-visit details for the queue entry.
+    Only fields in the allowed whitelist are persisted.
+    """
+    allowed = {
+        "visual_acuity_left",
+        "visual_acuity_right",
+        "blood_pressure_systolic",
+        "blood_pressure_diastolic",
+        "fasting_blood_sugar",
+        "random_blood_sugar",
+        "diabetes_type",
+        "dm_duration_years",
+        "hba1c",
+        "diabetes_diagnosis_date",
+        "treatment_regimen",
+        "prev_dr_stage",
+        "prev_treatment",
+        "symptom_blurred_vision",
+        "symptom_floaters",
+        "symptom_flashes",
+        "symptom_vision_loss",
+        "symptom_other",
+        "height_cm",
+        "weight_kg",
+        "notes",
+    }
+    payload: dict[str, Any] = {}
+    for k, v in (details or {}).items():
+        if k not in allowed:
+            continue
+        payload[k] = v
+    if not payload:
+        return False
+
+    qid = int(queue_id)
+    pid = int(patient_id)
+    conn = _open_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT visit_detail_id FROM emr_visit_details WHERE queue_id = ? LIMIT 1", (qid,))
+        existing = cur.fetchone()
+        if not existing:
+            cols = ["queue_id", "patient_id", "captured_by"] + list(payload.keys())
+            vals = [qid, pid, captured_by] + [payload[c] for c in payload.keys()]
+            placeholders = ", ".join(["?"] * len(cols))
+            cur.execute(
+                f"INSERT INTO emr_visit_details ({', '.join(cols)}) VALUES ({placeholders})",
+                vals,
+            )
+            conn.commit()
+            log_emr_action(captured_by, "CREATE_VISIT_DETAILS", "queue_entries", qid, "")
+            return True
+
+        sets = ", ".join([f"{k} = ?" for k in payload.keys()] + ["captured_by = ?", "captured_at = datetime('now')", "updated_at = datetime('now')"])
+        vals2 = [payload[k] for k in payload.keys()] + [captured_by, qid]
+        cur.execute(
+            f"UPDATE emr_visit_details SET {sets} WHERE queue_id = ?",
+            vals2,
+        )
+        ok = cur.rowcount > 0
+        conn.commit()
+        if ok:
+            log_emr_action(captured_by, "UPDATE_VISIT_DETAILS", "queue_entries", qid, "")
+        return ok
+    except sqlite3.Error:
+        return False
+    finally:
+        conn.close()
+
+
+def list_emr_timeline_records(patient_id: int) -> list[dict[str, Any]]:
+    """
+    Build timeline records compatible with legacy `patient_records` dicts so existing UI
+    can render without rework. These are derived from EMR screenings + per-eye rows + visit details.
+    """
+    pid = int(patient_id)
+    conn = _open_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM emr_patients WHERE patient_id = ?", (pid,))
+        prow = cur.fetchone()
+        if not prow:
+            return []
+        pcols = [d[0] for d in cur.description]
+        patient = dict(zip(pcols, prow))
+
+        cur.execute(
+            """
+            SELECT screening_id, queue_entry_id, screening_date, screening_type, eye_screened, session_status, performed_by, doctor_notes
+            FROM emr_screenings
+            WHERE patient_id = ?
+            ORDER BY screening_date ASC, screening_id ASC
+            """,
+            (pid,),
+        )
+        screenings = cur.fetchall()
+
+        out: list[dict[str, Any]] = []
+        for (sid, qid, sdate, stype, eye_screened, sess_status, performed_by, doctor_notes) in screenings:
+            cur.execute(
+                """
+                SELECT eye_side, ai_dr_grade, ai_confidence, total_uncertainty, doctor_accepted_ai,
+                       final_dr_grade, override_justification, final_treatment_notes,
+                       fundus_image_path, gradcam_image_path
+                FROM emr_screening_eyes
+                WHERE screening_id = ?
+                """,
+                (int(sid),),
+            )
+            eye_rows = cur.fetchall()
+            visit_details = get_visit_details(int(qid)) if qid else None
+
+            for (eye_side, ai_grade, ai_conf, total_unc, doc_accept, final_grade, override_j, final_notes, fundus_path, grad_path) in eye_rows:
+                # Map EMR row into legacy-ish record fields.
+                eye_label = "Right Eye" if str(eye_side) == "Right" else "Left Eye"
+                final_grade_i = int(final_grade) if final_grade is not None and str(final_grade).strip() != "" else None
+                ai_grade_i = int(ai_grade) if ai_grade is not None and str(ai_grade).strip() != "" else None
+                severity = {0: "No DR", 1: "Mild DR", 2: "Moderate DR", 3: "Severe DR", 4: "Proliferative DR"}
+                final_label = severity.get(final_grade_i, "")
+                ai_label = severity.get(ai_grade_i, "")
+
+                conf_pct = None
+                unc_pct = None
+                try:
+                    conf_pct = float(ai_conf) * 100.0 if ai_conf is not None else None
+                except (TypeError, ValueError):
+                    conf_pct = None
+                try:
+                    unc_pct = float(total_unc) * 100.0 if total_unc is not None else None
+                except (TypeError, ValueError):
+                    unc_pct = None
+                conf_text = []
+                if conf_pct is not None:
+                    conf_text.append(f"Confidence: {conf_pct:.1f}%")
+                if unc_pct is not None:
+                    conf_text.append(f"Uncertainty: {unc_pct:.1f}%")
+
+                rec: dict[str, Any] = {
+                    # "id" must be unique; use screening eye uniqueness.
+                    "id": int(sid) * 10 + (1 if str(eye_side) == "Left" else 0),
+                    "patient_id": str(patient.get("patient_code") or ""),
+                    "name": f"{patient.get('first_name','')} {patient.get('last_name','')}".strip(),
+                    "birthdate": str(patient.get("date_of_birth") or ""),
+                    "age": str(patient.get("age") or ""),
+                    "sex": str(patient.get("sex") or ""),
+                    "contact": str(patient.get("contact_number") or ""),
+                    "eyes": eye_label,
+                    "diabetes_type": str((visit_details or {}).get("diabetes_type") or patient.get("diabetes_type") or ""),
+                    "duration": str((visit_details or {}).get("dm_duration_years") or patient.get("dm_duration_years") or ""),
+                    "hba1c": str((visit_details or {}).get("hba1c") or patient.get("hba1c") or ""),
+                    "prev_treatment": str((visit_details or {}).get("prev_treatment") or ""),
+                    "notes": str((visit_details or {}).get("notes") or doctor_notes or ""),
+                    "result": final_label or ai_label or "",
+                    "confidence": " | ".join(conf_text),
+                    "screened_at": str(sdate or ""),
+                    "ai_classification": ai_label,
+                    "doctor_classification": final_label or ai_label,
+                    "decision_mode": "accepted" if (doc_accept in (1, True, "1", "true")) else ("overridden" if final_grade is not None else "pending"),
+                    "override_justification": str(override_j or ""),
+                    "final_diagnosis_icdr": final_label or ai_label,
+                    "doctor_findings": str(final_notes or doctor_notes or ""),
+                    "source_image_path": str(fundus_path or ""),
+                    "heatmap_image_path": str(grad_path or ""),
+                    "height": str((visit_details or {}).get("height_cm") or ""),
+                    "weight": str((visit_details or {}).get("weight_kg") or ""),
+                    "bmi": str((visit_details or {}).get("bmi") or ""),
+                    "visual_acuity_left": str((visit_details or {}).get("visual_acuity_left") or ""),
+                    "visual_acuity_right": str((visit_details or {}).get("visual_acuity_right") or ""),
+                    "blood_pressure_systolic": str((visit_details or {}).get("blood_pressure_systolic") or ""),
+                    "blood_pressure_diastolic": str((visit_details or {}).get("blood_pressure_diastolic") or ""),
+                    "fasting_blood_sugar": str((visit_details or {}).get("fasting_blood_sugar") or ""),
+                    "random_blood_sugar": str((visit_details or {}).get("random_blood_sugar") or ""),
+                    "diabetes_diagnosis_date": str((visit_details or {}).get("diabetes_diagnosis_date") or ""),
+                    "treatment_regimen": str((visit_details or {}).get("treatment_regimen") or ""),
+                    "prev_dr_stage": str((visit_details or {}).get("prev_dr_stage") or ""),
+                    "symptom_blurred_vision": "Yes" if (visit_details or {}).get("symptom_blurred_vision") else "No",
+                    "symptom_floaters": "Yes" if (visit_details or {}).get("symptom_floaters") else "No",
+                    "symptom_flashes": "Yes" if (visit_details or {}).get("symptom_flashes") else "No",
+                    "symptom_vision_loss": "Yes" if (visit_details or {}).get("symptom_vision_loss") else "No",
+                    "follow_up": "Yes" if str(stype or "").lower() == "follow_up" else "",
+                    "followup_date": str(sdate or "") if str(stype or "").lower() == "follow_up" else "",
+                    "followup_label": "Follow-up screening" if str(stype or "").lower() == "follow_up" else "",
+                    "screening_type": str(stype or ""),
+                    "previous_screening_id": None,
+                    # Group by queue entry so bilateral results group into one "visit".
+                    "screening_group_id": f"queue-{int(qid)}" if qid else f"screening-{int(sid)}",
+                }
+                out.append(rec)
+        return out
+    finally:
+        conn.close()
+
+
+def get_today_queue_for_patient(patient_id: int) -> Optional[dict[str, Any]]:
+    vd = date.today().isoformat()
+    conn = _open_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT queue_id, patient_id, queue_number, visit_date, status, assigned_by, screening_purpose, notes
+            FROM emr_queue_entries
+            WHERE patient_id = ? AND visit_date = ?
+            ORDER BY queue_id DESC
+            LIMIT 1
+            """,
+            (patient_id, vd),
+        )
+        row = cur.fetchone()
+        if not row:
+            return None
+        cols = ["queue_id", "patient_id", "queue_number", "visit_date", "status", "assigned_by", "screening_purpose", "notes"]
+        return dict(zip(cols, row))
+    finally:
+        conn.close()
+
+
+def get_today_in_progress_queue_for_patient(patient_id: int) -> Optional[dict[str, Any]]:
+    vd = date.today().isoformat()
+    conn = _open_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT queue_id, patient_id, queue_number, visit_date, status, assigned_by, screening_purpose, notes
+            FROM emr_queue_entries
+            WHERE patient_id = ? AND visit_date = ? AND status = 'in_progress'
+            ORDER BY queue_id DESC
+            LIMIT 1
+            """,
+            (patient_id, vd),
+        )
+        row = cur.fetchone()
+        if not row:
+            return None
+        cols = ["queue_id", "patient_id", "queue_number", "visit_date", "status", "assigned_by", "screening_purpose", "notes"]
+        return dict(zip(cols, row))
+    finally:
+        conn.close()
+
+
+def assign_queue_entry(
+    patient_id: int,
+    assigned_by: int,
+    visit_date: Optional[str] = None,
+    *,
+    screening_purpose: str = "new",
+    notes: str = "",
+) -> int:
+    if not _is_allowed(assigned_by, {"frontdesk", "admin"}):
+        raise PermissionError("Only front desk or admin can assign queue entries.")
+    vd = visit_date or date.today().isoformat()
+    label = next_queue_label(vd)
+    purpose = str(screening_purpose or "new").strip().lower()
+    if purpose not in {"new", "follow_up"}:
+        purpose = "new"
+    conn = _open_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO emr_queue_entries (patient_id, queue_number, visit_date, status, assigned_by, screening_purpose, notes)
+            VALUES (?, ?, ?, 'waiting', ?, ?, ?)
+            """,
+            (patient_id, label, vd, assigned_by, purpose, (notes or "").strip() or None),
+        )
+        qid = int(cur.lastrowid)
+        conn.commit()
+        log_emr_action(
+            assigned_by,
+            "ASSIGN_QUEUE",
+            "queue_entries",
+            qid,
+            json.dumps({"queue_number": label, "visit_date": vd, "patient_id": patient_id}),
+        )
+        return qid
+    finally:
+        conn.close()
+
+
+def add_queue_entry(patient_id: int, assigned_by: int, visit_date: Optional[str] = None, notes: str = "") -> int:
+    """Backward-compatible alias for older UI code."""
+    return assign_queue_entry(patient_id, assigned_by, visit_date=visit_date, screening_purpose="new", notes=notes)
+
+
+def list_queue_rows(visit_date: Optional[str] = None) -> list[dict[str, Any]]:
+    vd = visit_date or date.today().isoformat()
+    conn = _open_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT
+                q.queue_id, q.queue_number, q.visit_date, q.status, q.patient_id, q.screening_purpose, q.notes,
+                p.patient_code, p.last_name, p.first_name, p.date_of_birth, p.sex, q.created_at
+            FROM emr_queue_entries q
+            JOIN emr_patients p ON p.patient_id = q.patient_id
+            WHERE q.visit_date = ?
+            ORDER BY
+                CASE q.status
+                    WHEN 'in_progress' THEN 0
+                    WHEN 'waiting' THEN 1
+                    WHEN 'completed' THEN 2
+                    WHEN 'cancelled' THEN 3
+                    ELSE 4
+                END,
+                CAST(SUBSTR(q.queue_number, 3) AS INTEGER) ASC, q.queue_id ASC
+            """,
+            (vd,),
+        )
+        out = []
+        for r in cur.fetchall():
+            out.append(
+                {
+                    "queue_id": r[0],
+                    "queue_number": r[1],
+                    "visit_date": r[2],
+                    "status": r[3],
+                    "patient_id": r[4],
+                    "screening_purpose": r[5] or "new",
+                    "notes": r[6] or "",
+                    "patient_code": r[7],
+                    "last_name": r[8],
+                    "first_name": r[9],
+                    "date_of_birth": r[10],
+                    "sex": r[11] if len(r) > 11 else "",
+                    "created_at": r[12] if len(r) > 12 else None,
+                }
+            )
+        return out
+    finally:
+        conn.close()
+
+
+def set_queue_status(queue_id: int, status: str, user_id: Optional[int] = None) -> bool:
+    if status not in ("waiting", "in_progress", "completed", "cancelled"):
+        return False
+    # Permission: who is allowed to perform which mutation.
+    if status in ("in_progress", "completed"):
+        if not _is_allowed(user_id, {"clinician", "admin"}):
+            return False
+    elif status in ("waiting", "cancelled"):
+        if not _is_allowed(user_id, {"frontdesk", "clinician", "admin"}):
+            return False
+    conn = _open_conn()
+    try:
+        cur = conn.cursor()
+        # Enforce valid transition graph.
+        cur.execute("SELECT status FROM emr_queue_entries WHERE queue_id = ?", (queue_id,))
+        row = cur.fetchone()
+        current = str(row[0] or "").strip().lower() if row else ""
+        allowed_transitions = {
+            "waiting": {"in_progress", "cancelled"},
+            "in_progress": {"completed", "cancelled"},
+            "completed": set(),
+            "cancelled": set(),
+            "": {"waiting", "in_progress", "completed", "cancelled"},
+        }
+        if current in allowed_transitions and status not in allowed_transitions[current]:
+            return False
+        cur.execute(
+            "UPDATE emr_queue_entries SET status = ? WHERE queue_id = ?",
+            (status, queue_id),
+        )
+        ok = cur.rowcount > 0
+        conn.commit()
+        if ok and user_id is not None:
+            if status == "cancelled":
+                log_emr_action(user_id, "CANCEL_QUEUE", "queue_entries", queue_id, "")
+            else:
+                log_emr_action(user_id, f"QUEUE_{status.upper()}", "queue_entries", queue_id, "")
+        return ok
+    except sqlite3.Error:
+        return False
+    finally:
+        conn.close()
+
+
+def clear_queue(visit_date: Optional[str] = None, *, user_id: Optional[int] = None) -> int:
+    """Delete queue entries for a given visit date (default: today). Returns rows deleted."""
+    if not _is_allowed(user_id, {"admin"}):
+        return 0
+    vd = visit_date or date.today().isoformat()
+    conn = _open_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM emr_queue_entries WHERE visit_date = ?", (vd,))
+        deleted = int(cur.rowcount or 0)
+        conn.commit()
+        if user_id is not None:
+            log_emr_action(user_id, "CLEAR_QUEUE", "queue_entries", None, json.dumps({"visit_date": vd, "deleted": deleted}))
+        return deleted
+    finally:
+        conn.close()
+
+
+def count_screenings_for_patient(patient_id: int) -> int:
+    conn = _open_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) FROM emr_screenings WHERE patient_id = ?", (patient_id,))
+        r = cur.fetchone()
+        return int(r[0] or 0) if r else 0
+    finally:
+        conn.close()
+
+
+def list_screenings_for_patient(patient_id: int) -> list[dict[str, Any]]:
+    conn = _open_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT s.screening_id, s.screening_type, s.screening_date, s.eye_screened, s.session_status,
+                   s.queue_entry_id, u.username
+            FROM emr_screenings s
+            LEFT JOIN users u ON u.id = s.performed_by
+            WHERE s.patient_id = ?
+            ORDER BY s.screening_date DESC, s.screening_id DESC
+            """,
+            (patient_id,),
+        )
+        screenings = []
+        for r in cur.fetchall():
+            screening_id = int(r[0])
+            cur.execute(
+                """
+                SELECT eye_side, ai_dr_grade, ai_confidence, uncertainty_status, doctor_accepted_ai,
+                       final_dr_grade, final_treatment_notes, override_justification, image_quality_status,
+                       fundus_image_path, gradcam_image_path
+                FROM emr_screening_eyes
+                WHERE screening_id = ?
+                ORDER BY CASE eye_side WHEN 'Left' THEN 0 ELSE 1 END
+                """,
+                (screening_id,),
+            )
+            eye_rows = cur.fetchall()
+            eyes = []
+            final_labels = []
+            for eye in eye_rows:
+                side = str(eye[0] or "")
+                final_grade = eye[5]
+                ai_grade = eye[1]
+                final_labels.append(f"{side}:{final_grade if final_grade is not None else 'Pending'}")
+                eyes.append(
+                    {
+                        "eye_side": side,
+                        "ai_dr_grade": ai_grade,
+                        "ai_confidence": eye[2],
+                        "uncertainty_status": eye[3] or "pending",
+                        "doctor_accepted_ai": eye[4],
+                        "final_dr_grade": final_grade,
+                        "final_treatment_notes": eye[6] or "",
+                        "override_justification": eye[7] or "",
+                        "image_quality_status": eye[8] or "pending",
+                        "fundus_image_path": eye[9] or "",
+                        "gradcam_image_path": eye[10] or "",
+                    }
+                )
+            screenings.append(
+                {
+                    "screening_id": screening_id,
+                    "screening_type": r[1],
+                    "screening_date": r[2],
+                    "eye_screened": r[3],
+                    "session_status": r[4],
+                    "queue_entry_id": r[5],
+                    "performed_by_username": r[6] or "",
+                    "final_grade_summary": ", ".join(final_labels) if final_labels else "Pending",
+                    "eyes": eyes,
+                }
+            )
+        return screenings
+    finally:
+        conn.close()
+
+
+def create_screening_session(
+    patient_id: int,
+    queue_entry_id: Optional[int],
+    performed_by: int,
+    screening_type: str,
+    eye_screened: str,
+    fundus_paths: Any,
+) -> int:
+    if not _is_allowed(performed_by, {"clinician", "admin"}):
+        raise PermissionError("Only clinicians can start screenings.")
+    """
+    Inserts emr_screenings + emr_screening_eyes (Left/Right/Both). fundus_path copied per eye row.
+    """
+    if screening_type not in ("initial", "follow_up"):
+        raise ValueError("screening_type")
+    if eye_screened not in ("Left", "Right", "Both"):
+        raise ValueError("eye_screened")
+    sides = ("Left", "Right") if eye_screened == "Both" else (eye_screened,)
+    if isinstance(fundus_paths, str):
+        raw = (fundus_paths or "").strip()
+        side_path_map = {side: raw for side in sides}
+    else:
+        side_path_map = {}
+        for side in sides:
+            side_path_map[side] = str((fundus_paths or {}).get(side, "")).strip()
+    for side in sides:
+        if not side_path_map.get(side):
+            raise ValueError(f"fundus path required for {side}")
+
+    conn = _open_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO emr_screenings (
+                patient_id, queue_entry_id, performed_by, screening_type, eye_screened, session_status
+            ) VALUES (?, ?, ?, ?, ?, 'pending')
+            """,
+            (patient_id, queue_entry_id, performed_by, screening_type, eye_screened),
+        )
+        sid = int(cur.lastrowid)
+        upload_dir = Path(__file__).resolve().parent / "uploads" / "fundus" / str(sid)
+        upload_dir.mkdir(parents=True, exist_ok=True)
+        for side in sides:
+            src = side_path_map[side]
+            ext = Path(src).suffix.lower() or ".jpg"
+            if ext not in {".jpg", ".jpeg", ".png", ".tif", ".tiff"}:
+                raise ValueError(f"Unsupported image type for {side}")
+            if not _is_valid_image_magic_bytes(str(src)):
+                raise ValueError(f"File is not a valid image: {side}")
+            dst = upload_dir / f"{side.lower()}{ext}"
+            shutil.copy2(src, dst)
+            if not _is_valid_image_magic_bytes(str(dst)):
+                raise ValueError(f"Failed to store a valid image on disk: {side}")
+            cur.execute(
+                """
+                INSERT INTO emr_screening_eyes (screening_id, eye_side, fundus_image_path, image_quality_status)
+                VALUES (?, ?, ?, 'pending')
+                """,
+                (sid, side, str(dst)),
+            )
+        conn.commit()
+        log_emr_action(
+            performed_by,
+            "START_SCREENING",
+            "screening",
+            sid,
+            json.dumps({"type": screening_type, "eyes": eye_screened}),
+        )
+        trigger_ai_pipeline_async(sid)
+        return sid
+    finally:
+        conn.close()
+
+
+def retrigger_ai_pipeline(screening_id: int) -> None:
+    """M4: retry AI / M5 — same as initial async trigger (re-run when user clicks retry)."""
+    trigger_ai_pipeline_async(screening_id)
+
+
+def trigger_ai_pipeline_async(screening_id: int) -> None:
+    conn = _open_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT performed_by FROM emr_screenings WHERE screening_id = ?", (screening_id,))
+        row = cur.fetchone()
+        performed_by = int(row[0]) if row and row[0] is not None else None
+    finally:
+        conn.close()
+
+    log_emr_action(performed_by, "AI_PIPELINE_QUEUED", "screening", screening_id, "")
+
+    def _runner() -> None:
+        _run_screening_ai_pipeline(screening_id, performed_by)
+
+    threading.Thread(target=_runner, daemon=True, name=f"eyeshield-ai-{screening_id}").start()
+
+
+def _laplacian_variance(gray: np.ndarray) -> float:
+    g = gray.astype(np.float32)
+    lap = (
+        g[1:-1, 1:-1] * -4.0
+        + g[:-2, 1:-1]
+        + g[2:, 1:-1]
+        + g[1:-1, :-2]
+        + g[1:-1, 2:]
+    )
+    return float(np.var(lap))
+
+
+def _compute_quality_scores(image_path: str) -> tuple[float, float, float]:
+    arr = np.array(Image.open(image_path).convert("RGB"))
+    gray = np.dot(arr[..., :3], np.array([0.299, 0.587, 0.114], dtype=np.float32)).astype(np.uint8)
+    blur_score = _laplacian_variance(gray)
+    illumination_score = float(arr[..., 1].mean())  # green channel mean
+    hist = np.bincount(gray.ravel(), minlength=256).astype(np.float64)
+    probs = hist / (hist.sum() + 1e-12)
+    probs = probs[probs > 0]
+    entropy_score = float(-np.sum(probs * np.log2(probs)))
+    return blur_score, illumination_score, entropy_score
+
+
+def _quality_rejection_reason(blur: float, illum: float, entropy: float) -> str:
+    if blur < BLUR_THRESHOLD:
+        return "blur"
+    if illum < ILLUMINATION_MIN:
+        return "underexposed"
+    if illum > ILLUMINATION_MAX:
+        return "overexposed"
+    if entropy < ENTROPY_THRESHOLD:
+        return "low_detail"
+    return ""
+
+
+def _is_valid_image_magic_bytes(path: str) -> bool:
+    try:
+        with open(path, "rb") as f:
+            head = f.read(16)
+    except OSError:
+        return False
+    if head.startswith(b"\xff\xd8\xff"):
+        return True
+    if head[:8] == b"\x89PNG\r\n\x1a\n":
+        return True
+    if len(head) >= 4 and head[:4] in (b"II*\x00", b"MM\x00*"):
+        return True
+    return False
+
+
+def _parse_confidence_uncertainty(conf_text: str) -> tuple[float, float]:
+    text = str(conf_text or "")
+    nums = re.findall(r"([0-9]+(?:\.[0-9]+)?)\s*%", text)
+    if len(nums) >= 2:
+        return float(nums[0]) / 100.0, float(nums[1]) / 100.0
+    if len(nums) == 1:
+        return float(nums[0]) / 100.0, 0.0
+    return 0.0, 0.0
+
+
+def _update_screening_session_post_pipeline(screening_id: int, user_id: Optional[int]) -> None:
+    """M5: after all per-eye work, set session_status when appropriate; log PIPELINE_COMPLETE."""
+    conn = _open_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT image_quality_status FROM emr_screening_eyes WHERE screening_id = ?", (screening_id,))
+        statuses = [str(r[0] or "pending") for r in cur.fetchall()]
+        if not statuses:
+            return
+        if any(s == "pending" for s in statuses):
+            return
+        if all(s == "rejected" for s in statuses):
+            new_status = "rejected_all"
+        elif any(s == "rejected" for s in statuses) and any(s == "gradable" for s in statuses):
+            new_status = "partial"
+        else:
+            log_emr_action(
+                user_id,
+                "PIPELINE_COMPLETE",
+                "screening",
+                screening_id,
+                json.dumps({"session_status": "pending", "note": "all_gradable_awaiting_verification"}),
+            )
+            return
+        cur.execute("UPDATE emr_screenings SET session_status = ? WHERE screening_id = ?", (new_status, screening_id))
+        conn.commit()
+        log_emr_action(
+            user_id,
+            "PIPELINE_COMPLETE",
+            "screening",
+            screening_id,
+            json.dumps({"session_status": new_status}),
+        )
+    except sqlite3.Error:
+        pass
+    finally:
+        conn.close()
+
+
+def _run_screening_ai_pipeline(screening_id: int, performed_by: Optional[int]) -> None:
+    try:
+        conn = _open_conn()
+        cur = conn.cursor()
+        cur.execute("SELECT eye_id FROM emr_screening_eyes WHERE screening_id = ?", (screening_id,))
+        eye_ids = [int(r[0]) for r in cur.fetchall()]
+        conn.close()
+        for eye_id in eye_ids:
+            _process_eye_pipeline(screening_id, eye_id, performed_by)
+        _update_screening_session_post_pipeline(screening_id, performed_by)
+    except Exception as exc:
+        log_emr_action(performed_by, "AI_PIPELINE_FAILED", "screening", screening_id, str(exc))
+
+
+def _process_eye_pipeline(screening_id: int, eye_id: int, performed_by: Optional[int]) -> None:
+    from model_inference import is_model_available, predict_image, generate_heatmap
+
+    conn = _open_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT eye_side, fundus_image_path, image_quality_status
+            FROM emr_screening_eyes
+            WHERE eye_id = ? AND screening_id = ?
+            """,
+            (eye_id, screening_id),
+        )
+        row = cur.fetchone()
+        if not row:
+            return
+        eye_side = str(row[0] or "")
+        image_path = str(row[1] or "")
+        existing_qs = str(row[2] or "pending")
+        if existing_qs != "pending":
+            return
+    finally:
+        conn.close()
+
+    if not image_path or not os.path.isfile(image_path):
+        conn = _open_conn()
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                UPDATE emr_screening_eyes
+                SET image_quality_status = 'rejected', quality_rejection_reason = 'file_not_found'
+                WHERE eye_id = ?
+                """,
+                (eye_id,),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        log_emr_action(
+            performed_by,
+            "QUALITY_CHECK_FAILED",
+            "screening_eyes",
+            eye_id,
+            json.dumps({"reason": "file_not_found"}),
+        )
+        return
+
+    if not _is_valid_image_magic_bytes(image_path):
+        conn = _open_conn()
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                UPDATE emr_screening_eyes
+                SET image_quality_status = 'rejected', quality_rejection_reason = 'invalid_image'
+                WHERE eye_id = ?
+                """,
+                (eye_id,),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        log_emr_action(
+            performed_by,
+            "QUALITY_CHECK",
+            "screening_eyes",
+            eye_id,
+            json.dumps({"status": "rejected", "reason": "not_valid_image"}),
+        )
+        return
+
+    # ---- M5-A quality check ----
+    blur, illum, entropy = _compute_quality_scores(image_path)
+    rejection_reason = _quality_rejection_reason(blur, illum, entropy)
+    quality_status = "rejected" if rejection_reason else "gradable"
+    conn = _open_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            UPDATE emr_screening_eyes
+            SET blur_score = ?, illumination_score = ?, entropy_score = ?,
+                image_quality_status = ?, quality_rejection_reason = ?
+            WHERE eye_id = ?
+            """,
+            (blur, illum, entropy, quality_status, rejection_reason or None, eye_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    log_emr_action(
+        performed_by, "QUALITY_CHECK", "screening_eyes", eye_id, json.dumps({"status": quality_status, "reason": rejection_reason})
+    )
+    if quality_status == "rejected":
+        return
+
+    # ---- M5-B inference + uncertainty ----
+    if not is_model_available():
+        conn = _open_conn()
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                UPDATE emr_screening_eyes
+                SET uncertainty_status = 'rejected', quality_rejection_reason = 'model_unavailable', ai_treatment_suggestion = NULL
+                WHERE eye_id = ?
+                """,
+                (eye_id,),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        log_emr_action(
+            performed_by, "RUN_INFERENCE", "screening_eyes", eye_id, json.dumps({"error": "model_unavailable"}),
+        )
+        return
+
+    label, conf_text, class_idx = predict_image(image_path)
+    conf, total_unc = _parse_confidence_uncertainty(conf_text)
+    total_unc = max(0.0, min(1.0, total_unc))
+    aleatoric = total_unc * (1.0 - conf) if conf <= 1.0 else 0.0
+    epistemic = max(0.0, total_unc - aleatoric)
+    uncertainty_status = "rejected" if total_unc > UNCERTAINTY_THRESHOLD else "accepted"
+    treatment = AI_TREATMENT_BY_GRADE.get(int(class_idx), "")
+    conn = _open_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            UPDATE emr_screening_eyes
+            SET ai_dr_grade = ?, ai_confidence = ?, aleatoric_uncertainty = ?,
+                epistemic_uncertainty = ?, total_uncertainty = ?, uncertainty_status = ?,
+                ai_treatment_suggestion = ?
+            WHERE eye_id = ?
+            """,
+            (int(class_idx), float(conf), float(aleatoric), float(epistemic), float(total_unc), uncertainty_status, treatment or None, eye_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    log_emr_action(
+        performed_by,
+        "RUN_INFERENCE",
+        "screening_eyes",
+        eye_id,
+        json.dumps(
+            {"label": label, "confidence": conf, "total_uncertainty": total_unc, "uncertainty_status": uncertainty_status, "grade": int(class_idx)}
+        ),
+    )
+
+    if uncertainty_status != "accepted":
+        return
+
+    # ---- M5-C GradCAM++ (optional; write failure does not fail screening) ----
+    heatmap_tmp = generate_heatmap(image_path, int(class_idx))
+    grad_dir = Path(__file__).resolve().parent / "uploads" / "gradcam" / str(screening_id)
+    grad_dir.mkdir(parents=True, exist_ok=True)
+    grad_path = grad_dir / f"{eye_side.lower()}_gradcam.jpg"
+    try:
+        if not heatmap_tmp or not os.path.isfile(heatmap_tmp):
+            raise OSError("no_heatmap")
+        shutil.copy2(heatmap_tmp, grad_path)
+    except OSError:
+        log_emr_action(
+            performed_by, "GRADCAM_FAILED", "screening_eyes", eye_id, json.dumps({"reason": "disk_write_error"}),
+        )
+        conn = _open_conn()
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                "UPDATE emr_screening_eyes SET heatmap_generated = 0, gradcam_image_path = NULL WHERE eye_id = ?",
+                (eye_id,),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    else:
+        with contextlib.suppress(Exception):
+            if heatmap_tmp and os.path.isfile(heatmap_tmp):
+                os.remove(heatmap_tmp)
+        conn = _open_conn()
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                UPDATE emr_screening_eyes
+                SET gradcam_image_path = ?, heatmap_generated = 1
+                WHERE eye_id = ?
+                """,
+                (str(grad_path), eye_id),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        log_emr_action(performed_by, "GENERATE_GRADCAM", "screening_eyes", eye_id, str(grad_path))
+
+
+def get_screening(screening_id: int) -> Optional[dict[str, Any]]:
+    conn = _open_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT screening_id, patient_id, queue_entry_id, performed_by, screening_date,
+                   screening_type, eye_screened, session_status, doctor_notes
+            FROM emr_screenings
+            WHERE screening_id = ?
+            """,
+            (screening_id,),
+        )
+        row = cur.fetchone()
+        if not row:
+            return None
+        cols = [
+            "screening_id",
+            "patient_id",
+            "queue_entry_id",
+            "performed_by",
+            "screening_date",
+            "screening_type",
+            "eye_screened",
+            "session_status",
+            "doctor_notes",
+        ]
+        out = dict(zip(cols, row))
+        cur.execute(
+            """
+            SELECT eye_id, eye_side, fundus_image_path, gradcam_image_path, image_quality_status,
+                   ai_dr_grade, ai_confidence, uncertainty_status, doctor_accepted_ai,
+                   final_dr_grade, override_justification, final_treatment_notes
+            FROM emr_screening_eyes
+            WHERE screening_id = ?
+            ORDER BY CASE eye_side WHEN 'Left' THEN 0 ELSE 1 END
+            """,
+            (screening_id,),
+        )
+        out["eyes"] = [
+            {
+                "eye_id": r[0],
+                "eye_side": r[1],
+                "fundus_image_path": r[2] or "",
+                "gradcam_image_path": r[3] or "",
+                "image_quality_status": r[4] or "pending",
+                "ai_dr_grade": r[5],
+                "ai_confidence": r[6],
+                "uncertainty_status": r[7] or "pending",
+                "doctor_accepted_ai": r[8],
+                "final_dr_grade": r[9],
+                "override_justification": r[10] or "",
+                "final_treatment_notes": r[11] or "",
+            }
+            for r in cur.fetchall()
+        ]
+        return out
+    finally:
+        conn.close()
+
+
+def verify_screening(screening_id: int, user_id: int, eye_updates: list[dict[str, Any]]) -> bool:
+    if not _is_allowed(user_id, {"clinician", "admin"}):
+        return False
+    conn = _open_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT session_status FROM emr_screenings WHERE screening_id = ?", (screening_id,))
+        prev_row = cur.fetchone()
+        prev_status = str(prev_row[0] or "") if prev_row else ""
+        for payload in eye_updates:
+            eye_id = int(payload.get("eye_id"))
+            accepted = payload.get("doctor_accepted_ai")
+            final_grade = payload.get("final_dr_grade")
+            justification = str(payload.get("override_justification") or "").strip()
+            notes = str(payload.get("final_treatment_notes") or "").strip()
+            cur.execute(
+                """
+                UPDATE emr_screening_eyes
+                SET doctor_accepted_ai = ?, final_dr_grade = ?, override_justification = ?, final_treatment_notes = ?
+                WHERE eye_id = ? AND screening_id = ?
+                """,
+                (accepted, final_grade, justification or None, notes or None, eye_id, screening_id),
+            )
+        cur.execute(
+            """
+            SELECT image_quality_status, uncertainty_status, doctor_accepted_ai, final_dr_grade
+            FROM emr_screening_eyes
+            WHERE screening_id = ?
+            """,
+            (screening_id,),
+        )
+        rows = cur.fetchall()
+        if not rows:
+            return False
+        rejected = [
+            (str(r[0] or "").lower() == "rejected") or (str(r[1] or "").lower() == "rejected")
+            for r in rows
+        ]
+        all_verified = all(r[2] is not None and r[3] is not None for r in rows)
+        if all(rejected):
+            session_status = "rejected_all"
+        elif any(rejected):
+            session_status = "partial"
+        elif all_verified:
+            session_status = "completed"
+        else:
+            session_status = "pending"
+        cur.execute(
+            "UPDATE emr_screenings SET session_status = ? WHERE screening_id = ?",
+            (session_status, screening_id),
+        )
+        conn.commit()
+        log_emr_action(user_id, "VERIFY_SCREENING", "screening", screening_id, json.dumps({"session_status": session_status}))
+        if session_status == "completed" and prev_status != "completed":
+            log_emr_action(
+                user_id, "FINALIZE_SCREENING", "screening", screening_id, json.dumps({"session_status": session_status})
+            )
+        return True
+    except Exception:
+        return False
+    finally:
+        conn.close()
+
+
+def update_screening_doctor_notes(screening_id: int, user_id: int, doctor_notes: str) -> bool:
+    """Update emr_screenings.doctor_notes (free text) and log."""
+    if not _is_allowed(user_id, {"clinician", "admin"}):
+        return False
+    conn = _open_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE emr_screenings SET doctor_notes = ?, updated_at = datetime('now') WHERE screening_id = ?",
+            (str(doctor_notes or "").strip() or None, int(screening_id)),
+        )
+        ok = cur.rowcount > 0
+        conn.commit()
+        if ok:
+            log_emr_action(user_id, "UPDATE_SCREENING_NOTES", "screening", int(screening_id), "")
+        return ok
+    except sqlite3.Error:
+        return False
+    finally:
+        conn.close()
+
+
+# ===========================================================================
+# Workflow guard-rail helpers
+# ---------------------------------------------------------------------------
+# Every mutating UI action routes through these so behaviour is enforced in
+# one place. Each helper returns (ok: bool, reason: str) so the UI can both
+# block and surface an explanation to the user.
+# ===========================================================================
+
+
+def count_visit_screenings(queue_id: int) -> int:
+    """How many screening sessions are attached to a given visit (queue entry)."""
+    conn = _open_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT COUNT(*) FROM emr_screenings WHERE queue_entry_id = ?",
+            (queue_id,),
+        )
+        r = cur.fetchone()
+        return int(r[0] or 0) if r else 0
+    finally:
+        conn.close()
+
+
+# Latest session is a failed / redo-safe state: allow a new EMR screening without a second confirmation.
+_NEW_SCREENING_WITHOUT_PROMPT_STATUSES = frozenset({"rejected_all"})
+
+
+def should_prompt_before_new_visit_screening(latest: Optional[dict[str, Any]]) -> bool:
+    """
+    When a visit already has a screening row, we usually confirm before creating another.
+
+    Skip that prompt when the latest session cannot block a fresh attempt (e.g. all fundus
+    images were rejected as ungradable).
+    """
+    if not latest:
+        return False
+    status = str(latest.get("session_status") or "").strip().lower()
+    if status in _NEW_SCREENING_WITHOUT_PROMPT_STATUSES:
+        return False
+    return True
+
+
+def latest_visit_screening(queue_id: int) -> Optional[dict[str, Any]]:
+    """Return the most recent screening row attached to the visit (or None)."""
+    conn = _open_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT screening_id, screening_type, screening_date, eye_screened, session_status
+            FROM emr_screenings
+            WHERE queue_entry_id = ?
+            ORDER BY screening_id DESC
+            LIMIT 1
+            """,
+            (queue_id,),
+        )
+        row = cur.fetchone()
+        if not row:
+            return None
+        return {
+            "screening_id": int(row[0]),
+            "screening_type": row[1],
+            "screening_date": row[2],
+            "eye_screened": row[3],
+            "session_status": row[4],
+        }
+    finally:
+        conn.close()
+
+
+def can_create_visit_for_patient(patient_id: int) -> tuple[bool, str]:
+    """Front desk guard: reject a second simultaneous active visit for the same patient today."""
+    ex = get_today_active_queue_for_patient(patient_id)
+    if ex:
+        return False, (
+            f"Patient already has an active visit today: "
+            f"{ex.get('queue_number', '')} (status: {ex.get('status', 'unknown')})."
+        )
+    return True, ""
+
+
+def can_cancel_visit(queue_id: int) -> tuple[bool, str]:
+    """Front desk guard: only cancellable while visit is open and has no finalised screening."""
+    v = get_queue_entry(queue_id)
+    if not v:
+        return False, "Visit not found."
+    status = str(v.get("status") or "").strip().lower()
+    if status in ("completed", "cancelled"):
+        return False, f"Visit is already {status}; it cannot be cancelled."
+    latest = latest_visit_screening(queue_id)
+    if latest:
+        sess = str(latest.get("session_status") or "").lower()
+        if sess in {"pending", "partial", "completed"}:
+            return False, "A screening is in progress or already finalized for this visit; it cannot be cancelled."
+    return True, ""
+
+
+def can_complete_visit(queue_id: int) -> tuple[bool, str]:
+    """Doctor guard: visit can only be marked completed after a screening session exists."""
+    v = get_queue_entry(queue_id)
+    if not v:
+        return False, "Visit not found."
+    status = str(v.get("status") or "").strip().lower()
+    if status == "completed":
+        return False, "Visit is already marked completed."
+    if status == "cancelled":
+        return False, "Cancelled visits cannot be marked completed."
+    if count_visit_screenings(queue_id) == 0:
+        return False, "No screening was recorded for this visit yet. Start a diagnosis first."
+    latest = latest_visit_screening(queue_id) or {}
+    sess = str(latest.get("session_status") or "").lower()
+    if sess == "pending":
+        return False, "The screening for this visit is still pending AI/verification. Finish verifying before completing the visit."
+    return True, ""
+
+
+def can_start_screening(patient_id: int, queue_id: Optional[int]) -> tuple[bool, str]:
+    """Doctor guard: a screening must be anchored to an open visit for queueing integrity."""
+    if not queue_id:
+        return False, "No active visit for this patient. Ask the front desk to assign a queue number before diagnosing."
+    v = get_queue_entry(queue_id)
+    if not v:
+        return False, "Visit not found."
+    status = str(v.get("status") or "").strip().lower()
+    if status in ("completed", "cancelled"):
+        return False, f"This visit is {status}; start a new visit before diagnosing."
+    if int(v.get("patient_id") or 0) != int(patient_id):
+        return False, "Visit does not belong to this patient."
+    return True, ""
+
+
+def mark_visit_in_progress(queue_id: int, user_id: int) -> tuple[bool, str]:
+    """Move a waiting visit to in_progress when the doctor opens it."""
+    v = get_queue_entry(queue_id)
+    if not v:
+        return False, "Visit not found."
+    status = str(v.get("status") or "").strip().lower()
+    if status == "in_progress":
+        return True, ""
+    if status != "waiting":
+        return False, f"Cannot move visit to in-progress from status '{status}'."
+    if set_queue_status(queue_id, "in_progress", user_id):
+        return True, ""
+    return False, "Could not update visit status."
+
+
+def count_visits_today_for_patient(patient_id: int) -> int:
+    """How many visits this patient had today (all statuses). Useful for UI hints."""
+    vd = date.today().isoformat()
+    conn = _open_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT COUNT(*) FROM emr_queue_entries WHERE patient_id = ? AND visit_date = ?",
+            (patient_id, vd),
+        )
+        r = cur.fetchone()
+        return int(r[0] or 0) if r else 0
+    finally:
+        conn.close()
