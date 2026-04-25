@@ -75,6 +75,7 @@ class DoctorDiagnosisForm(QWidget):
 
     back_requested = Signal()
     screening_history_requested = Signal(int, int)
+    patient_record_requested = Signal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -370,11 +371,20 @@ class DoctorDiagnosisForm(QWidget):
             if ok:
                 emr.set_queue_status(qid, "completed", int(uid))
 
-        QMessageBox.information(
-            self,
-            "Visit Completed",
-            "Visit is complete. The patient was removed from the queue.",
-        )
+        box = QMessageBox(self)
+        box.setWindowTitle("Visit Completed")
+        box.setIcon(QMessageBox.Icon.Information)
+        box.setText("Visit is complete. The patient was removed from the queue.")
+        view_btn = box.addButton("View Patient Record", QMessageBox.ButtonRole.AcceptRole)
+        back_btn = box.addButton("Back to Queue", QMessageBox.ButtonRole.ActionRole)
+        box.setDefaultButton(view_btn)
+        box.exec()
+
+        if box.clickedButton() == view_btn:
+            code = str((self._emr_patient or {}).get("patient_code") or "").strip()
+            if code:
+                self.patient_record_requested.emit(code)
+                return
         self.back_requested.emit()
 
     def _update_results_focus_mode(self, index: int) -> None:
@@ -536,6 +546,15 @@ class DoctorDiagnosisForm(QWidget):
         except (TypeError, ValueError):
             qid = 0
         vd = {}
+        if not qid:
+            # Fallback: resolve today's active visit for this patient (diagnosis should be visit-scoped).
+            with contextlib.suppress(Exception):
+                pid_pk = int(p.get("patient_id") or 0)
+                if pid_pk:
+                    active = emr.get_today_active_queue_for_patient(pid_pk) or {}
+                    qid = int(active.get("queue_id") or 0)
+                    if qid and not self._queue_entry_id:
+                        self._queue_entry_id = qid
         if qid:
             vd = emr.get_visit_details(qid) or {}
             if vd:
@@ -837,6 +856,14 @@ class DoctorDiagnosisForm(QWidget):
 
     def start_for_patient(self, emr_patient: dict, *, queue_entry_id: int | None = None) -> None:
         self._emr_patient = dict(emr_patient or {})
+        # Ensure we always carry patient_code (used for navigation to Patient Records).
+        if not str(self._emr_patient.get("patient_code") or "").strip():
+            with contextlib.suppress(Exception):
+                pid_pk = int(self._emr_patient.get("patient_id") or 0)
+                if pid_pk:
+                    full = emr.get_patient(pid_pk) or {}
+                    if str(full.get("patient_code") or "").strip():
+                        self._emr_patient["patient_code"] = str(full.get("patient_code") or "").strip()
         self._queue_entry_id = int(queue_entry_id) if queue_entry_id is not None else None
         self._refresh_patient_card()
 

@@ -32,18 +32,28 @@ try:
     from .auth import UserManager
     from .app_paths import PATIENT_RECORDS_DB_PATH
     from .patient_record_groups import group_patient_record_rows
+    from . import emr_service as emr
 except Exception:  # pragma: no cover
     from auth import UserManager
     from app_paths import PATIENT_RECORDS_DB_PATH
     from patient_record_groups import group_patient_record_rows
-
-try:
-    from db import get_records_conn, ensure_patient_records_db_schema
-except Exception:
-    from .db import get_records_conn, ensure_patient_records_db_schema
-
+    import emr_service as emr
 
 DB_FILE = str(PATIENT_RECORDS_DB_PATH)
+
+
+def _queue_id_from_screening_group_id(screening_group_id: str) -> int:
+    """
+    UI record unit = visit group.
+    In the UI this is already represented as screening_group_id = "queue-<qid>".
+    """
+    raw = str(screening_group_id or "").strip()
+    if raw.lower().startswith("queue-"):
+        try:
+            return int(raw.split("-", 1)[1])
+        except (ValueError, TypeError):
+            return 0
+    return 0
 
 
 def _is_truthy_flag(value) -> bool:
@@ -1727,8 +1737,12 @@ class ArchivedRecordsDialog(QDialog):
         self.reload_rows()
 
     def reload_rows(self):
-        self._rows = [r for r in self.reports_page._all_result_rows if r["archived_at"]]
-        self._record_lookup = {r["id"]: r for r in self._rows}
+        # Archived view is visit-level (group) — not per-eye rows.
+        archived_eye_rows = [r for r in self.reports_page._all_result_rows if r.get("archived_at")]
+        grouped = group_patient_record_rows(archived_eye_rows) if archived_eye_rows else []
+        self._rows = list(grouped or [])
+        # Key by visit group id so restore/delete affects whole visit.
+        self._record_lookup = {str(r.get("screening_group_id") or ""): r for r in self._rows}
         self.apply_filters()
 
     def apply_filters(self):
@@ -1748,7 +1762,7 @@ class ArchivedRecordsDialog(QDialog):
             i = self.table.rowCount()
             self.table.insertRow(i)
             item = QTableWidgetItem(str(row["patient_id"] or ""))
-            item.setData(Qt.UserRole, row["id"])
+            item.setData(Qt.UserRole, str(row.get("screening_group_id") or ""))
             item.setTextAlignment(Qt.AlignCenter)
             self.table.setItem(i, 0, item)
             name_item = QTableWidgetItem(str(row["name"] or ""))
@@ -1841,7 +1855,10 @@ class ReportsPage(QWidget):
         self.display_title = self.specialization if _r in ("clinician", "doctor") and self.specialization else self.role
         self.is_admin = self.role == "admin"
         self.is_frontdesk = _r == "frontdesk"
-        self.can_manage_archives = _r in {"admin", "clinician", "doctor"}
+        # Archive controls (doctor POV).
+        # Even in EMR-backed runtime, the Patient Records UI is powered by patient_records.db,
+        # so clinicians/admins still need archive/restore controls for record management.
+        self.can_manage_archives = (_r in {"clinician", "doctor", "admin"}) and not self.is_frontdesk
         self.records_changed_callback = None
         self.archived_records_dialog = None
         self._summary_cache = {}
@@ -2202,25 +2219,16 @@ class ReportsPage(QWidget):
 
     def refresh_report(self):
         try:
-            conn = get_records_conn()
-            ensure_patient_records_db_schema(conn)
-            cur = conn.cursor()
-            cur.execute("""
-                SELECT id, patient_id, name, eyes, screened_at, result, confidence, diabetes_type, hba1c,
-                       ai_classification, doctor_classification, decision_mode, override_justification, final_diagnosis_icdr, doctor_findings,
-                       archived_at, archived_by, archive_reason,
-                       original_screener_username, original_screener_name, screening_group_id
-                FROM patient_records ORDER BY id DESC
-            """)
-            rows = [{"id":r[0],"patient_id":r[1],"name":r[2],"eyes":r[3],"screened_at":r[4],"result":r[5],"confidence":r[6],
-                     "diabetes_type":r[7],"hba1c":r[8],
-                     "ai_classification":r[9],"doctor_classification":r[10],"decision_mode":r[11],"override_justification":r[12],"final_diagnosis_icdr":r[13],"doctor_findings":r[14],
-                     "archived_at":r[15],"archived_by":r[16],"archive_reason":r[17],
-                     "original_screener_username":r[18],"original_screener_name":r[19],"screening_group_id":r[20]}
-                    for r in cur.fetchall()]
+            rows: list[dict] = []
+            for pid in emr.list_patient_ids_with_screenings():
+                rows.extend(emr.list_emr_timeline_records(int(pid)))
+            # Normalize legacy fields expected by the Reports UI.
             for row in rows:
+                row.setdefault("archived_at", None)
+                row.setdefault("archived_by", None)
+                row.setdefault("archive_reason", None)
                 row["result"] = row.get("final_diagnosis_icdr") or row.get("doctor_classification") or row.get("result") or ""
-            conn.close()
+                # Single record unit: visit group (queue-<qid>), not legacy per-eye ids.
         except Exception as err:
             QMessageBox.warning(self, "Reports", f"Failed to load report data: {err}")
             return
@@ -2230,6 +2238,8 @@ class ReportsPage(QWidget):
         if self.archived_records_dialog is not None:
             self.archived_records_dialog.reload_rows()
         self.status_label.setText("")
+
+    # NOTE: Archive state now comes from EMR (visit-level fields on emr_queue_entries).
 
     @staticmethod
     def _eye_sort_key(eye_value: str) -> tuple[int, str]:
@@ -2275,7 +2285,13 @@ class ReportsPage(QWidget):
             owner_name = str(primary.get("original_screener_name") or "").strip()
             owner_username = str(primary.get("original_screener_username") or "").strip()
             screened_by_display = self._format_doctor_label(owner_name or owner_username)
-            record_ids = [int(item.get("id") or 0) for item in source_rows if int(item.get("id") or 0)]
+            # Archive/restore operates on patient_records.db row ids.
+            # For EMR-derived rows, those are stored in `legacy_record_id` when available.
+            record_ids = []
+            for item in source_rows:
+                lid = int(item.get("legacy_record_id") or 0)
+                if lid > 0:
+                    record_ids.append(lid)
             selection_key = str(grouped_row.get("screening_group_id") or f"record-{grouped_row.get('id')}")
             date_text = self._format_screening_datetime(grouped_row.get("screened_at"))
             eye_summary = str(grouped_row.get("eye_summary") or grouped_row.get("eyes") or "—")
@@ -2365,6 +2381,38 @@ class ReportsPage(QWidget):
         self._update_summary_cards(filtered)
         self._render_results_table()
 
+    def focus_patient_record(self, patient_id: str, *, open_overview: bool = True) -> None:
+        """
+        Focus a patient in the Patient Records list and optionally open the inline overview.
+
+        Used by EMR diagnosis flow so clinicians can continue actions (referral/archive/report).
+        """
+        pid = str(patient_id or "").strip()
+        if not pid:
+            return
+        if hasattr(self, "search_input"):
+            self.search_input.setText(pid)
+        else:
+            self.refresh_report()
+            self.apply_filters()
+
+        # Select the first matching row (if any).
+        row_index = 0 if hasattr(self, "_filtered_rows") and self._filtered_rows else -1
+        if row_index >= 0 and hasattr(self, "results_table"):
+            try:
+                self.results_table.setCurrentCell(row_index, 0)
+                self.results_table.selectRow(row_index)
+            except Exception:
+                pass
+        if not open_overview:
+            return
+        record = self._get_selected_record()
+        if not record:
+            return
+        timeline = self._fetch_patient_timeline_records(str(record.get("patient_id") or ""))
+        if timeline:
+            self._show_patient_overview(record, timeline)
+
     def _render_results_table(self):
         self.results_table.setSortingEnabled(False)
         self.results_table.setRowCount(0)
@@ -2439,8 +2487,8 @@ class ReportsPage(QWidget):
         return self._is_record_owner(record)
 
     def _can_archive_record(self, record: dict | None) -> bool:
-        # Doctors can archive any record, others only their own
-        if str(self.role or "").lower() == "doctor":
+        # Allow all doctors/clinicians/admins to archive any record.
+        if str(self.role or "").strip().lower() in {"doctor", "clinician", "admin"}:
             return bool(record)
         return self._is_record_owner(record)
 
@@ -2652,94 +2700,19 @@ class ReportsPage(QWidget):
             return []
 
         try:
-            conn = sqlite3.connect(DB_FILE)
-            cur = conn.cursor()
-            cur.execute(
-                """
-                SELECT id, patient_id, name, birthdate, age, sex, contact, phone, address, eyes,
-                       diabetes_type, duration, hba1c, prev_treatment, notes,
-                       result, confidence, screened_at, archived_at, archived_by,
-                       archive_reason, original_screener_username, original_screener_name,
-                       ai_classification, doctor_classification, decision_mode, override_justification, final_diagnosis_icdr, doctor_findings,
-                       height, weight, bmi, visual_acuity_left, visual_acuity_right,
-                       blood_pressure_systolic, blood_pressure_diastolic,
-                       fasting_blood_sugar, random_blood_sugar,
-                       diabetes_diagnosis_date, treatment_regimen, prev_dr_stage,
-                       symptom_blurred_vision, symptom_floaters, symptom_flashes, symptom_vision_loss,
-                       source_image_path, heatmap_image_path,
-                       follow_up, followup_date, followup_label, screening_type, previous_screening_id, screening_group_id
-                FROM patient_records
-                WHERE patient_id = ? AND archived_at IS NULL
-                ORDER BY screened_at ASC, id ASC
-                """,
-                (patient_id,),
-            )
-            rows = cur.fetchall()
-            conn.close()
+            p = emr.get_patient_by_code(patient_id) or {}
+            pid_pk = int(p.get("patient_id") or 0)
+            if not pid_pk:
+                return []
+            timeline = emr.list_emr_timeline_records(pid_pk)
+            for row in timeline:
+                row.setdefault("archived_at", None)
+                row.setdefault("archived_by", None)
+                row.setdefault("archive_reason", None)
+            return group_patient_record_rows(timeline)
         except Exception as err:
             QMessageBox.warning(self, "Patient Timeline", f"Failed to load patient history: {err}")
             return []
-
-        timeline = []
-        for row in rows:
-            timeline.append(
-                {
-                    "id": row[0],
-                    "patient_id": row[1],
-                    "name": row[2],
-                    "birthdate": row[3],
-                    "age": row[4],
-                    "sex": row[5],
-                    "contact": row[6],
-                    "phone": row[7],
-                    "address": row[8],
-                    "eyes": row[9],
-                    "diabetes_type": row[10],
-                    "duration": row[11],
-                    "hba1c": row[12],
-                    "prev_treatment": row[13],
-                    "notes": row[14],
-                    "result": row[15],
-                    "confidence": row[16],
-                    "screened_at": row[17],
-                    "archived_at": row[18],
-                    "archived_by": row[19],
-                    "archive_reason": row[20],
-                    "original_screener_username": row[21],
-                    "original_screener_name": row[22],
-                    "ai_classification": row[23],
-                    "doctor_classification": row[24],
-                    "decision_mode": row[25],
-                    "override_justification": row[26],
-                    "final_diagnosis_icdr": row[27],
-                    "doctor_findings": row[28],
-                    "height": row[29],
-                    "weight": row[30],
-                    "bmi": row[31],
-                    "visual_acuity_left": row[32],
-                    "visual_acuity_right": row[33],
-                    "blood_pressure_systolic": row[34],
-                    "blood_pressure_diastolic": row[35],
-                    "fasting_blood_sugar": row[36],
-                    "random_blood_sugar": row[37],
-                    "diabetes_diagnosis_date": row[38],
-                    "treatment_regimen": row[39],
-                    "prev_dr_stage": row[40],
-                    "symptom_blurred_vision": row[41],
-                    "symptom_floaters": row[42],
-                    "symptom_flashes": row[43],
-                    "symptom_vision_loss": row[44],
-                    "source_image_path": row[45],
-                    "heatmap_image_path": row[46],
-                    "follow_up": row[47],
-                    "followup_date": row[48],
-                    "followup_label": row[49],
-                    "screening_type": row[50],
-                    "previous_screening_id": row[51],
-                    "screening_group_id": row[52],
-                }
-            )
-        return group_patient_record_rows(timeline)
 
     def _start_follow_up_from_timeline(self, record: dict):
         if not record:
@@ -2843,80 +2816,8 @@ class ReportsPage(QWidget):
 
     def _fetch_full_patient_record(self, record_id: int) -> dict:
         """Fetch complete patient record from database."""
-        try:
-            conn = sqlite3.connect(DB_FILE)
-            cur = conn.cursor()
-            cur.execute("""
-                SELECT id, patient_id, name, birthdate, age, sex, contact, phone, address, eyes, 
-                       diabetes_type, duration, hba1c, prev_treatment, notes, 
-                       result, confidence, screened_at, archived_at, archived_by, 
-                       archive_reason, original_screener_username, original_screener_name,
-                       ai_classification, doctor_classification, decision_mode, override_justification, final_diagnosis_icdr, doctor_findings,
-                       height, weight, bmi, visual_acuity_left, visual_acuity_right,
-                       blood_pressure_systolic, blood_pressure_diastolic,
-                       fasting_blood_sugar, random_blood_sugar,
-                       diabetes_diagnosis_date, treatment_regimen, prev_dr_stage,
-                       symptom_blurred_vision, symptom_floaters, symptom_flashes,
-                       symptom_vision_loss
-                FROM patient_records
-                WHERE id = ?
-            """, (record_id,))
-            row = cur.fetchone()
-            conn.close()
-            
-            if not row:
-                return None
-            
-            return {
-                "id": row[0],
-                "patient_id": row[1],
-                "name": row[2],
-                "birthdate": row[3],
-                "age": row[4],
-                "sex": row[5],
-                "contact": row[6],
-                "phone": row[7],
-                "address": row[8],
-                "eyes": row[9],
-                "diabetes_type": row[10],
-                "duration": row[11],
-                "hba1c": row[12],
-                "prev_treatment": row[13],
-                "notes": row[14],
-                "result": row[15],
-                "confidence": row[16],
-                "screened_at": row[17],
-                "archived_at": row[18],
-                "archived_by": row[19],
-                "archive_reason": row[20],
-                "original_screener_username": row[21],
-                "original_screener_name": row[22],
-                "ai_classification": row[23],
-                "doctor_classification": row[24],
-                "decision_mode": row[25],
-                "override_justification": row[26],
-                "final_diagnosis_icdr": row[27],
-                "doctor_findings": row[28],
-                "height": row[29],
-                "weight": row[30],
-                "bmi": row[31],
-                "visual_acuity_left": row[32],
-                "visual_acuity_right": row[33],
-                "blood_pressure_systolic": row[34],
-                "blood_pressure_diastolic": row[35],
-                "fasting_blood_sugar": row[36],
-                "random_blood_sugar": row[37],
-                "diabetes_diagnosis_date": row[38],
-                "treatment_regimen": row[39],
-                "prev_dr_stage": row[40],
-                "symptom_blurred_vision": row[41],
-                "symptom_floaters": row[42],
-                "symptom_flashes": row[43],
-                "symptom_vision_loss": row[44],
-            }
-        except Exception as err:
-            print(f"Error fetching patient record: {err}")
-            return None
+        record = self._record_lookup.get(int(record_id) or 0)
+        return dict(record) if record else None
 
     def open_archived_records_window(self):
         self.refresh_report()
@@ -2947,7 +2848,13 @@ class ReportsPage(QWidget):
         if QMessageBox.question(self, "Archive Record", f"Archive {label}?",
                                 QMessageBox.StandardButton.Yes|QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
             return
-        if not self._set_records_archive_state(record.get("record_ids") or [record["id"]], archived=True):
+        group_id = str(record.get("screening_group_id") or "").strip()
+        qid = _queue_id_from_screening_group_id(group_id)
+        if qid <= 0:
+            QMessageBox.warning(self, "Archive Record", "Unable to determine visit ID for this record.")
+            return
+        actor_user_id = emr.get_user_id(self.username or "")
+        if not emr.archive_visit(qid, True, actor_user_id, reason=None):
             QMessageBox.warning(self, "Archive Record", "Unable to archive the selected patient record.")
             return
         self.refresh_report()
@@ -3020,7 +2927,7 @@ class ReportsPage(QWidget):
 
 
     def restore_record(self, record):
-        if not record or not record["archived_at"]:
+        if not record or not record.get("archived_at"):
             QMessageBox.information(self, "Restore Record", "The selected patient record is already active.")
             return False
         if not self._can_archive_record(record):
@@ -3035,90 +2942,33 @@ class ReportsPage(QWidget):
         if QMessageBox.question(self, "Restore Record", f"Restore {label}?",
                                 QMessageBox.StandardButton.Yes|QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
             return False
-        if not self._set_record_archive_state(record["id"], archived=False):
+        group_id = str(record.get("screening_group_id") or "").strip()
+        qid = _queue_id_from_screening_group_id(group_id)
+        if qid <= 0:
+            QMessageBox.warning(self, "Restore Record", "Unable to determine visit ID for this record.")
+            return False
+        actor_user_id = emr.get_user_id(self.username or "")
+        if not emr.archive_visit(qid, False, actor_user_id, reason=None):
             QMessageBox.warning(self, "Restore Record", "Unable to restore the selected patient record.")
             return False
         return True
 
     def delete_archived_record(self, record):
-        if not record or not record["archived_at"]:
+        if not record or not record.get("archived_at"):
             return False
         if not self._can_archive_record(record):
             return False
-        try:
-            conn = sqlite3.connect(DB_FILE)
-            cur = conn.cursor()
-            cur.execute(
-                """
-                SELECT original_screener_username, original_screener_name
-                FROM patient_records
-                WHERE id = ? AND archived_at IS NOT NULL
-                """,
-                (record["id"],),
-            )
-            owner_row = cur.fetchone()
-            owner_record = {
-                "original_screener_username": owner_row[0] if owner_row else "",
-                "original_screener_name": owner_row[1] if owner_row else "",
-            }
-            if not self._is_record_owner(owner_record):
-                conn.close()
-                return False
-
-            cur.execute("DELETE FROM patient_records WHERE id=? AND archived_at IS NOT NULL", (record["id"],))
-            conn.commit()
-            success = cur.rowcount > 0
-            conn.close()
-        except Exception:
+        group_id = str(record.get("screening_group_id") or "").strip()
+        qid = _queue_id_from_screening_group_id(group_id)
+        if qid <= 0:
             return False
+        actor_user_id = emr.get_user_id(self.username or "")
+        success = bool(emr.delete_visit(qid, actor_user_id))
         if success and callable(self.records_changed_callback):
             self.records_changed_callback()
         return success
 
-    def _set_record_archive_state(self, record_id, archived: bool) -> bool:
-        return self._set_records_archive_state([record_id], archived=archived)
-
-    def _set_records_archive_state(self, record_ids, archived: bool) -> bool:
-        actor_name = self.display_name or os.environ.get("EYESHIELD_CURRENT_NAME", "") or self.username
-        actor_title = self.display_title or os.environ.get("EYESHIELD_CURRENT_TITLE", "")
-        actor = f"{actor_name} ({actor_title})" if actor_name and actor_title else actor_name
-        valid_ids = [int(record_id) for record_id in record_ids if int(record_id)]
-        if not valid_ids:
-            return False
-        try:
-            conn = sqlite3.connect(DB_FILE)
-            cur = conn.cursor()
-            placeholders = ",".join("?" for _ in valid_ids)
-            cur.execute(
-                f"SELECT id, patient_id FROM patient_records WHERE id IN ({placeholders})",
-                valid_ids,
-            )
-            affected_rows = cur.fetchall()
-            if archived:
-                cur.execute(
-                    f"UPDATE patient_records SET archived_at=?,archived_by=?,archive_reason=? WHERE id IN ({placeholders})",
-                    [datetime.now().strftime("%Y-%m-%d %H:%M:%S"), actor, None, *valid_ids],
-                )
-            else:
-                cur.execute(
-                    f"UPDATE patient_records SET archived_at=NULL,archived_by=NULL,archive_reason=NULL WHERE id IN ({placeholders})",
-                    valid_ids,
-                )
-            conn.commit()
-            success = cur.rowcount > 0
-            conn.close()
-        except Exception:
-            return False
-        if success and callable(self.records_changed_callback):
-            self.records_changed_callback()
-        if success:
-            event = "RECORD_ARCHIVED" if archived else "RECORD_RESTORED"
-            for rec_id, patient_id in affected_rows:
-                UserManager.add_activity_log(
-                    self.username,
-                    f"{event} patient_id={patient_id}; record_id={rec_id}",
-                )
-        return success
+    # Legacy archive helpers removed: archive state is stored on EMR visits (emr_queue_entries).
 
     @staticmethod
     def _is_high_attention_result(result_text):
@@ -3176,47 +3026,19 @@ class ReportsPage(QWidget):
     # ── Report generation ──────────────────────────────────────────────────────
 
     def _fetch_full_record(self, record_id: int) -> "dict | None":
-        try:
-            conn = sqlite3.connect(DB_FILE)
-            cur = conn.cursor()
-            cur.execute("""
-                SELECT id, patient_id, name, birthdate, age, sex, contact, phone, address, eyes,
-                      diabetes_type, duration, hba1c, prev_treatment, notes,
-                      result, confidence, screened_at,
-                      ai_classification, doctor_classification, decision_mode, override_justification, final_diagnosis_icdr, doctor_findings,
-                       visual_acuity_left, visual_acuity_right,
-                       blood_pressure_systolic, blood_pressure_diastolic,
-                       fasting_blood_sugar, random_blood_sugar,
-                       symptom_blurred_vision, symptom_floaters,
-                      symptom_flashes, symptom_vision_loss,
-                      source_image_path, heatmap_image_path,
-                      image_sha256, image_saved_at,
-                      original_screener_username, original_screener_name, screening_group_id
-                FROM patient_records WHERE id=?
-            """, (record_id,))
-            row = cur.fetchone()
-            conn.close()
-            if not row:
-                return None
-            return {
-                "id":row[0],"patient_id":row[1],"name":row[2],"birthdate":row[3],
-                "age":row[4],"sex":row[5],"contact":row[6],"phone":row[7],"address":row[8],"eyes":row[9],
-                "diabetes_type":row[10],"duration":row[11],"hba1c":row[12],
-                "prev_treatment":row[13],"notes":row[14],"result":row[15],"confidence":row[16],"screened_at":row[17],
-                "ai_classification":row[18],"doctor_classification":row[19],"decision_mode":row[20],
-                "override_justification":row[21],"final_diagnosis_icdr":row[22],"doctor_findings":row[23],
-                "va_left":row[24],"va_right":row[25],
-                "bp_systolic":row[26],"bp_diastolic":row[27],
-                "fbs":row[28],"rbs":row[29],
-                "symptom_blurred":row[30],"symptom_floaters":row[31],
-                "symptom_flashes":row[32],"symptom_vision_loss":row[33],
-                "source_image_path":row[34],"heatmap_image_path":row[35],
-                "image_sha256":row[36],"image_saved_at":row[37],
-                "original_screener_username":row[38],"original_screener_name":row[39],
-                "screening_group_id":row[40],
-            }
-        except Exception:
+        rec = self._record_lookup.get(int(record_id) or 0)
+        if not rec:
             return None
+        out = dict(rec)
+        # Legacy report template expects these aliases.
+        out["va_left"] = out.get("visual_acuity_left")
+        out["va_right"] = out.get("visual_acuity_right")
+        out["bp_systolic"] = out.get("blood_pressure_systolic")
+        out["bp_diastolic"] = out.get("blood_pressure_diastolic")
+        out["fbs"] = out.get("fasting_blood_sugar")
+        out["rbs"] = out.get("random_blood_sugar")
+        out["symptom_blurred"] = out.get("symptom_blurred_vision")
+        return out
 
     def _fetch_report_eye_records(self, patient_id: str, screened_at: str, fallback_record_id: int, screening_group_id: str = "") -> list[dict]:
         def eye_sort_key(record: dict) -> tuple[int, str]:
@@ -3232,52 +3054,26 @@ class ReportsPage(QWidget):
         if not patient_id:
             single = self._fetch_full_record(fallback_record_id)
             return [single] if single else []
-
+        records: list[dict] = []
         try:
-            conn = sqlite3.connect(DB_FILE)
-            cur = conn.cursor()
             if screening_group_id:
-                cur.execute(
-                    """
-                    SELECT id
-                    FROM patient_records
-                    WHERE screening_group_id = ?
-                    ORDER BY id ASC
-                    """,
-                    (screening_group_id,),
-                )
+                records = [
+                    dict(r)
+                    for r in self._all_result_rows
+                    if str(r.get("screening_group_id") or "").strip() == str(screening_group_id).strip()
+                ]
             elif screened_at:
-                cur.execute(
-                    """
-                    SELECT id
-                    FROM patient_records
-                    WHERE patient_id = ? AND screened_at = ?
-                    ORDER BY id ASC
-                    """,
-                    (patient_id, screened_at),
-                )
+                records = [
+                    dict(r)
+                    for r in self._all_result_rows
+                    if str(r.get("patient_id") or "").strip() == patient_id and str(r.get("screened_at") or "").strip() == screened_at
+                ]
             else:
-                cur.execute(
-                    """
-                    SELECT id
-                    FROM patient_records
-                    WHERE patient_id = ?
-                    ORDER BY id DESC
-                    LIMIT 2
-                    """,
-                    (patient_id,),
-                )
-            rows = cur.fetchall()
-            conn.close()
+                records = [dict(r) for r in self._all_result_rows if str(r.get("patient_id") or "").strip() == patient_id]
+                records.sort(key=lambda r: _timeline_sort_key(r), reverse=True)
+                records = records[:2]
         except Exception:
-            rows = []
-
-        records = []
-        for row in rows:
-            full_record = self._fetch_full_record(int(row[0]))
-            if full_record:
-                records.append(full_record)
-
+            records = []
         if not records:
             single = self._fetch_full_record(fallback_record_id)
             records = [single] if single else []

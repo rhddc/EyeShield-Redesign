@@ -5,6 +5,7 @@ Contains the ResultsWindow class and clinical explanation generation.
 
 from datetime import datetime
 from html import escape
+import contextlib
 import json
 import os
 from pathlib import Path
@@ -1605,8 +1606,7 @@ class ResultsWindow(QWidget):
         current_eye = str(pp.p_eye.currentText() or "").strip() if hasattr(pp, "p_eye") else ""
         opposite_eye = "Left Eye" if current_eye == "Right Eye" else "Right Eye"
 
-        first_eye_context = getattr(pp, "_first_eye_result", None)
-        is_second_eye_flow = bool(first_eye_context) and bool(getattr(first_eye_context, "get", lambda *_: False)("_is_second_eye"))
+        is_second_eye_flow = bool(getattr(pp, "_is_second_eye_flow", False))
 
         go_screen_other_after_save = False
         if not is_second_eye_flow:
@@ -1643,6 +1643,23 @@ class ResultsWindow(QWidget):
             saved_path = str(result.get("path") or "")
             details = f"Saved ✓ {saved_path}" if saved_path else "Saved ✓"
             self._set_save_state("success", details)
+
+            # Second-eye save should FINISH the bilateral session without navigating away.
+            # Do not bounce back to diagnosis/intake. Just confirm completion and stay on results.
+            # Second-eye completion detection:
+            # - `_is_second_eye_flow` is set when the user taps "Screen Other Eye"
+            # - `_second_eye_result` is set by `save_screening()` when the other eye is saved
+            if is_second_eye_flow or bool(getattr(pp, "_second_eye_result", None)):
+                QMessageBox.information(
+                    self,
+                    "Session Completed",
+                    "Both eyes have been successfully screened and saved.",
+                )
+                # Mark bilateral flow as completed for this session.
+                with contextlib.suppress(Exception):
+                    pp._is_second_eye_flow = False
+                return
+
             # If user opted to screen the other eye, switch back to the upload/intake view
             # and auto-select the opposite eye.
             if go_screen_other_after_save and hasattr(pp, "screen_other_eye"):

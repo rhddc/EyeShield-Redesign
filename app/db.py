@@ -118,7 +118,10 @@ def ensure_patient_records_db() -> tuple[bool, str]:
         return False, f"Cannot open patient_records.db: {err}"
     try:
         ensure_patient_records_db_schema(conn)
-        _seed_mock_patient_records_if_empty(conn)
+        # Demo/seed data must never be inserted implicitly during normal app use.
+        # Enable explicitly when needed for demos: set EYESHIELD_ENABLE_LEGACY_SEED=1.
+        if str(__import__("os").environ.get("EYESHIELD_ENABLE_LEGACY_SEED", "")).strip() == "1":
+            _seed_mock_patient_records_if_empty(conn)
         return True, ""
     except sqlite3.Error as err:
         return False, f"patient_records.db schema migration failed: {err}"

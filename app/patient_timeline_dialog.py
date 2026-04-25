@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
 
 _APP_ROOT  = Path(__file__).resolve().parent
 _ICONS_DIR = _APP_ROOT / "icons"
+_REPO_ROOT = _APP_ROOT.parent
 
 _SEVERITY_RANK = {
     "No DR": 0, "Mild DR": 1, "Moderate DR": 2,
@@ -89,13 +90,44 @@ def _parse_conf(text: str) -> tuple[float | None, float | None]:
     return conf, unc
 
 
+def _compute_age_years(dob_value: str) -> str:
+    dob = str(dob_value or "").strip()[:10]
+    if not dob:
+        return "-"
+    for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%d/%m/%Y"):
+        try:
+            born = datetime.strptime(dob, fmt).date()
+            break
+        except ValueError:
+            born = None
+    if born is None:
+        return "-"
+    today = datetime.now().date()
+    age = today.year - born.year - ((today.month, today.day) < (born.month, born.day))
+    return str(max(age, 0))
+
+
 def _resolve_path(v: str) -> str:
     raw = str(v or "").strip()
     if not raw: return ""
     p = Path(raw)
     if p.is_absolute() and p.exists(): return str(p)
-    c = (_APP_ROOT / raw).resolve()
-    return str(c) if c.exists() else ""
+    # Support both repo-root-relative and app-root-relative storage.
+    # Examples we need to handle:
+    # - "uploads/fundus/..../img.jpg"           (relative to app/)
+    # - "app/uploads/fundus/..../img.jpg"       (relative to repo root)
+    # - "results/..." or other repo assets
+    candidates = [
+        (_APP_ROOT / raw).resolve(),
+        (_REPO_ROOT / raw).resolve(),
+    ]
+    # If caller already includes "app/..." but we joined to app root, try stripping.
+    if raw.replace("\\", "/").lower().startswith("app/"):
+        candidates.append((_APP_ROOT / raw.split("/", 1)[1]).resolve())
+    for c in candidates:
+        if c.exists():
+            return str(c)
+    return ""
 
 
 def _opt(v, suffix: str = "") -> str:
@@ -184,7 +216,7 @@ class PatientTimelineDialog(QWidget):
             "QPushButton{background:#f1f5f9;border:none;border-radius:8px;"
             "color:#374151;font-size:12px;font-weight:600;}"
             "QPushButton:hover{background:#e2e8f0;}")
-        back.clicked.connect(self.back_requested.emit)
+        back.clicked.connect(self._confirm_back_to_list)
         row.addWidget(back, 0, Qt.AlignVCenter)
 
         # Avatar
@@ -217,6 +249,17 @@ class PatientTimelineDialog(QWidget):
         row.addWidget(self.risk_chip)
         row.addWidget(self.total_chip)
         return card
+
+    def _confirm_back_to_list(self) -> None:
+        confirm = QMessageBox.question(
+            self,
+            "Return",
+            "Are you sure you want to go back to the list?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if confirm == QMessageBox.StandardButton.Yes:
+            self.back_requested.emit()
 
     def _chip(self, title: str, value: str, sub: str, color: str) -> QWidget:
         frame = QFrame()
@@ -553,6 +596,8 @@ class PatientTimelineDialog(QWidget):
             ("phone",      "Phone Number"),
             ("address",    "Address"),
             ("eyes",       "Eye Screened"),
+            ("screened_by","Screened By"),
+            ("doctor",    "Doctor"),
             ("height",     "Height"),
             ("weight",     "Weight"),
             ("bmi",        "BMI"),
@@ -839,10 +884,27 @@ class PatientTimelineDialog(QWidget):
         # that specific record (screening date). patient_summary is a convenience snapshot
         # and should only be used as a fallback.
         name    = str(record.get("name")        or ps.get("name")        or "Unknown").strip()
-        pid     = str(record.get("patient_id")  or ps.get("patient_id")  or "-")
+        # Patient identifier differs across data sources:
+        # - legacy: patient_id (string code)
+        # - EMR: patient_code (human-readable) + patient_id (integer)
+        pid = str(
+            record.get("patient_code")
+            or ps.get("patient_code")
+            or record.get("patient_id")
+            or ps.get("patient_id")
+            or "-"
+        )
         age     = str(record.get("age")         or ps.get("age")         or "-")
         sex     = str(record.get("sex")         or ps.get("sex")         or "-")
         dm_type = str(record.get("diabetes_type") or ps.get("diabetes_type") or "-")
+        if age in {"", "-", "None"}:
+            age = _compute_age_years(
+                record.get("date_of_birth")
+                or record.get("birthdate")
+                or ps.get("date_of_birth")
+                or ps.get("birthdate")
+                or ""
+            )
 
         self.name_lbl.setText(name)
         self.meta_lbl.setText(f"ID {pid}")
@@ -892,45 +954,144 @@ class PatientTimelineDialog(QWidget):
         # Patient info
         self._si("name",       name)
         self._si("patient_id", pid)
-        self._si("birthdate",  _opt(record.get("birthdate") or ps.get("birthdate")))
+        self._si(
+            "birthdate",
+            _opt(
+                record.get("date_of_birth")
+                or record.get("birthdate")
+                or ps.get("date_of_birth")
+                or ps.get("birthdate")
+            ),
+        )
         self._si("age",        f"{age} years" if age != "-" else "-")
         self._si("sex",        sex)
-        self._si("contact",    _opt(record.get("contact") or ps.get("contact")))
-        self._si("phone",      _opt(record.get("phone") or ps.get("phone") or record.get("contact") or ps.get("contact")))
+        # Contact fields differ across data sources.
+        contact = (
+            record.get("contact_number")
+            or record.get("contact")
+            or ps.get("contact_number")
+            or ps.get("contact")
+        )
+        self._si("contact", _opt(contact))
+        self._si(
+            "phone",
+            _opt(
+                record.get("phone")
+                or ps.get("phone")
+                or contact
+            ),
+        )
         self._si("address",    _opt(record.get("address") or ps.get("address")))
         self._si("eyes",       eye_summary_text)
-        h = record.get("height") or ps.get("height")
-        w2 = record.get("weight") or ps.get("weight")
-        bmi = record.get("bmi") or ps.get("bmi")
-        self._si("height", f"{h} cm" if h else "-")
-        self._si("weight", f"{w2} kg" if w2 else "-")
+
+        # Attribution (who captured vs who finalized). Best-effort: may be empty for older rows.
+        screened_by = str(
+            detail_record.get("original_screener_name")
+            or detail_record.get("original_screener_username")
+            or record.get("original_screener_name")
+            or record.get("original_screener_username")
+            or "-"
+        ).strip() or "-"
+        doctor = str(
+            detail_record.get("decision_by_username")
+            or record.get("decision_by_username")
+            or "-"
+        ).strip() or "-"
+        if doctor.lower() in {"emr", "system", "auto"}:
+            doctor = "-"
+        self._si("screened_by", screened_by)
+        self._si("doctor", doctor)
+
+        # Support both legacy keys (height/weight/bmi) and EMR keys (height_cm/weight_kg).
+        h = record.get("height_cm")
+        if h is None:
+            h = record.get("height")
+        if h is None:
+            h = ps.get("height_cm")
+        if h is None:
+            h = ps.get("height")
+
+        w2 = record.get("weight_kg")
+        if w2 is None:
+            w2 = record.get("weight")
+        if w2 is None:
+            w2 = ps.get("weight_kg")
+        if w2 is None:
+            w2 = ps.get("weight")
+
+        bmi = record.get("bmi")
+        if bmi is None:
+            bmi = ps.get("bmi")
+        # Compute BMI if missing but we have height+weight.
+        if (bmi is None or str(bmi).strip() in {"", "-", "None"}) and h and w2:
+            try:
+                h_m = float(h) / 100.0
+                w_kg = float(w2)
+                if h_m > 0 and w_kg > 0:
+                    bmi = f"{(w_kg / (h_m * h_m)):.1f}"
+            except (TypeError, ValueError, ZeroDivisionError):
+                pass
+
+        def _fmt_num(val) -> str:
+            try:
+                f = float(val)
+                if f <= 0:
+                    return ""
+                return f"{f:.1f}".rstrip("0").rstrip(".")
+            except (TypeError, ValueError):
+                t = str(val or "").strip()
+                return t
+
+        h_txt = _fmt_num(h)
+        w_txt = _fmt_num(w2)
+        self._si("height", f"{h_txt} cm" if h_txt else "-")
+        self._si("weight", f"{w_txt} kg" if w_txt else "-")
         self._si("bmi",    _opt(bmi))
 
         # Vitals & Symptoms removed from Patient Overview UI.
 
         # Clinical history
-        dur   = str(record.get("duration") or "").strip()
+        dur = str(
+            record.get("duration")
+            or record.get("dm_duration_years")
+            or ps.get("duration")
+            or ps.get("dm_duration_years")
+            or ""
+        ).strip()
         ddate = str(record.get("diabetes_diagnosis_date") or "").strip()
         hist  = " | ".join(p for p in [
             f"Duration: {dur}" if dur else "",
             f"Diagnosed: {ddate}" if ddate else "",
         ] if p) or "-"
 
-        self._sh("diabetes_type",     _opt(record.get("diabetes_type")))
+        self._sh("diabetes_type",     _opt(record.get("diabetes_type") or ps.get("diabetes_type")))
         self._sh("history",           hist)
-        self._sh("hba1c",             _opt(record.get("hba1c")))
-        self._sh("treatment_regimen", _opt(record.get("treatment_regimen")))
-        self._sh("prev_treatment",    _opt(record.get("prev_treatment")))
-        self._sh("prev_dr_stage",     _opt(record.get("prev_dr_stage")))
+        self._sh("hba1c",             _opt(record.get("hba1c") or ps.get("hba1c")))
+        self._sh("treatment_regimen", _opt(record.get("treatment_regimen") or ps.get("treatment_regimen") or record.get("current_medications") or ps.get("current_medications")))
+        self._sh("prev_treatment",    _opt(record.get("prev_treatment") or ps.get("prev_treatment") or record.get("previous_eye_treatment") or ps.get("previous_eye_treatment")))
+        self._sh("prev_dr_stage",     _opt(record.get("prev_dr_stage") or ps.get("prev_dr_stage")))
 
         # Images — defer so the widget has been laid out and has a real size
         QTimer.singleShot(50, lambda rec=dict(detail_record): self._load_images(rec))
 
     def _load_images(self, record: dict):
+        # Support legacy keys and EMR keys.
+        source = (
+            record.get("source_image_path")
+            or record.get("fundus_image_path")
+            or record.get("image_path")
+            or ""
+        )
+        heat = (
+            record.get("heatmap_image_path")
+            or record.get("gradcam_image_path")
+            or record.get("heatmap_path")
+            or ""
+        )
         self._set_img(self.source_panel[1],
-                      record.get("source_image_path"), "No fundus image")
+                      source, "No fundus image")
         self._set_img(self.heatmap_panel[1],
-                      record.get("heatmap_image_path"), "No heatmap image")
+                      heat, "No heatmap image")
 
     def _set_active_eye_record(self, group_record: dict, eye_key: str) -> None:
         eye_details = list(group_record.get("eye_details") or [])

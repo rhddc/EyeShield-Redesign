@@ -480,6 +480,9 @@ class UserManager:
                 assigned_by     INTEGER NOT NULL REFERENCES users(id),
                 screening_purpose   TEXT NOT NULL DEFAULT 'new'
                     CHECK (screening_purpose IN ('new', 'follow_up')),
+                archived_at     TEXT,
+                archived_by     INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                archive_reason  TEXT,
                 notes           TEXT,
                 created_at      TEXT NOT NULL DEFAULT (datetime('now')),
                 updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
@@ -590,6 +593,12 @@ class UserManager:
                 cur.execute(
                     "ALTER TABLE emr_queue_entries ADD COLUMN screening_purpose TEXT NOT NULL DEFAULT 'new'"
                 )
+            if "archived_at" not in cols:
+                cur.execute("ALTER TABLE emr_queue_entries ADD COLUMN archived_at TEXT")
+            if "archived_by" not in cols:
+                cur.execute("ALTER TABLE emr_queue_entries ADD COLUMN archived_by INTEGER")
+            if "archive_reason" not in cols:
+                cur.execute("ALTER TABLE emr_queue_entries ADD COLUMN archive_reason TEXT")
         with contextlib.suppress(sqlite3.OperationalError):
             cur.execute("PRAGMA table_info(emr_action_logs)")
             _emr_log_cols = {row[1] for row in cur.fetchall()}
@@ -615,6 +624,35 @@ class UserManager:
                     SET bmi = ROUND(NEW.weight_kg / ((NEW.height_cm / 100.0) * (NEW.height_cm / 100.0)), 2)
                     WHERE patient_id = NEW.patient_id;
                 END;
+                """
+            )
+
+        # -------------------------------------------------------------------
+        # Integrity constraints (enforced via UNIQUE indexes; SQLite-friendly)
+        # -------------------------------------------------------------------
+        # These enforce the "real flow" invariants at the database level:
+        # - One active visit per patient per day (waiting/in_progress only)
+        # - No duplicate queue numbers per day
+        # - No duplicate patient identity rows by (first,last,dob) after normalization
+        with contextlib.suppress(sqlite3.OperationalError, sqlite3.IntegrityError):
+            cur.executescript(
+                """
+                -- Prevent two open visits for the same patient on the same day.
+                CREATE UNIQUE INDEX IF NOT EXISTS uq_emr_queue_one_active_visit_per_day
+                ON emr_queue_entries(patient_id, visit_date)
+                WHERE status IN ('waiting', 'in_progress');
+
+                -- Prevent duplicate queue numbers for a given day.
+                CREATE UNIQUE INDEX IF NOT EXISTS uq_emr_queue_number_per_day
+                ON emr_queue_entries(visit_date, queue_number);
+
+                -- Prevent duplicate patient identity rows (case/whitespace-insensitive).
+                CREATE UNIQUE INDEX IF NOT EXISTS uq_emr_patient_identity
+                ON emr_patients(
+                    lower(trim(first_name)),
+                    lower(trim(last_name)),
+                    date_of_birth
+                );
                 """
             )
 

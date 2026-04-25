@@ -93,6 +93,35 @@ def get_user_id(username: str) -> Optional[int]:
         conn.close()
 
 
+def get_user_label(user_id: Optional[int]) -> tuple[str, str]:
+    """
+    Return (username, display_label) for a user id.
+
+    display_label prefers display_name, then full_name, then username.
+    """
+    if not user_id:
+        return "", ""
+    conn = _open_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT username, display_name, full_name, is_active FROM users WHERE id = ?",
+            (int(user_id),),
+        )
+        row = cur.fetchone()
+        if not row:
+            return "", ""
+        if int(row[3] or 0) != 1:
+            return "", ""
+        username = str(row[0] or "").strip()
+        display = str(row[1] or "").strip() or str(row[2] or "").strip() or username
+        return username, display
+    except sqlite3.Error:
+        return "", ""
+    finally:
+        conn.close()
+
+
 def log_emr_action(
     user_id: Optional[int],
     action: str,
@@ -147,15 +176,46 @@ def next_patient_code() -> str:
     conn = _open_conn()
     try:
         cur = conn.cursor()
+        # IMPORTANT: Do not use COUNT(*) here.
+        # If rows were deleted (gaps), COUNT+1 can collide with an existing later code.
+        # Use MAX(existing numeric suffix)+1 instead.
+        start_idx = len(prefix) + 1  # SQLite substr is 1-indexed
         cur.execute(
-            "SELECT COUNT(*) FROM emr_patients WHERE patient_code LIKE ?",
-            (f"{prefix}%",),
+            """
+            SELECT MAX(CAST(SUBSTR(patient_code, ?) AS INTEGER))
+            FROM emr_patients
+            WHERE patient_code LIKE ?
+            """,
+            (start_idx, f"{prefix}%"),
         )
         row = cur.fetchone()
-        n = int(row[0] or 0) + 1
+        max_suffix = int(row[0] or 0)
+        n = max_suffix + 1
         return f"{prefix}{n:05d}"
     finally:
         conn.close()
+
+
+def _next_patient_code_in_tx(cur: sqlite3.Cursor, *, year: Optional[int] = None) -> str:
+    """
+    Generate the next patient_code inside an existing transaction.
+
+    This avoids races and avoids COUNT(*) collisions when there are gaps.
+    """
+    y = int(year or date.today().year)
+    prefix = f"EYS-{y}-"
+    start_idx = len(prefix) + 1  # SQLite substr is 1-indexed
+    cur.execute(
+        """
+        SELECT MAX(CAST(SUBSTR(patient_code, ?) AS INTEGER))
+        FROM emr_patients
+        WHERE patient_code LIKE ?
+        """,
+        (start_idx, f"{prefix}%"),
+    )
+    row = cur.fetchone()
+    max_suffix = int(row[0] or 0)
+    return f"{prefix}{(max_suffix + 1):05d}"
 
 
 def find_duplicate_patient(first_name: str, last_name: str, date_of_birth: str) -> Optional[dict[str, Any]]:
@@ -493,6 +553,8 @@ def upsert_legacy_patient_record_for_queue_eye(
     group_id = f"queue-{qid}"
     eye = str(eye_label or "").strip() or ""
     stype = "follow_up" if str(screening_type or "").strip().lower() == "follow_up" else "initial"
+    cap_uid = int(captured_by) if captured_by is not None and str(captured_by).strip() != "" else None
+    cap_username, cap_label = get_user_label(cap_uid)
 
     # Import lazily to avoid hard coupling / circular imports at module load.
     try:
@@ -608,8 +670,8 @@ def upsert_legacy_patient_record_for_queue_eye(
                     followup_label,
                     stype,
                     group_id,
-                    "emr",
-                    "EMR",
+                    cap_username or "emr",
+                    cap_label or "EMR",
                     int(target_id),
                 ),
             )
@@ -674,6 +736,19 @@ def upsert_legacy_patient_record_for_queue_eye(
             ),
         )
         conn.commit()
+        # Best-effort backfill of screener identity (legacy schema field names).
+        if cap_username or cap_label:
+            with contextlib.suppress(Exception):
+                cur.execute(
+                    """
+                    UPDATE patient_records
+                    SET original_screener_username = COALESCE(NULLIF(original_screener_username, ''), ?),
+                        original_screener_name = COALESCE(NULLIF(original_screener_name, ''), ?)
+                    WHERE id = ?
+                    """,
+                    (cap_username or "emr", cap_label or "EMR", int(cur.lastrowid)),
+                )
+                conn.commit()
         return True
     except Exception:
         return False
@@ -992,7 +1067,9 @@ def get_queue_entry(queue_id: int) -> Optional[dict[str, Any]]:
         cur = conn.cursor()
         cur.execute(
             """
-            SELECT queue_id, patient_id, queue_number, visit_date, status, assigned_by, screening_purpose, notes
+            SELECT queue_id, patient_id, queue_number, visit_date, status, assigned_by, screening_purpose,
+                   archived_at, archived_by, archive_reason,
+                   notes
             FROM emr_queue_entries
             WHERE queue_id = ?
             """,
@@ -1001,7 +1078,19 @@ def get_queue_entry(queue_id: int) -> Optional[dict[str, Any]]:
         row = cur.fetchone()
         if not row:
             return None
-        cols = ["queue_id", "patient_id", "queue_number", "visit_date", "status", "assigned_by", "screening_purpose", "notes"]
+        cols = [
+            "queue_id",
+            "patient_id",
+            "queue_number",
+            "visit_date",
+            "status",
+            "assigned_by",
+            "screening_purpose",
+            "archived_at",
+            "archived_by",
+            "archive_reason",
+            "notes",
+        ]
         return dict(zip(cols, row))
     finally:
         conn.close()
@@ -1177,32 +1266,45 @@ def frontdesk_save_and_queue(
         )
         prow = cur.fetchone()
         if not prow:
-            year = date.today().year
-            prefix = f"EYS-{year}-"
-            cur.execute("SELECT COUNT(*) FROM emr_patients WHERE patient_code LIKE ?", (f"{prefix}%",))
-            n = int((cur.fetchone() or [0])[0] or 0) + 1
-            code = f"{prefix}{n:05d}"
-            cur.execute(
-                """
-                INSERT INTO emr_patients (
-                    patient_code, last_name, first_name, date_of_birth, sex,
-                    contact_number, email, address, created_by
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    code,
-                    ln,
-                    fn,
-                    dob,
-                    (sex or "").strip() or None,
-                    (contact_number or "").strip() or None,
-                    (email or "").strip() or None,
-                    (address or "").strip() or None,
-                    uid,
-                ),
-            )
-            patient_id = int(cur.lastrowid)
-            patient_code = code
+            # Generate a unique patient_code resilient to gaps (MAX+1), and retry if a
+            # concurrent writer created the same code between read and insert.
+            patient_id = 0
+            patient_code = ""
+            last_err: Optional[Exception] = None
+            for _ in range(5):
+                code = _next_patient_code_in_tx(cur)
+                try:
+                    cur.execute(
+                        """
+                        INSERT INTO emr_patients (
+                            patient_code, last_name, first_name, date_of_birth, sex,
+                            contact_number, email, address, created_by
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            code,
+                            ln,
+                            fn,
+                            dob,
+                            (sex or "").strip() or None,
+                            (contact_number or "").strip() or None,
+                            (email or "").strip() or None,
+                            (address or "").strip() or None,
+                            uid,
+                        ),
+                    )
+                    patient_id = int(cur.lastrowid)
+                    patient_code = code
+                    break
+                except sqlite3.IntegrityError as err:
+                    # Only retry on patient_code uniqueness collision.
+                    msg = str(err).lower()
+                    last_err = err
+                    if "unique constraint" in msg and "emr_patients.patient_code" in msg:
+                        continue
+                    raise
+            if not patient_id:
+                raise sqlite3.IntegrityError(str(last_err or "Could not allocate unique patient code"))
         else:
             patient_id = int(prow[0])
             patient_code = str(prow[1] or "").strip()
@@ -1281,16 +1383,6 @@ def frontdesk_save_and_queue(
                 cur.execute(f"UPDATE emr_visit_details SET {sets} WHERE queue_id = ?", vals2)
 
         conn.commit()
-        # Also create a Patient Records row (legacy patient_records.db) so the visit is visible
-        # under Patient Records immediately, even without a fundus image. This MUST run after
-        # commit so `get_patient()` can see the newly inserted EMR patient row.
-        with contextlib.suppress(Exception):
-            ensure_legacy_patient_record_stub(
-                queue_id=int(queue_id),
-                patient_id=int(patient_id),
-                captured_by=int(uid) if uid is not None else None,
-                screening_purpose=purpose,
-            )
         return {
             "patient_id": patient_id,
             "patient_code": patient_code,
@@ -1331,6 +1423,29 @@ def list_emr_timeline_records(patient_id: int) -> list[dict[str, Any]]:
         )
         screenings = cur.fetchall()
 
+        # Visit-level archive state (single source of truth): emr_queue_entries.
+        queue_ids = sorted({int(r[1]) for r in screenings if r and r[1] is not None})
+        archive_map: dict[int, tuple[str, Optional[int], str, str]] = {}
+        if queue_ids:
+            placeholders = ",".join(["?"] * len(queue_ids))
+            cur.execute(
+                f"""
+                SELECT q.queue_id, q.archived_at, q.archived_by, q.archive_reason,
+                       COALESCE(NULLIF(u.display_name,''), NULLIF(u.full_name,''), NULLIF(u.username,''), '') AS archived_by_label
+                FROM emr_queue_entries q
+                LEFT JOIN users u ON u.id = q.archived_by
+                WHERE q.queue_id IN ({placeholders})
+                """,
+                queue_ids,
+            )
+            for qid, archived_at, archived_by, archive_reason, archived_by_label in cur.fetchall():
+                archive_map[int(qid)] = (
+                    str(archived_at or ""),
+                    int(archived_by) if archived_by is not None else None,
+                    str(archive_reason or ""),
+                    str(archived_by_label or ""),
+                )
+
         out: list[dict[str, Any]] = []
         for (sid, qid, sdate, stype, eye_screened, sess_status, performed_by, doctor_notes) in screenings:
             cur.execute(
@@ -1345,6 +1460,19 @@ def list_emr_timeline_records(patient_id: int) -> list[dict[str, Any]]:
             )
             eye_rows = cur.fetchall()
             visit_details = get_visit_details(int(qid)) if qid else None
+
+            archived_at = None
+            archived_by_user_id = None
+            archived_by_label = None
+            archive_reason = None
+            if qid:
+                hit = archive_map.get(int(qid))
+                if hit:
+                    a_at, a_by, a_reason, a_label = hit
+                    archived_at = a_at or None
+                    archived_by_user_id = a_by
+                    archive_reason = a_reason or None
+                    archived_by_label = a_label or None
 
             for (eye_side, ai_grade, ai_conf, total_unc, doc_accept, final_grade, override_j, final_notes, fundus_path, grad_path) in eye_rows:
                 # Map EMR row into legacy-ish record fields.
@@ -1391,6 +1519,9 @@ def list_emr_timeline_records(patient_id: int) -> list[dict[str, Any]]:
                     "screened_at": str(sdate or ""),
                     "ai_classification": ai_label,
                     "doctor_classification": final_label or ai_label,
+                    # Raw clinician decision fields (authoritative).
+                    "doctor_accepted_ai": int(doc_accept) if doc_accept is not None and str(doc_accept).strip() != "" else None,
+                    "final_dr_grade": final_grade_i,
                     "decision_mode": "accepted" if (doc_accept in (1, True, "1", "true")) else ("overridden" if final_grade is not None else "pending"),
                     "override_justification": str(override_j or ""),
                     "final_diagnosis_icdr": final_label or ai_label,
@@ -1420,9 +1551,122 @@ def list_emr_timeline_records(patient_id: int) -> list[dict[str, Any]]:
                     "previous_screening_id": None,
                     # Group by queue entry so bilateral results group into one "visit".
                     "screening_group_id": f"queue-{int(qid)}" if qid else f"screening-{int(sid)}",
+                    # Visit-level archive state (same for both eyes in the visit).
+                    "archived_at": archived_at,
+                    "archived_by": archived_by_label,
+                    "archived_by_user_id": archived_by_user_id,
+                    "archive_reason": archive_reason,
                 }
                 out.append(rec)
         return out
+    finally:
+        conn.close()
+
+
+def archive_visit(
+    queue_id: int,
+    archived: bool,
+    actor_user_id: Optional[int],
+    reason: Optional[str] = None,
+) -> bool:
+    """
+    Archive/unarchive an entire visit record (queue entry). This is the sole source of truth
+    for clinician-facing archive state.
+    """
+    qid = int(queue_id)
+    conn = _open_conn()
+    try:
+        cur = conn.cursor()
+        # Ensure schema/migrations are applied for older DBs.
+        try:
+            UserManager._ensure_emr_schema(conn)
+        except Exception:
+            pass
+        if archived:
+            cur.execute(
+                """
+                UPDATE emr_queue_entries
+                SET archived_at = datetime('now'),
+                    archived_by = ?,
+                    archive_reason = ?,
+                    updated_at = datetime('now')
+                WHERE queue_id = ?
+                """,
+                (int(actor_user_id) if actor_user_id is not None else None, (reason or "").strip() or None, qid),
+            )
+        else:
+            cur.execute(
+                """
+                UPDATE emr_queue_entries
+                SET archived_at = NULL,
+                    archived_by = NULL,
+                    archive_reason = NULL,
+                    updated_at = datetime('now')
+                WHERE queue_id = ?
+                """,
+                (qid,),
+            )
+        ok = cur.rowcount > 0
+        conn.commit()
+        if ok:
+            log_emr_action(
+                actor_user_id,
+                "ARCHIVE_VISIT" if archived else "RESTORE_VISIT",
+                "queue_entries",
+                qid,
+                json.dumps({"reason": (reason or "").strip() or None}),
+            )
+        return ok
+    except sqlite3.Error:
+        return False
+    finally:
+        conn.close()
+
+
+def is_visit_archived(queue_id: int) -> bool:
+    qid = int(queue_id)
+    conn = _open_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT archived_at FROM emr_queue_entries WHERE queue_id = ?", (qid,))
+        row = cur.fetchone()
+        return bool(row and str(row[0] or "").strip())
+    except sqlite3.Error:
+        return False
+    finally:
+        conn.close()
+
+
+def delete_visit(queue_id: int, actor_user_id: Optional[int]) -> bool:
+    """
+    Permanently delete a visit (queue entry). This cascades to screenings/visit details.
+    Use only for archived visits from the UI's 'Delete Selected' action.
+    """
+    qid = int(queue_id)
+    conn = _open_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT archived_at FROM emr_queue_entries WHERE queue_id = ?", (qid,))
+        row = cur.fetchone()
+        if not row or not str(row[0] or "").strip():
+            return False
+
+        # IMPORTANT:
+        # `emr_screenings.queue_entry_id` is defined as ON DELETE SET NULL,
+        # so deleting only the queue entry would leave orphan screenings that still
+        # appear in the timeline. Delete the visit's screenings explicitly.
+        cur.execute("BEGIN IMMEDIATE")
+        cur.execute("DELETE FROM emr_screenings WHERE queue_entry_id = ?", (qid,))
+        cur.execute("DELETE FROM emr_queue_entries WHERE queue_id = ?", (qid,))
+        ok = cur.rowcount > 0
+        conn.commit()
+        if ok:
+            log_emr_action(actor_user_id, "DELETE_ARCHIVED_VISIT", "queue_entries", qid, "")
+        return ok
+    except sqlite3.Error:
+        with contextlib.suppress(Exception):
+            conn.rollback()
+        return False
     finally:
         conn.close()
 
@@ -1505,15 +1749,6 @@ def assign_queue_entry(
         # even before any fundus images / diagnosis are attached.
         with contextlib.suppress(Exception):
             ensure_visit_details_row(qid, int(patient_id), int(assigned_by) if assigned_by is not None else None)
-        # Also create a Patient Records row (legacy patient_records.db) so the visit is visible
-        # under Patient Records immediately, even without a fundus image.
-        with contextlib.suppress(Exception):
-            ensure_legacy_patient_record_stub(
-                queue_id=qid,
-                patient_id=int(patient_id),
-                captured_by=int(assigned_by) if assigned_by is not None else None,
-                screening_purpose=purpose,
-            )
         conn.commit()
         log_emr_action(
             assigned_by,
@@ -1625,7 +1860,9 @@ def set_queue_status(queue_id: int, status: str, user_id: Optional[int] = None) 
 
 def clear_queue(visit_date: Optional[str] = None, *, user_id: Optional[int] = None) -> int:
     """Delete queue entries for a given visit date (default: today). Returns rows deleted."""
-    if not _is_allowed(user_id, {"admin"}):
+    # Operational action: allow core clinical/frontdesk roles to clear the worklist
+    # when resetting a session/demo dataset.
+    if not _is_allowed(user_id, {"admin", "frontdesk", "clinician", "doctor"}):
         return 0
     vd = visit_date or date.today().isoformat()
     conn = _open_conn()
@@ -1722,6 +1959,17 @@ def list_screenings_for_patient(patient_id: int) -> list[dict[str, Any]]:
         conn.close()
 
 
+def list_patient_ids_with_screenings() -> list[int]:
+    """Return distinct EMR patient_ids that have at least one screening."""
+    conn = _open_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT DISTINCT patient_id FROM emr_screenings ORDER BY patient_id ASC")
+        return [int(r[0]) for r in cur.fetchall() if r and r[0] is not None]
+    finally:
+        conn.close()
+
+
 def create_screening_session(
     patient_id: int,
     queue_entry_id: Optional[int],
@@ -1797,6 +2045,65 @@ def create_screening_session(
         conn.close()
 
 
+def ensure_screening_eye_row(
+    *,
+    screening_id: int,
+    eye_side: str,
+    fundus_source_path: str,
+    performed_by: Optional[int] = None,
+) -> bool:
+    """
+    Ensure `emr_screening_eyes` has a row for the given eye.
+
+    This is a recovery helper for cases where an `emr_screenings` row exists but the
+    corresponding eye row was not created (e.g., interrupted session creation).
+    """
+    side_raw = str(eye_side or "").strip()
+    side = "Left" if side_raw.lower().startswith("l") else "Right" if side_raw.lower().startswith("r") else ""
+    if not side:
+        return False
+    src = str(fundus_source_path or "").strip()
+    if not src or not os.path.isfile(src):
+        return False
+    if not _is_valid_image_magic_bytes(str(src)):
+        return False
+
+    conn = _open_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT 1 FROM emr_screening_eyes WHERE screening_id = ? AND eye_side = ? LIMIT 1",
+            (int(screening_id), side),
+        )
+        if cur.fetchone():
+            return True
+
+        upload_dir = Path(__file__).resolve().parent / "uploads" / "fundus" / str(int(screening_id))
+        upload_dir.mkdir(parents=True, exist_ok=True)
+        ext = Path(src).suffix.lower() or ".jpg"
+        if ext not in {".jpg", ".jpeg", ".png", ".tif", ".tiff"}:
+            ext = ".jpg"
+        dst = upload_dir / f"{side.lower()}{ext}"
+        shutil.copy2(src, dst)
+        if not _is_valid_image_magic_bytes(str(dst)):
+            return False
+
+        cur.execute(
+            """
+            INSERT INTO emr_screening_eyes (screening_id, eye_side, fundus_image_path, image_quality_status)
+            VALUES (?, ?, ?, 'pending')
+            """,
+            (int(screening_id), side, str(dst)),
+        )
+        conn.commit()
+        log_emr_action(performed_by, "RECOVER_SCREENING_EYE_ROW", "screening_eyes", int(cur.lastrowid), json.dumps({"sid": int(screening_id), "eye": side}))
+        return True
+    except Exception:
+        return False
+    finally:
+        conn.close()
+
+
 def retrigger_ai_pipeline(screening_id: int) -> None:
     """M4: retry AI / M5 — same as initial async trigger (re-run when user clicks retry)."""
     trigger_ai_pipeline_async(screening_id)
@@ -1818,6 +2125,53 @@ def trigger_ai_pipeline_async(screening_id: int) -> None:
         _run_screening_ai_pipeline(screening_id, performed_by)
 
     threading.Thread(target=_runner, daemon=True, name=f"eyeshield-ai-{screening_id}").start()
+
+
+def attach_gradcam_to_eye(
+    *,
+    eye_id: int,
+    screening_id: int,
+    eye_side: str,
+    gradcam_source_path: str,
+    performed_by: int | None = None,
+) -> str | None:
+    """
+    Attach a locally-generated Grad-CAM image to an EMR screening eye.
+
+    This is used when inference/heatmap generation happened outside the EMR pipeline
+    (e.g., local model runs from the Screening UI) but we still want the Patient
+    Overview timeline to render the heatmap image.
+    """
+    src = str(gradcam_source_path or "").strip()
+    if not src or not os.path.isfile(src):
+        return None
+    side = str(eye_side or "").strip()
+    if side not in {"Left", "Right"}:
+        return None
+
+    grad_dir = Path(__file__).resolve().parent / "uploads" / "gradcam" / str(int(screening_id))
+    grad_dir.mkdir(parents=True, exist_ok=True)
+    dst = grad_dir / f"{side.lower()}_gradcam.jpg"
+    shutil.copy2(src, dst)
+
+    conn = _open_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            UPDATE emr_screening_eyes
+            SET gradcam_image_path = ?, heatmap_generated = 1
+            WHERE eye_id = ?
+            """,
+            (str(dst), int(eye_id)),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    with contextlib.suppress(Exception):
+        log_emr_action(performed_by, "ATTACH_GRADCAM", "screening_eyes", int(eye_id), str(dst))
+    return str(dst)
 
 
 def _laplacian_variance(gray: np.ndarray) -> float:

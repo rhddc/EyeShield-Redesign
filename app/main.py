@@ -7,6 +7,7 @@ import os
 import sys
 import traceback
 from pathlib import Path
+import threading
 
 APP_DIR = Path(__file__).resolve().parent
 if str(APP_DIR) not in sys.path:
@@ -20,13 +21,11 @@ try:
     from .auth import UserManager
     from .login import LoginWindow
     from .app_paths import ICONS_DIR, ensure_repo_dirs
-    from .db import ensure_patient_records_db
     from .safety_runtime import get_results_dir, write_activity, write_crash_log
 except ImportError:
     from auth import UserManager
     from login import LoginWindow
     from app_paths import ICONS_DIR, ensure_repo_dirs
-    from db import ensure_patient_records_db
     from safety_runtime import get_results_dir, write_activity, write_crash_log
 
 
@@ -94,16 +93,8 @@ def main() -> int:
 
     # Initialize the database
     UserManager._init_db()
-    ok_records, records_err = ensure_patient_records_db()
-    if not ok_records:
-        msg = QMessageBox()
-        msg.setIcon(QMessageBox.Icon.Critical)
-        msg.setWindowTitle("Database Error")
-        msg.setText("Cannot initialize patient records database.")
-        msg.setInformativeText(str(records_err))
-        msg.addButton("Exit", QMessageBox.ButtonRole.RejectRole)
-        msg.exec()
-        sys.exit(1)
+    # EMR-only runtime: patient data lives in EMR tables (users.db). Legacy patient_records.db
+    # is not initialized here to avoid mixing demo/legacy rows with real patient flow.
 
     # Validate write access to local results directory on launch.
     _results_dir_display = "unknown path"
@@ -120,32 +111,42 @@ def main() -> int:
         msg.exec()
         sys.exit(1)
 
-    # Begin loading the DR model in the background so it is warm before the
-    # user navigates to the Screening page (eliminates first-scan delay).
-    try:
-        from .model_inference import preload_model_async, is_model_available, MODEL_PATH
-    except ImportError:
-        from model_inference import preload_model_async, is_model_available, MODEL_PATH
-    if not is_model_available():
-        msg = QMessageBox()
-        msg.setIcon(QMessageBox.Icon.Critical)
-        msg.setWindowTitle("Model Error")
-        msg.setText("Model file not found or corrupted. Please reinstall the application.")
-        msg.setInformativeText(f"Expected model path:\n{MODEL_PATH}")
-        copy_btn = msg.addButton("Copy Error", QMessageBox.ButtonRole.ActionRole)
-        exit_btn = msg.addButton("Exit", QMessageBox.ButtonRole.RejectRole)
-        msg.exec()
-        if msg.clickedButton() == copy_btn:
-            app.clipboard().setText(f"Model file not found or corrupted: {MODEL_PATH}")
-        if msg.clickedButton() in (copy_btn, exit_btn):
-            sys.exit(1)
+    # NOTE: Importing torch can be very slow on some Windows installs.
+    # Do NOT import model_inference on the UI thread during startup.
+    def _warm_model_non_blocking() -> None:
+        if os.environ.get("EYESHIELD_DISABLE_MODEL_WARMUP") == "1":
+            return
 
-    preload_model_async()
+        def _worker():
+            try:
+                try:
+                    from .model_inference import preload_model_async, is_model_available, MODEL_PATH
+                except ImportError:
+                    from model_inference import preload_model_async, is_model_available, MODEL_PATH
+
+                # If the model is missing, keep the app usable; the Screening page will surface this.
+                if not is_model_available():
+                    write_activity("WARN", "MODEL_MISSING", f"Expected model path: {MODEL_PATH}")
+                    return
+
+                preload_model_async()
+            except Exception as err:
+                # Never fail app launch because of warmup.
+                write_activity("WARN", "MODEL_WARMUP_FAILED", str(err))
+
+        threading.Thread(target=_worker, daemon=True, name="eyeshield-warmup-import").start()
     write_activity("INFO", "APP_OPENED", "EyeShield launched")
     app.aboutToQuit.connect(lambda: write_activity("INFO", "APP_CLOSED", "Application exit"))
 
     win = LoginWindow()
     win.show()
+
+    # Start warmup only after the first window is visible.
+    try:
+        from PySide6.QtCore import QTimer
+        QTimer.singleShot(0, _warm_model_non_blocking)
+    except Exception:
+        _warm_model_non_blocking()
 
     return app.exec()
 

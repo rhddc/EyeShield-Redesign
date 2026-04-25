@@ -1244,7 +1244,8 @@ class EmrVisitsPage(QWidget):
         self.btn_clear_queue.setObjectName("queueBtnSecondary")
         self.btn_clear_queue.setCursor(Qt.PointingHandCursor)
         self.btn_clear_queue.clicked.connect(self._clear_today_queue)
-        self.btn_clear_queue.setVisible(self._is_front())
+        # Allow clearing from both frontdesk and clinical POV when resetting the queue.
+        self.btn_clear_queue.setVisible(self._is_front() or self._is_clinical())
         controls_row.addWidget(self.btn_clear_queue, 0)
 
         header_l.addLayout(controls_row)
@@ -1467,6 +1468,8 @@ class EmrVisitsPage(QWidget):
             form = DoctorDiagnosisForm(self)
             form.screening_history_requested.connect(self._open_saved_patient_screening_history)
             form.back_requested.connect(self._on_back_from_diagnosis)
+            if hasattr(form, "patient_record_requested"):
+                form.patient_record_requested.connect(self._open_patient_record_from_code)
             self._doctor_diagnosis_form = form
         # Provide session context to the form (used for editing patient info and permissions).
         if hasattr(form, "username"):
@@ -1518,6 +1521,17 @@ class EmrVisitsPage(QWidget):
         if form is not None and hasattr(form, "is_busy") and form.is_busy():
             show_warning(self, "Screening In Progress", "Please wait for image analysis to finish before leaving.")
             return
+
+        confirm = QMessageBox.question(
+            self,
+            "Return to Patient Queue",
+            "Are you sure you want to go back to the list?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
+
         # If the global screening page is embedded, release it; otherwise just navigate back.
         if self._app and hasattr(self._app, "screening_page"):
             sp = self._app.screening_page
@@ -1525,6 +1539,24 @@ class EmrVisitsPage(QWidget):
                 self.release_screening_to_main_stack_if_embedded()
                 return
         self._show_queue_page()
+
+    def _open_patient_record_from_code(self, patient_code: str) -> None:
+        """
+        Jump to the doctor-facing Patient Records page (Reports) and focus the selected patient.
+
+        This restores the clinician workflow actions (referral, archive, export, etc.) that live on Reports.
+        """
+        code = str(patient_code or "").strip()
+        if not code or not self._app:
+            self._show_queue_page()
+            return
+        # Navigate out to the main Reports page.
+        if hasattr(self._app, "_navigate_to"):
+            self._app._navigate_to(3, nav_key="Reports")
+        rp = getattr(self._app, "reports_page", None)
+        if rp is not None and hasattr(rp, "focus_patient_record"):
+            with contextlib.suppress(Exception):
+                rp.focus_patient_record(code, open_overview=True)
 
     def _on_start_diagnosis_clicked(self, qid, pid) -> None:
         if not self._is_clinical():

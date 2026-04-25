@@ -629,6 +629,15 @@ class ScreeningPage(QWidget):
         self._last_saved_source_path = ""
         self._current_eye_saved = False
         self._first_eye_result = None
+        # Bilateral workflow state:
+        # - `_first_eye_result` persists for the session once the first eye is saved
+        # - `_second_eye_result` is populated after the other eye is screened/saved
+        # - `_is_second_eye_flow` gates "finish vs prompt" decisions in Results UI
+        self._second_eye_result = None
+        self._is_second_eye_flow = False
+        # Patient identity must stay stable for the entire screening session.
+        # Store it separately from UI widgets so it can't drift.
+        self._session_patient_code = ""
         self._last_eye_choice = ""
         self._suspend_eye_guard = False
         self._navigation_locked = False
@@ -2314,7 +2323,16 @@ class ScreeningPage(QWidget):
     # ==================== LOGIC FUNCTIONS ====================
 
     def generate_patient_id(self):
-        pid = self._next_unique_patient_id()
+        # Display ID should be the EMR patient_code (never the internal integer patient_id).
+        # Prefer the EMR allocator when available; fall back to legacy generator only if EMR
+        # code allocation is unavailable for some reason.
+        pid = ""
+        with contextlib.suppress(Exception):
+            if hasattr(emr, "next_patient_code"):
+                pid = str(emr.next_patient_code() or "").strip()
+        if not pid:
+            pid = self._next_unique_patient_id()
+        self._session_patient_code = pid
         self.p_id.setText(pid)
         return pid
 
@@ -2334,7 +2352,15 @@ class ScreeningPage(QWidget):
         self._emr_queue_entry_id = int(queue_entry_id) if queue_entry_id else None
 
         code = str(emr_patient.get("patient_code") or "").strip()
+        # Fallback: some callers may provide only the integer patient_id.
+        if not code:
+            with contextlib.suppress(Exception):
+                pid_pk = int(emr_patient.get("patient_id") or 0)
+                if pid_pk:
+                    full = emr.get_patient(pid_pk) or {}
+                    code = str(full.get("patient_code") or "").strip()
         if code:
+            self._session_patient_code = code
             self.p_id.setText(code)
         fn = str(emr_patient.get("first_name") or "").strip()
         ln = str(emr_patient.get("last_name") or "").strip()
@@ -2728,6 +2754,9 @@ class ScreeningPage(QWidget):
         self._last_saved_source_path = ""
         self._current_eye_saved = False
         self._first_eye_result = None
+        self._second_eye_result = None
+        self._is_second_eye_flow = False
+        self._session_patient_code = ""
         self._rescreen_replace_record_id = None
         self._current_screening_type = ""
         self._current_previous_screening_id = None
@@ -3117,6 +3146,16 @@ class ScreeningPage(QWidget):
         if self._guard_busy_action("uploading a new image"):
             return
 
+        confirm = QMessageBox.question(
+            self,
+            "Confirm Image Upload",
+            "Before uploading, please ensure the selected image is clear, in focus, and properly illuminated so it can be accepted by the system.\n\nDo you want to continue?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
+
         path, _ = QFileDialog.getOpenFileName(
             self, "Select Fundus Image", "", "Image Files (*.jpg *.jpeg *.png *.tif *.tiff *.bmp)"
         )
@@ -3190,6 +3229,16 @@ class ScreeningPage(QWidget):
         if self._guard_busy_action("uploading a new image"):
             return
 
+        confirm = QMessageBox.question(
+            self,
+            "Confirm Image Upload",
+            "Before uploading, please ensure the selected image is clear, in focus, and properly illuminated so it can be accepted by the system.\n\nDo you want to continue?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
+
         ok, msg = self._validate_image_selection(path)
         if not ok:
             self._set_upload_error(msg)
@@ -3230,6 +3279,16 @@ class ScreeningPage(QWidget):
         if self._guard_upload_permission():
             return
         if self._guard_busy_action("re-screening"):
+            return
+
+        confirm = QMessageBox.question(
+            self,
+            "Confirm Image Upload",
+            "Before uploading, please ensure the selected image is clear, in focus, and properly illuminated so it can be accepted by the system.\n\nDo you want to continue?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        if confirm != QMessageBox.StandardButton.Yes:
             return
 
         path, _ = QFileDialog.getOpenFileName(
@@ -3331,6 +3390,16 @@ class ScreeningPage(QWidget):
         else:
             self._set_upload_error("")
 
+        # Analyze Image confirmation (applies to all flows, including doctor queue mode).
+        confirm_box = QMessageBox(self)
+        confirm_box.setWindowTitle("Confirm Before Analysis")
+        confirm_box.setText("Please confirm that all patient information is correct before proceeding to the results.")
+        proceed_button = confirm_box.addButton("Proceed to Results", QMessageBox.ButtonRole.AcceptRole)
+        confirm_box.addButton("Review Information", QMessageBox.ButtonRole.RejectRole)
+        confirm_box.exec()
+        if confirm_box.clickedButton() != proceed_button:
+            return
+
         if not self._ensure_emr_screening_session(self.current_image):
             return
 
@@ -3384,6 +3453,7 @@ class ScreeningPage(QWidget):
         if current_id != matched_id:
             decision = DuplicateDialog(match, self).exec()
             if decision == DuplicateDialog.USE_EXISTING:
+                self._session_patient_code = matched_id
                 self.p_id.setText(matched_id)
                 write_activity("INFO", "DUPLICATE_PATIENT", f"Reused existing patient_id={matched_id}")
             else:
@@ -3974,9 +4044,45 @@ class ScreeningPage(QWidget):
                 return {"status": "invalid"}
 
             sc = emr.get_screening(int(sid)) or {}
-            eye_row = next((e for e in (sc.get("eyes") or []) if str(e.get("eye_side") or "") == eye_side), None)
+            def _match_eye(row: dict, side: str) -> bool:
+                raw = str((row or {}).get("eye_side") or "").strip().lower()
+                if not raw:
+                    return False
+                if raw == side.lower():
+                    return True
+                # Defensive: allow legacy labels if any slipped in.
+                return (side.lower() in raw) or (raw in {"od", "right"} and side == "Right") or (raw in {"os", "left"} and side == "Left")
+
+            eyes = sc.get("eyes") or []
+            eye_row = next((e for e in eyes if _match_eye(e, eye_side)), None)
+            if not eye_row:
+                # Recovery: some sessions may have emr_screenings without emr_screening_eyes rows.
+                # Ensure the missing eye row exists using the current fundus image as source.
+                with contextlib.suppress(Exception):
+                    emr.ensure_screening_eye_row(
+                        screening_id=int(sid),
+                        eye_side=str(eye_side),
+                        fundus_source_path=str(self.current_image or ""),
+                        performed_by=int(uid),
+                    )
+                sc = emr.get_screening(int(sid)) or {}
+                eyes = sc.get("eyes") or []
+                eye_row = next((e for e in eyes if _match_eye(e, eye_side)), None)
             if not eye_row:
                 return {"status": "error", "error": "Could not resolve EMR eye record for this screening."}
+
+            # Attach local Grad-CAM (if available) so Patient Overview can render images.
+            heatmap_src = ""
+            if hasattr(self, "results_page"):
+                heatmap_src = str(getattr(self.results_page, "_current_heatmap_path", "") or "").strip()
+            with contextlib.suppress(Exception):
+                emr.attach_gradcam_to_eye(
+                    eye_id=int(eye_row.get("eye_id")),
+                    screening_id=int(sid),
+                    eye_side=str(eye_side),
+                    gradcam_source_path=heatmap_src,
+                    performed_by=int(uid),
+                )
 
             accepted = 1
             if decision_mode.lower() != "accepted" or (doctor_classification and ai_classification and doctor_classification != ai_classification):
@@ -3996,45 +4102,33 @@ class ScreeningPage(QWidget):
             if not ok:
                 return {"status": "error", "error": "Could not save clinician decision to EMR."}
 
-            # Also update legacy Patient Records timeline for this queue visit so the saved
-            # fundus/heatmap/results appear under the same screening date.
+            # Keep legacy Patient Records (patient_records.db) in sync so Patient Overview / Reports
+            # can immediately render the saved final classification + notes + images for this visit.
             try:
-                patient_code = str(self.p_id.text() or "").strip()
-                sc_after = emr.get_screening(int(sid)) or sc or {}
-                eye_after = next(
-                    (e for e in (sc_after.get("eyes") or []) if str(e.get("eye_side") or "") == eye_side),
-                    eye_row,
-                )
-                fundus_path = str(eye_after.get("fundus_image_path") or "").strip()
-                grad_path = str(eye_after.get("gradcam_image_path") or "").strip()
-                conf_val = eye_after.get("ai_confidence")
-                conf_text = ""
-                try:
-                    if conf_val is not None and str(conf_val).strip() != "":
-                        conf_text = f"{float(conf_val):.3f}"
-                except (TypeError, ValueError):
-                    conf_text = str(conf_val or "").strip()
-
-                screened_at = decision_at
+                fundus_path = str(eye_row.get("fundus_image_path") or "")
+            except Exception:
+                fundus_path = ""
+            heatmap_path = ""
+            if hasattr(self, "results_page"):
+                heatmap_path = str(getattr(self.results_page, "_current_heatmap_path", "") or "").strip()
+            with contextlib.suppress(Exception):
                 emr.upsert_legacy_patient_record_for_queue_eye(
                     queue_id=int(qid),
                     patient_id=int(pid_pk),
                     captured_by=int(uid),
-                    eye_label=("Left Eye" if eye_side == "Left" else "Right Eye"),
-                    screening_type=str(sc_after.get("screening_type") or "").strip() or ("follow_up" if "follow" in str(sc_after.get("screening_type") or "").lower() else "initial"),
-                    screened_at=screened_at,
+                    eye_label=("Right Eye" if eye_side == "Right" else "Left Eye"),
+                    screening_type=str(sc.get("screening_type") or "initial"),
+                    screened_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                     source_image_path=fundus_path,
-                    heatmap_image_path=grad_path,
+                    heatmap_image_path=heatmap_path,
                     ai_classification=ai_classification,
                     doctor_classification=doctor_classification,
                     decision_mode=decision_mode,
                     override_justification=override_justification,
                     final_diagnosis_icdr=final_diagnosis_icdr,
                     doctor_findings=doctor_findings,
-                    confidence=conf_text,
+                    confidence=str(self.last_result_conf or ""),
                 )
-            except Exception:
-                pass
 
             # Mark the visit completed when allowed.
             can_done, reason = emr.can_complete_visit(int(qid))
@@ -4052,9 +4146,14 @@ class ScreeningPage(QWidget):
 
         name = self.p_name.text().strip()
 
-        pid = self.p_id.text().strip()
+        pid = str(getattr(self, "_session_patient_code", "") or "").strip() or self.p_id.text().strip()
         if not pid:
             pid = self.generate_patient_id()
+        else:
+            # Keep UI aligned with the session ID to prevent "Assessment vs Records" mismatch.
+            self._session_patient_code = pid
+            with contextlib.suppress(Exception):
+                self.p_id.setText(pid)
 
         dob_date = self._get_dob_date()
         dob_str = dob_date.toString("yyyy-MM-dd") if dob_date.isValid() else ""
@@ -4388,14 +4487,19 @@ class ScreeningPage(QWidget):
             eye_label = eye or "eye"
             next_action = ""
 
-            # Store first eye result with image/heatmap paths for dual-eye reports
-            self._first_eye_result = {
+            # Store per-eye result payloads for bilateral reports.
+            # IMPORTANT: do not overwrite the first-eye payload when saving the second eye.
+            payload = {
                 "eye": eye_label,
                 "result": self.last_result_class,
                 "confidence": self.last_result_conf,
                 "image_path": getattr(self, "current_image", "") or "",
                 "heatmap_path": getattr(self.results_page, "_current_heatmap_path", "") or "",
             }
+            if bool(getattr(self, "_is_second_eye_flow", False)):
+                self._second_eye_result = payload
+            else:
+                self._first_eye_result = payload
             if hasattr(self, "results_page"):
                 self.results_page.mark_saved(self.p_name.text().strip(), eye_label, self.last_result_class)
 
@@ -4457,112 +4561,50 @@ class ScreeningPage(QWidget):
             if chosen == skip_btn:
                 write_activity("WARNING", "SCREEN_OTHER_EYE_SKIP_SAVE", f"Skipped save for {eye_label}")
 
-        # Capture current patient demographics and patient_id before resetting
-        saved_pid = self.p_id.text().strip()
-        name = self.p_name.text()
-        dob_date = self._get_dob_date()
-        dob_text = self.p_dob.text()
-        age = self.p_age.value()
-        sex = self.p_sex.currentText()
-        contact = self.p_contact.text()
-        d_type = self.diabetes_type.currentText()
-        d_dur = self.diabetes_duration.value()
-        hba1c_val = 0.0
-        prev = bool(getattr(getattr(self, "prev_treatment", None), "isChecked", lambda: False)())
-        notes_text = self.notes.toPlainText()
+        # UX fix:
+        # Do NOT hard-reset the entire form (it causes the "messy" feeling: IDs regenerating,
+        # fields flickering, and state being restored manually). We only need to switch the
+        # eye target and clear the image/result state for the next capture.
 
-        # Capture vitals
-        va_l = self.va_left.text()
-        va_r = self.va_right.text()
-        bp_s = self.bp_systolic.value()
-        bp_d = self.bp_diastolic.value()
-        fbs_v = self.fbs.value()
-        rbs_v = self.rbs.value()
-        diag_date_text = self.diabetes_diagnosis_date.text() if hasattr(self, 'diabetes_diagnosis_date') else ""
-        sym_blurred = self.symptom_blurred.isChecked()
-        sym_floaters = self.symptom_floaters.isChecked()
-        sym_flashes = self.symptom_flashes.isChecked()
-        sym_vision_loss = self.symptom_vision_loss.isChecked()
-        sym_other = self.symptom_other.text()
-        
-        # Capture Phase 1 additions
-        height_v = self.height.value()
-        weight_v = self.weight.value()
-        bmi_v = self.bmi.value()
-        treatment_reg = self.treatment_regimen.currentText()
-        prev_dr = self.prev_dr_stage.currentText()
-        current_screening_type = self._current_screening_type
-        current_previous_screening_id = self._current_previous_screening_id
-        current_follow_up_flag = self._current_follow_up_flag
-        current_followup_date = self._current_followup_date
-        current_followup_label = self._current_followup_label
-        current_screening_group_id = self._current_screening_group_id
+        # Mark that we are now screening the other (second) eye in this session.
+        self._is_second_eye_flow = True
 
-        # Preserve first eye result across reset so results page can show bilateral comparison
-        saved_first_eye_result = self._first_eye_result
-
-        # Full reset (generates new patient ID, clears everything)
-        self.reset_screening()
-
-        # Restore first eye result and mark second eye
-        self._first_eye_result = saved_first_eye_result
-        if self._first_eye_result:
-            self._first_eye_result['_is_second_eye'] = True
-
-        # Restore the same patient_id so both eyes share one ID
-        self.p_id.setText(saved_pid)
-
-        # Restore demographics for the same patient
-        self._set_name_parts_from_full_name(name)
-        if isinstance(self.p_dob, QDateEdit):
-            if dob_date.isValid():
-                self._set_dob_date(dob_date, user_selected=True)
-            else:
-                self._set_dob_date(self.default_dob_date, user_selected=False)
-        else:
-            self.p_dob.setText(dob_text)
-        self.p_age.setValue(age)
-        self.p_sex.setCurrentText(sex)
-        self.p_contact.setText(contact)
-        self.diabetes_type.setCurrentText(d_type)
-        self.diabetes_duration.setValue(d_dur)
-        # HbA1c removed from UI.
-        if hasattr(self, "prev_treatment"):
-            self.prev_treatment.setChecked(prev)
-        self.notes.setPlainText(notes_text)
-
-        # Restore vitals
-        self.va_left.setText(va_l)
-        self.va_right.setText(va_r)
-        self.bp_systolic.setValue(bp_s)
-        self.bp_diastolic.setValue(bp_d)
-        self.fbs.setValue(fbs_v)
-        self.rbs.setValue(rbs_v)
-        if hasattr(self, 'diabetes_diagnosis_date'):
-            self.diabetes_diagnosis_date.setText(diag_date_text)
-        self.symptom_blurred.setChecked(sym_blurred)
-        self.symptom_floaters.setChecked(sym_floaters)
-        self.symptom_flashes.setChecked(sym_flashes)
-        self.symptom_vision_loss.setChecked(sym_vision_loss)
-        self.symptom_other.setText(sym_other)
-        
-        # Restore Phase 1 additions
-        self.height.setValue(height_v)
-        self.weight.setValue(weight_v)
-        self.bmi.setValue(bmi_v)
-        self.treatment_regimen.setCurrentText(treatment_reg)
-        self.prev_dr_stage.setCurrentText(prev_dr)
-        self._current_screening_type = current_screening_type
-        self._current_previous_screening_id = current_previous_screening_id
-        self._current_follow_up_flag = current_follow_up_flag
-        self._current_followup_date = current_followup_date
-        self._current_followup_label = current_followup_label
-        self._current_screening_group_id = current_screening_group_id
-
-        # Pre-select the opposite eye for bilateral workflow continuity.
+        # Switch eye.
         self._set_eye_selection(opposite_eye)
 
-        # Return to intake form — only the image needs to be uploaded
+        # Clear only per-eye analysis state.
+        self._current_eye_saved = False
+        self.last_result_class = "—"
+        self.last_result_conf = "—"
+        self.last_ai_classification = "Pending"
+        self.last_doctor_classification = "Pending"
+        self.last_decision_mode = "pending"
+        self.last_override_justification = ""
+        self.last_doctor_findings = ""
+
+        # Reset result UI controls if present.
+        with contextlib.suppress(Exception):
+            self.r_class.setText("—")
+        with contextlib.suppress(Exception):
+            self.r_conf.setText("—")
+        if hasattr(self, "results_page"):
+            with contextlib.suppress(Exception):
+                self.results_page._doctor_classification = "Pending"
+                self.results_page._decision_mode = "pending"
+                self.results_page._override_justification = ""
+                self.results_page._doctor_findings = ""
+                self.results_page.override_reason_input.clear()
+                self.results_page.findings_input.clear()
+                self.results_page._refresh_decision_ui_state()
+
+        # Clear the image and require a new upload before analysis.
+        self.clear_image()
+        if hasattr(self, "btn_analyze"):
+            self.btn_analyze.setEnabled(False)
+        if hasattr(self, "btn_save"):
+            self.btn_save.setEnabled(False)
+
+        # Return to the intake form (image upload step).
         self.stacked_widget.setCurrentIndex(0)
 
     def _save_screening_to_db(self, patient_data, screener_username: str, screener_name: str) -> tuple[bool, str, int | None]:

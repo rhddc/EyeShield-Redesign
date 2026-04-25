@@ -10,7 +10,7 @@ import random
 import re
 import sqlite3
 import time
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone, timedelta, date
 
 try:
     from zoneinfo import ZoneInfo
@@ -56,18 +56,12 @@ except Exception:  # pragma: no cover
     from app_paths import PATIENT_RECORDS_DB_PATH
     from patient_timeline_dialog import PatientTimelineDialog
     from patient_record_groups import group_patient_record_rows
-try:
-    from db import get_records_conn, ensure_patient_records_db_schema
-except Exception:
-    from .db import get_records_conn, ensure_patient_records_db_schema
 
 try:
     from . import emr_service as emr
 except Exception:  # pragma: no cover
     import emr_service as emr
 
-
-DB_FILE = str(PATIENT_RECORDS_DB_PATH)
 try:
     from .user_auth import get_user_profile
     from .emr_pages import EmrVisitsPage
@@ -515,93 +509,18 @@ class EyeShieldApp(QMainWindow):
         if not patient_id:
             return []
         try:
-            conn = sqlite3.connect(DB_FILE)
-            cur = conn.cursor()
-            cur.execute(
-                """
-                SELECT id, patient_id, name, birthdate, age, sex, contact, phone, address, eyes,
-                       diabetes_type, duration, hba1c, prev_treatment, notes,
-                       result, confidence, screened_at, archived_at, archived_by,
-                       archive_reason, original_screener_username, original_screener_name,
-                       ai_classification, doctor_classification, decision_mode, override_justification, final_diagnosis_icdr, doctor_findings,
-                       height, weight, bmi, visual_acuity_left, visual_acuity_right,
-                       blood_pressure_systolic, blood_pressure_diastolic,
-                       fasting_blood_sugar, random_blood_sugar,
-                       diabetes_diagnosis_date, treatment_regimen, prev_dr_stage,
-                       symptom_blurred_vision, symptom_floaters, symptom_flashes, symptom_vision_loss,
-                       source_image_path, heatmap_image_path,
-                       follow_up, followup_date, followup_label, screening_type, previous_screening_id, screening_group_id
-                FROM patient_records
-                WHERE patient_id = ? AND archived_at IS NULL
-                ORDER BY screened_at ASC, id ASC
-                """,
-                (patient_id,),
-            )
-            rows = cur.fetchall()
-            conn.close()
+            p = emr.get_patient_by_code(patient_id) or {}
+            pid_pk = int(p.get("patient_id") or 0)
+            if not pid_pk:
+                return []
+            timeline = emr.list_emr_timeline_records(pid_pk)
+            for row in timeline:
+                row.setdefault("archived_at", None)
+                row.setdefault("archived_by", None)
+                row.setdefault("archive_reason", None)
+            return group_patient_record_rows(timeline)
         except Exception:
             return []
-
-        timeline = []
-        for row in rows:
-            timeline.append(
-                {
-                    "id": row[0],
-                    "patient_id": row[1],
-                    "name": row[2],
-                    "birthdate": row[3],
-                    "age": row[4],
-                    "sex": row[5],
-                    "contact": row[6],
-                    "phone": row[7],
-                    "address": row[8],
-                    "eyes": row[9],
-                    "diabetes_type": row[10],
-                    "duration": row[11],
-                    "hba1c": row[12],
-                    "prev_treatment": row[13],
-                    "notes": row[14],
-                    "result": row[15],
-                    "confidence": row[16],
-                    "screened_at": row[17],
-                    "archived_at": row[18],
-                    "archived_by": row[19],
-                    "archive_reason": row[20],
-                    "original_screener_username": row[21],
-                    "original_screener_name": row[22],
-                    "ai_classification": row[23],
-                    "doctor_classification": row[24],
-                    "decision_mode": row[25],
-                    "override_justification": row[26],
-                    "final_diagnosis_icdr": row[27],
-                    "doctor_findings": row[28],
-                    "height": row[29],
-                    "weight": row[30],
-                    "bmi": row[31],
-                    "visual_acuity_left": row[32],
-                    "visual_acuity_right": row[33],
-                    "blood_pressure_systolic": row[34],
-                    "blood_pressure_diastolic": row[35],
-                    "fasting_blood_sugar": row[36],
-                    "random_blood_sugar": row[37],
-                    "diabetes_diagnosis_date": row[38],
-                    "treatment_regimen": row[39],
-                    "prev_dr_stage": row[40],
-                    "symptom_blurred_vision": row[41],
-                    "symptom_floaters": row[42],
-                    "symptom_flashes": row[43],
-                    "symptom_vision_loss": row[44],
-                    "source_image_path": row[45],
-                    "heatmap_image_path": row[46],
-                    "follow_up": row[47],
-                    "followup_date": row[48],
-                    "followup_label": row[49],
-                    "screening_type": row[50],
-                    "previous_screening_id": row[51],
-                    "screening_group_id": row[52],
-                }
-            )
-        return group_patient_record_rows(timeline)
 
     def _open_saved_patient_screening_history_from_screening(self) -> None:
         """Finish-session handler for the main screening page (non-EMR flow)."""
@@ -1681,6 +1600,19 @@ class EyeShieldApp(QMainWindow):
             )
             queue_v.addWidget(queue_title)
 
+            # Clear queue action (frontdesk resets)
+            btn_clear_queue = QPushButton("Clear today’s queue")
+            btn_clear_queue.setMinimumHeight(36)
+            btn_clear_queue.setCursor(Qt.PointingHandCursor)
+            btn_clear_queue.setStyleSheet(
+                "QPushButton{background:#ffffff;color:#b91c1c;border:1px solid #fecaca;border-radius:10px;"
+                "padding:0 14px;font-weight:800;font-size:12px;}"
+                "QPushButton:hover{background:#fef2f2;border-color:#fca5a5;}"
+                "QPushButton:pressed{background:#fee2e2;}"
+            )
+            btn_clear_queue.clicked.connect(self._dash_clear_today_queue)
+            queue_v.addWidget(btn_clear_queue, 0, Qt.AlignLeft)
+
             self._dash_queue_table = QTableWidget(0, 4)
             self._dash_queue_table.setHorizontalHeaderLabels(["Queue #", "Patient", "Purpose", "Status"])
             self._dash_queue_table.setSelectionBehavior(QAbstractItemView.SelectRows)
@@ -2267,6 +2199,29 @@ class EyeShieldApp(QMainWindow):
             self._dash_queue_table.setItem(i, 2, QTableWidgetItem(purpose))
             self._dash_queue_table.setItem(i, 3, QTableWidgetItem(status))
 
+    def _dash_clear_today_queue(self) -> None:
+        """Frontdesk Dashboard: clear today's queue entries (EMR)."""
+        role_l = str(getattr(self, "role", "") or "").strip().lower()
+        if role_l not in {"frontdesk", "clinician", "doctor", "admin"}:
+            return
+        if QMessageBox.question(
+            self,
+            "Clear queue",
+            "This will remove all patients from today's queue.\n\nContinue?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        ) != QMessageBox.StandardButton.Yes:
+            return
+        username = str(getattr(self, "username", "") or os.environ.get("EYESHIELD_CURRENT_USER", "")).strip()
+        uid = emr.get_user_id(username)
+        if not uid:
+            QMessageBox.warning(self, "Clear queue", "Could not resolve your user account. Please sign in again.")
+            return
+        deleted = emr.clear_queue(date.today().isoformat(), user_id=int(uid))
+        # Refresh both the embedded table and the surrounding stats.
+        self.refresh_dashboard()
+        QMessageBox.information(self, "Clear queue", f"Cleared {int(deleted or 0)} queue entr{'y' if int(deleted or 0)==1 else 'ies'}.")
+
     def _open_frontdesk_rescreen_search(self) -> None:
         """Dashboard shortcut for frontdesk: search existing patient and queue follow-up."""
         if str(getattr(self, "role", "") or "").strip().lower() != "frontdesk":
@@ -2475,19 +2430,30 @@ class EyeShieldApp(QMainWindow):
                 f"color:{accent_blue};font-size:12px;font-weight:600;background:transparent;"
             )
 
-        # Fetch data
-        rows = []
+        # Fetch data (EMR-only): compute KPIs from EMR screenings.
+        rows: list[tuple[str, str, str, str, str]] = []
         self._dash_db_error_text = ""
         try:
-            conn = get_records_conn()
-            ensure_patient_records_db_schema(conn)
-            cur = conn.cursor()
-            cur.execute(
-                "SELECT patient_id, name, result, confidence, screened_at "
-                "FROM patient_records WHERE archived_at IS NULL ORDER BY id DESC"
-            )
-            rows = cur.fetchall()
-            conn.close()
+            seen: set[str] = set()
+            for pid_pk in emr.list_patient_ids_with_screenings():
+                timeline = emr.list_emr_timeline_records(int(pid_pk))
+                for rec in timeline:
+                    patient_code = str(rec.get("patient_id") or "").strip()
+                    if not patient_code:
+                        continue
+                    # For dashboard KPIs we only need the latest screening per patient.
+                    if patient_code in seen:
+                        continue
+                    seen.add(patient_code)
+                    rows.append(
+                        (
+                            patient_code,
+                            str(rec.get("name") or ""),
+                            str(rec.get("final_diagnosis_icdr") or rec.get("doctor_classification") or rec.get("result") or ""),
+                            str(rec.get("confidence") or ""),
+                            str(rec.get("screened_at") or ""),
+                        )
+                    )
         except Exception as err:
             self._dash_db_error_text = str(err)
             rows = []
@@ -2497,7 +2463,7 @@ class EyeShieldApp(QMainWindow):
         if hasattr(self, "_dash_db_error_banner"):
             err = str(getattr(self, "_dash_db_error_text", "") or "").strip()
             if err:
-                self._dash_db_error_banner.setText(f"Patient records database error: {err}")
+                self._dash_db_error_banner.setText(f"Patient records load error: {err}")
                 self._dash_db_error_banner.setVisible(True)
             else:
                 self._dash_db_error_banner.setVisible(False)

@@ -2,6 +2,7 @@
 Worker threads for the screening module.
 """
 
+import traceback
 from PySide6.QtCore import QThread, Signal
 
 
@@ -18,7 +19,11 @@ class _InferenceWorker(QThread):
 
     def run(self):
         try:
-            from model_inference import generate_heatmap, predict_image, ImageUngradableError
+            try:
+                # Prefer package import when running as `app.*`.
+                from .model_inference import generate_heatmap, predict_image, ImageUngradableError
+            except Exception:  # pragma: no cover
+                from model_inference import generate_heatmap, predict_image, ImageUngradableError
             try:
                 label, conf, class_idx = predict_image(self._image_path)
                 self.result_ready.emit(label, conf)
@@ -27,4 +32,4 @@ class _InferenceWorker(QThread):
             except ImageUngradableError as exc:
                 self.ungradable.emit(str(exc))
         except Exception as exc:
-            self.error.emit(str(exc))
+            self.error.emit(f"{type(exc).__name__}: {exc}\n\n{traceback.format_exc()}")
