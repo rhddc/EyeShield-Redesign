@@ -1324,9 +1324,12 @@ class ResultsWindow(QWidget):
             return False, "Please choose Accept AI result or Override AI result before saving."
 
         payload = self.get_decision_payload()
-        doctor_value = str(payload.get("doctor_classification") or "").strip()
-        if not doctor_value:
+        doctor_value_raw = str(payload.get("doctor_classification") or "").strip()
+        if not doctor_value_raw:
             return False, "Please enter doctor classification."
+        doctor_value = self._normalize_dr_label(doctor_value_raw)
+        if not doctor_value:
+            return False, "Please enter a valid DR grade (No DR, Mild DR, Moderate DR, Severe DR, Proliferative DR)."
         findings = str(payload.get("doctor_findings") or "").strip()
         if payload.get("decision_mode") == "override":
             justification = str(payload.get("override_justification") or "").strip()
@@ -1338,6 +1341,26 @@ class ResultsWindow(QWidget):
             self._doctor_findings = default_note
             self.findings_input.setText(default_note)
         return True, ""
+
+    @staticmethod
+    def _normalize_dr_label(value: str) -> str:
+        t = str(value or "").strip()
+        if not t:
+            return ""
+        low = t.lower()
+        if "proliferative" in low or low in {"pdr"}:
+            return "Proliferative DR"
+        if "severe" in low:
+            return "Severe DR"
+        if "moderate" in low:
+            return "Moderate DR"
+        if "mild" in low:
+            return "Mild DR"
+        if "no dr" in low or low in {"normal", "none"}:
+            return "No DR"
+        if t in {"No DR", "Mild DR", "Moderate DR", "Severe DR", "Proliferative DR"}:
+            return t
+        return ""
 
     def set_results(self, patient_name, image_path, result_class="Pending", confidence_text="Pending", eye_label="", first_eye_result=None, heatmap_path="", patient_data=None, heatmap_pending=False):
         is_loading = result_class in ("Analyzing…", "Pending")
@@ -1576,6 +1599,37 @@ class ResultsWindow(QWidget):
         if not self.parent_page or not hasattr(self.parent_page, "save_screening"):
             return
 
+        # Pre-save decision (doctor UX): prompt to screen other eye on the *first-eye* save.
+        # Do NOT use historical record existence; use current session state instead.
+        pp = self.parent_page
+        current_eye = str(pp.p_eye.currentText() or "").strip() if hasattr(pp, "p_eye") else ""
+        opposite_eye = "Left Eye" if current_eye == "Right Eye" else "Right Eye"
+
+        first_eye_context = getattr(pp, "_first_eye_result", None)
+        is_second_eye_flow = bool(first_eye_context) and bool(getattr(first_eye_context, "get", lambda *_: False)("_is_second_eye"))
+
+        go_screen_other_after_save = False
+        if not is_second_eye_flow:
+            box = QMessageBox(self)
+            box.setWindowTitle("Save Screening")
+            box.setIcon(QMessageBox.Icon.Question)
+            if current_eye and opposite_eye:
+                box.setText(
+                    f"Save this <b>{current_eye}</b> result.\n\n"
+                    f"Do you need to screen the <b>{opposite_eye}</b> after saving?"
+                )
+            else:
+                box.setText("Do you need to screen the other eye after saving this result?")
+            other_btn = box.addButton("Screen Another Eye", QMessageBox.ButtonRole.AcceptRole)
+            just_btn = box.addButton("Just This Eye", QMessageBox.ButtonRole.ActionRole)
+            box.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
+            box.exec()
+            chosen = box.clickedButton()
+            if chosen is None or chosen == box.button(QMessageBox.StandardButton.Cancel):
+                self._set_save_state("idle")
+                return
+            go_screen_other_after_save = chosen == other_btn
+
         self._set_save_state("writing", "Saving to local records...")
         QApplication.processEvents()
         result = self.parent_page.save_screening(reset_after=False)  # Changed to False - don't auto-reset
@@ -1589,38 +1643,13 @@ class ResultsWindow(QWidget):
             saved_path = str(result.get("path") or "")
             details = f"Saved ✓ {saved_path}" if saved_path else "Saved ✓"
             self._set_save_state("success", details)
-            # Post-save flow: prompt Finish vs Screen Other Eye when the opposite eye
-            # has not yet been captured for this patient.
-            try:
-                pp = self.parent_page
-                pid = pp.p_id.text().strip() if hasattr(pp, "p_id") else ""
-                current_eye = pp.p_eye.currentText().strip() if hasattr(pp, "p_eye") else ""
-                opposite_eye = "Left Eye" if current_eye == "Right Eye" else "Right Eye"
-                opposite_exists = bool(pid) and hasattr(pp, "_find_existing_eye_record") and (
-                    pp._find_existing_eye_record(pid, opposite_eye) is not None
-                )
-            except Exception:
-                pid = ""
-                opposite_exists = True
-
-            if not opposite_exists:
-                box = QMessageBox(self)
-                box.setWindowTitle("Next Step")
-                box.setIcon(QMessageBox.Icon.Question)
-                box.setText("Screening saved. What would you like to do next?")
-                screen_btn = box.addButton("Screen Another Eye", QMessageBox.ButtonRole.AcceptRole)
-                finish_btn = box.addButton("Finish Session", QMessageBox.ButtonRole.ActionRole)
-                box.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
-                box.exec()
-                chosen = box.clickedButton()
-                if chosen == screen_btn and hasattr(pp, "screen_other_eye"):
-                    pp.screen_other_eye()
-                elif chosen == finish_btn and hasattr(pp, "open_saved_patient_screening_history"):
-                    QTimer.singleShot(0, pp.open_saved_patient_screening_history)
+            # If user opted to screen the other eye, switch back to the upload/intake view
+            # and auto-select the opposite eye.
+            if go_screen_other_after_save and hasattr(pp, "screen_other_eye"):
+                QTimer.singleShot(0, pp.screen_other_eye)
                 return
 
-            if result.get("next_action") == "screening_history" and hasattr(self.parent_page, "open_saved_patient_screening_history"):
-                QTimer.singleShot(0, self.parent_page.open_saved_patient_screening_history)
+            # Otherwise, keep the user on results so they can generate referral/report.
             return
 
         if status == "unchanged":

@@ -4,6 +4,7 @@ EMR worklist — front desk registration, queue, and patient visit (Overview + s
 
 from __future__ import annotations
 
+import contextlib
 import os
 import sqlite3
 import time
@@ -766,7 +767,11 @@ class PatientVisitDialog(QDialog):
 
     def _load_history(self) -> None:
         self._history_rows = emr.list_screenings_for_patient(self._patient_id)
-        rows = self._history_rows
+        # Hide unfinished visits from "Screening History" (they belong to the active visit UI, not history).
+        rows = [
+            r for r in (self._history_rows or [])
+            if str(r.get("session_status") or "").strip().lower() not in {"pending", "in_progress"}
+        ]
         self.table_hist.setRowCount(len(rows))
         for i, r in enumerate(rows):
             type_label = "Initial" if str(r.get("screening_type") or "").lower() == "initial" else "Follow-up"
@@ -1253,11 +1258,11 @@ class EmrVisitsPage(QWidget):
         results_layout.setSpacing(8)
 
         # Columns:
-        # 0 Name | 1 Age | 2 Sex | 3 Purpose | 4 Arrived | 5 Status | 6 queue_id(hidden) | 7 Action (clinical)
-        _ncol = 8 if self._is_clinical() else 7
+        # 0 Name | 1 Age | 2 Sex | 3 Purpose | 4 Queue Number | 5 queue_id(hidden) | 6 Action (clinical)
+        _ncol = 7 if self._is_clinical() else 6
         self.table = QTableWidget(0, _ncol)
         self.table.setObjectName("queueTable")
-        headers = ["Name", "Age", "Sex", "Purpose", "Arrived", "Status", "queue_id"]
+        headers = ["Name", "Age", "Sex", "Purpose", "Queue Number", "queue_id"]
         if self._is_clinical():
             headers.append("Actions")
         self.table.setHorizontalHeaderLabels(headers)
@@ -1268,7 +1273,7 @@ class EmrVisitsPage(QWidget):
         self.table.setShowGrid(False)
         self.table.verticalHeader().setVisible(False)
         self.table.doubleClicked.connect(self._on_row_activated)
-        self.table.setColumnHidden(6, True)
+        self.table.setColumnHidden(5, True)
 
         # Column sizing (aesthetic + scannable)
         hh = self.table.horizontalHeader()
@@ -1276,11 +1281,11 @@ class EmrVisitsPage(QWidget):
         # Prevent "Start diagnosis" from being squeezed/clipped on narrow windows.
         hh.setMinimumSectionSize(120)
         # Even columns across the visible table (queue_id is hidden).
-        for col in (0, 1, 2, 3, 4, 5):
+        for col in (0, 1, 2, 3, 4):
             hh.setSectionResizeMode(col, QHeaderView.Stretch)
         if self._is_clinical():
-            hh.setSectionResizeMode(7, QHeaderView.Stretch)  # Actions
-            self.table.setColumnWidth(7, 190)
+            hh.setSectionResizeMode(6, QHeaderView.Stretch)  # Actions
+            self.table.setColumnWidth(6, 190)
         results_layout.addWidget(self.table)
 
         self._queue_stack = QStackedWidget()
@@ -1300,7 +1305,11 @@ class EmrVisitsPage(QWidget):
         top = QHBoxLayout()
         top.addStretch()
         self.btn_review_start_dx = QPushButton("Start diagnosis")
-        self.btn_review_start_dx.setObjectName("queuePrimary")
+        # Single CTA for follow-up review (avoid duplicate buttons inside the panel).
+        self.btn_review_start_dx.setObjectName("queueBtnPrimary")
+        self.btn_review_start_dx.setCursor(Qt.PointingHandCursor)
+        self.btn_review_start_dx.setFixedHeight(38)
+        self.btn_review_start_dx.setMinimumWidth(170)
         self.btn_review_start_dx.clicked.connect(self._start_diagnosis_from_review)
         top.addWidget(self.btn_review_start_dx)
         rlp.addLayout(top)
@@ -1362,8 +1371,7 @@ class EmrVisitsPage(QWidget):
             sex = str(r.get("sex", "") or "-")
             purpose_raw = str(r.get("screening_purpose") or "new").strip().lower()
             purpose = "Follow-up" if purpose_raw == "follow_up" else "New"
-            qlabel = _fmt_queue_time(r.get("created_at"))
-            status = str(r.get("status") or "").strip().lower() or "-"
+            qlabel = str(r.get("queue_number") or "").strip() or "-"
             it0 = QTableWidgetItem(name)
             it0.setTextAlignment(Qt.AlignCenter)
             self.table.setItem(i, 0, it0)
@@ -1379,11 +1387,10 @@ class EmrVisitsPage(QWidget):
             it4 = QTableWidgetItem(qlabel)
             it4.setTextAlignment(Qt.AlignCenter)
             self.table.setItem(i, 4, it4)
-            self.table.setItem(i, 5, _status_item(status))
-            it6 = QTableWidgetItem(str(r.get("queue_id", "")))
-            it6.setTextAlignment(Qt.AlignCenter)
-            self.table.setItem(i, 6, it6)
-            if self._is_clinical() and self.table.columnCount() > 7:
+            it5 = QTableWidgetItem(str(r.get("queue_id", "")))
+            it5.setTextAlignment(Qt.AlignCenter)
+            self.table.setItem(i, 5, it5)
+            if self._is_clinical() and self.table.columnCount() > 6:
                 qid = r.get("queue_id")
                 pid = r.get("patient_id")
                 btn = QPushButton("Start diagnosis")
@@ -1400,7 +1407,7 @@ class EmrVisitsPage(QWidget):
                 wl.addStretch(1)
                 wl.addWidget(btn)
                 wl.addStretch(1)
-                self.table.setCellWidget(i, 7, wrap)
+                self.table.setCellWidget(i, 6, wrap)
         for row in range(self.table.rowCount()):
             self.table.setRowHeight(row, 42)
 
@@ -1409,7 +1416,7 @@ class EmrVisitsPage(QWidget):
         if r < 0:
             return None, None
         try:
-            qid = int(self.table.item(r, 6).text())
+            qid = int(self.table.item(r, 5).text())
         except (TypeError, ValueError, AttributeError):
             qid = None
         # patient from row data — re-query list (unfiltered) by queue id
@@ -1584,10 +1591,33 @@ class EmrVisitsPage(QWidget):
             if w is not None:
                 w.setParent(None)
         p = emr.get_patient(int(pid)) or {}
-        timeline_rows = emr.list_emr_timeline_records(int(pid))
-        timeline = group_patient_record_rows(timeline_rows)
         code = str(p.get("patient_code") or "").strip()
-        patient_summary = timeline[-1] if timeline else {"name": f"{p.get('first_name','')} {p.get('last_name','')}".strip(), "patient_id": code}
+
+        # Follow-up UX should show *previous* completed screenings with previews.
+        # Merge EMR-derived timeline (new system) with legacy patient_records timeline.
+        timeline_rows = []
+        with contextlib.suppress(Exception):
+            timeline_rows.extend(emr.list_emr_timeline_records(int(pid)) or [])
+        if code:
+            with contextlib.suppress(Exception):
+                timeline_rows.extend(self._fetch_legacy_timeline_records(code) or [])
+
+        timeline = group_patient_record_rows(timeline_rows)
+        patient_summary = timeline[-1] if timeline else {
+            "name": f"{p.get('first_name','')} {p.get('last_name','')}".strip(),
+            "patient_id": code,
+        }
+
+        # Prefer selecting the most recent *non-pending* screening for the top card.
+        initial_record = None
+        for rec in reversed(timeline or []):
+            result = str(rec.get("result") or "").strip().lower()
+            has_image = bool(str(rec.get("source_image_path") or "").strip())
+            if result and result != "pending" and has_image:
+                initial_record = rec
+                break
+        if initial_record is None and timeline:
+            initial_record = timeline[-1]
         panel = PatientTimelineDialog(
             patient_summary,
             timeline,
@@ -1596,25 +1626,15 @@ class EmrVisitsPage(QWidget):
             on_view_report=None,
             on_compare=None,
             on_export=None,
+            initial_record=initial_record,
             show_actions=False,
             show_history_tab=True,
         )
         panel.back_requested.connect(lambda: self._show_review_list())
-        # Follow-up UX: keep Start Diagnosis inside the screening history view.
-        action_row = QWidget()
-        action_row.setStyleSheet("background:transparent;")
-        ar = QHBoxLayout(action_row)
-        ar.setContentsMargins(0, 0, 0, 0)
-        ar.setSpacing(10)
-        ar.addStretch(1)
-        btn = QPushButton("Start diagnosis")
-        btn.setStyleSheet(
-            "QPushButton{background:#059669;color:#fff;border:none;border-radius:10px;padding:10px 16px;font-weight:800;}"
-            "QPushButton:hover{background:#047857;}"
-        )
-        btn.clicked.connect(self._start_diagnosis_from_review)
-        ar.addWidget(btn)
-        self._review_host_layout.addWidget(action_row, 0)
+        # Use the single top-right CTA; keep the panel focused on previews/history.
+        if hasattr(self, "btn_review_start_dx"):
+            self.btn_review_start_dx.setVisible(True)
+            self.btn_review_start_dx.setText("Start diagnosis")
         self._review_host_layout.addWidget(panel, 1)
         self._review_ctx = {"qid": int(qid), "pid": int(pid)}
         self._queue_stack.setCurrentIndex(1)

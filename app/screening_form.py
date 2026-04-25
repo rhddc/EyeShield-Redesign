@@ -141,10 +141,21 @@ class DropZoneLabel(QLabel):
         super().__init__(parent)
         self.setAcceptDrops(True)
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        # Default is tall for the standalone Screening page; embedding flows
+        # can override via `set_compact(True)` below.
         self.setMinimumHeight(400)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self._pixmap_full = QPixmap()
         self._reset_placeholder()
+
+    def set_compact(self, enabled: bool = True) -> None:
+        """Reduce height/typography for embedded layouts."""
+        if bool(enabled):
+            self.setMinimumHeight(240)
+            self.setStyleSheet(self._IDLE.replace("font-size:13px", "font-size:12px"))
+        else:
+            self.setMinimumHeight(400)
+            self.setStyleSheet(self._IDLE)
 
     def set_image(self, path: str):
         px = QPixmap(path)
@@ -595,6 +606,8 @@ class ScreeningPage(QWidget):
 
     def __init__(self):
         super().__init__()
+        self._embedded_compact = False
+        self._content_root = None
         self._ensure_patient_records_schema()
         self.current_image = None
         self.patient_counter = 0
@@ -640,6 +653,22 @@ class ScreeningPage(QWidget):
         self.stacked_widget = QStackedWidget()
         self.init_ui()
         self._autosave_timer.start()
+
+    def set_embedded_compact(self, enabled: bool = True, *, max_width: int = 560) -> None:
+        """
+        Compact layout for embedding (e.g., inside EMR doctor diagnosis page).
+        This reduces screen-based minimum widths so the upload panel fits its parent.
+        """
+        self._embedded_compact = bool(enabled)
+        root = getattr(self, "_content_root", None)
+        if root is None:
+            return
+        if self._embedded_compact:
+            root.setMinimumWidth(0)
+            root.setMaximumWidth(int(max_width) if int(max_width) > 0 else 560)
+            root.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
+        else:
+            root.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
     def _ensure_patient_records_schema(self) -> None:
         """Keep the local patient_records DB compatible with newer save payloads."""
@@ -869,9 +898,10 @@ class ScreeningPage(QWidget):
         root = QWidget()
         root.setStyleSheet(_REDESIGN_STYLESHEET)
         root_layout = QVBoxLayout(root)
+        embedded = bool(getattr(self, "_embedded_compact", False))
         # Wider side gutters improve readability (less edge-to-edge scanning).
-        root_layout.setContentsMargins(24, 20, 24, 20)
-        root_layout.setSpacing(12)
+        root_layout.setContentsMargins(0 if embedded else 24, 0 if embedded else 20, 0 if embedded else 24, 0 if embedded else 20)
+        root_layout.setSpacing(10 if embedded else 12)
 
         # Follow-up Context Header
         self.followup_header = QFrame()
@@ -907,16 +937,22 @@ class ScreeningPage(QWidget):
         center_row = QHBoxLayout(center_wrap)
         center_row.setContentsMargins(0, 0, 0, 0)
         center_row.setSpacing(0)
-        center_row.addStretch(1)
+        if not embedded:
+            center_row.addStretch(1)
 
         content_root = QWidget()
         content_root.setStyleSheet("background: transparent;")
+        # Keep a handle so embedding pages can compact the width later.
+        self._content_root = content_root
         # Keep the assessment form in a "comfortable" middle width.
         # Wide enough for the intake + upload split, but not edge-to-edge on large screens.
         screen = QGuiApplication.primaryScreen()
         screen_w = int(screen.availableGeometry().width()) if screen else 1366
         assess_max_w = max(1100, min(1440, int(screen_w * 0.92)))
         assess_min_w = max(880, min(1120, int(screen_w * 0.70)))
+        if bool(getattr(self, "_embedded_compact", False)):
+            assess_max_w = min(620, assess_max_w)
+            assess_min_w = 0
         content_root.setMinimumWidth(assess_min_w)
         content_root.setMaximumWidth(assess_max_w)
         content_root.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
@@ -926,8 +962,13 @@ class ScreeningPage(QWidget):
         content_layout.setSpacing(8)
 
         center_row.addWidget(content_root, 1)
-        center_row.addStretch(1)
-        root_layout.addWidget(center_wrap, 1)
+        if not embedded:
+            center_row.addStretch(1)
+            root_layout.addWidget(center_wrap, 1)
+        else:
+            # In embedded mode, avoid the centering "gutters" — the parent layout
+            # already controls margins/centering.
+            root_layout.addWidget(content_root, 1)
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.setChildrenCollapsible(False)
@@ -938,8 +979,12 @@ class ScreeningPage(QWidget):
             frame = QFrame()
             frame.setObjectName("card")
             layout = QVBoxLayout(frame)
-            layout.setContentsMargins(24, 20, 24, 22)
-            layout.setSpacing(14)
+            if embedded:
+                layout.setContentsMargins(16, 14, 16, 14)
+                layout.setSpacing(10)
+            else:
+                layout.setContentsMargins(24, 20, 24, 22)
+                layout.setSpacing(14)
             return frame, layout
 
         self._scr_unified_labels = {}
@@ -1332,11 +1377,21 @@ class ScreeningPage(QWidget):
         card3.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self._upload_card = card3
         c3 = QVBoxLayout(card3)
-        c3.setContentsMargins(24, 20, 24, 22)
-        c3.setSpacing(12)
+        if embedded:
+            c3.setContentsMargins(16, 14, 16, 14)
+            c3.setSpacing(10)
+            card3.setMaximumWidth(520)
+        else:
+            c3.setContentsMargins(24, 20, 24, 22)
+            c3.setSpacing(12)
         section_title(c3, "Fundus Image Upload", "scr_image_upload")
 
         self.image_label = DropZoneLabel()
+        if embedded and hasattr(self.image_label, "set_compact"):
+            try:
+                self.image_label.set_compact(True)
+            except Exception:
+                pass
         self.image_label.file_dropped.connect(self._on_image_dropped)
 
         def _dz_click(event):
@@ -1549,7 +1604,7 @@ class ScreeningPage(QWidget):
             "diabetes_diagnosis_date": (self.diabetes_diagnosis_date.text().strip() if hasattr(self, "diabetes_diagnosis_date") else "") or None,
             "treatment_regimen": (self.treatment_regimen.currentText().strip() if hasattr(self, "treatment_regimen") else "") or None,
             "prev_dr_stage": (self.prev_dr_stage.currentText().strip() if hasattr(self, "prev_dr_stage") else "") or None,
-            "prev_treatment": "Yes" if self.prev_treatment.isChecked() else "No",
+            "prev_treatment": "Yes" if bool(getattr(getattr(self, "prev_treatment", None), "isChecked", lambda: False)()) else "No",
             "symptom_blurred_vision": 1 if getattr(self, "symptom_blurred", None) and self.symptom_blurred.isChecked() else 0,
             "symptom_floaters": 1 if getattr(self, "symptom_floaters", None) and self.symptom_floaters.isChecked() else 0,
             "symptom_flashes": 1 if getattr(self, "symptom_flashes", None) and self.symptom_flashes.isChecked() else 0,
@@ -1831,12 +1886,9 @@ class ScreeningPage(QWidget):
 
         return True
 
+    # HbA1c has been removed from the UI; keep handler as a no-op for compatibility.
     def _on_hba1c_changed(self, value: float):
-        if value > 9.0:
-            self.hba1c_warn_label.setText("High HbA1c - verify this value before continuing")
-            self.hba1c_warn_label.show()
-        else:
-            self.hba1c_warn_label.hide()
+        return
 
     def _calculate_bmi(self):
         """Auto-calculate BMI when height or weight changes."""
@@ -2345,12 +2397,7 @@ class ScreeningPage(QWidget):
                 self.diabetes_duration.setValue(int(float(dm)))
             except (TypeError, ValueError):
                 pass
-        ha = emr_patient.get("hba1c")
-        if ha is not None and hasattr(self, "hba1c"):
-            try:
-                self.hba1c.setValue(float(ha))
-            except (TypeError, ValueError):
-                pass
+        # HbA1c removed from UI; ignore EMR value if present.
 
         es = (eye_screened or "").strip()
         if es == "Left":
@@ -2557,9 +2604,7 @@ class ScreeningPage(QWidget):
         # Clinical history
         _set_enabled("diabetes_type", not is_follow_up_locked)
         _set_ro("diabetes_diagnosis_date", is_follow_up_locked)
-        if hasattr(self, "hba1c"):
-            self.hba1c.setReadOnly(is_follow_up_locked)
-            self.hba1c.setEnabled(not is_follow_up_locked)
+        # HbA1c removed from UI.
         _set_enabled("treatment_regimen", not is_follow_up_locked)
         if hasattr(self, "prev_treatment"):
             self.prev_treatment.setEnabled(not is_follow_up_locked)
@@ -2643,8 +2688,9 @@ class ScreeningPage(QWidget):
         if hasattr(self, "diabetes_diagnosis_date"):
             self.diabetes_diagnosis_date.clear()
         self.diabetes_duration.setValue(0)
-        self.hba1c.setValue(0.0)
-        self.prev_treatment.setChecked(False)
+        # HbA1c removed from UI.
+        if hasattr(self, "prev_treatment"):
+            self.prev_treatment.setChecked(False)
         if hasattr(self, "va_left"):
             self.va_left.clear()
         if hasattr(self, "va_right"):
@@ -2854,19 +2900,15 @@ class ScreeningPage(QWidget):
             except (ValueError, TypeError):
                 self.diabetes_duration.setValue(0)
 
-            # Safe float conversion for hba1c
-            try:
-                hba1c_text = str(hba1c or "").replace("%", "").strip()
-                hba1c_val = float(hba1c_text) if hba1c_text else 0.0
-                self.hba1c.setValue(hba1c_val)
-            except (ValueError, TypeError):
-                self.hba1c.setValue(0.0)
+            # HbA1c removed from UI.
 
             # Safe prev_treatment boolean
             try:
-                self.prev_treatment.setChecked(bool(prev_treatment and str(prev_treatment).lower() in ("yes", "true", "1")))
+                if hasattr(self, "prev_treatment"):
+                    self.prev_treatment.setChecked(bool(prev_treatment and str(prev_treatment).lower() in ("yes", "true", "1")))
             except Exception:
-                self.prev_treatment.setChecked(False)
+                if hasattr(self, "prev_treatment"):
+                    self.prev_treatment.setChecked(False)
 
             # Mapping for newly added fields
             try:
@@ -3446,9 +3488,9 @@ class ScreeningPage(QWidget):
 
         return {
             "age":            self.p_age.value(),
-            "hba1c":          self.hba1c.value(),
+            "hba1c":          0.0,
             "duration":       self.diabetes_duration.value(),
-            "prev_treatment": self.prev_treatment.isChecked(),
+            "prev_treatment": bool(getattr(getattr(self, "prev_treatment", None), "isChecked", lambda: False)()),
             "diabetes_type":  self.diabetes_type.currentText(),
             "eye":            self.p_eye.currentText(),
             # Vital signs
@@ -3472,6 +3514,7 @@ class ScreeningPage(QWidget):
         return has_result and not self._current_eye_saved
 
     def _draft_payload(self) -> dict:
+        prev_treatment_checked = bool(getattr(getattr(self, "prev_treatment", None), "isChecked", lambda: False)())
         return {
             "saved_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "patient_id": self.p_id.text().strip(),
@@ -3486,20 +3529,20 @@ class ScreeningPage(QWidget):
             "diabetes_type": self.diabetes_type.currentText(),
             "diagnosis_date": self.diabetes_diagnosis_date.text().strip() if hasattr(self, "diabetes_diagnosis_date") else "",
             "duration": self.diabetes_duration.value(),
-            "hba1c": self.hba1c.value(),
-            "prev_treatment": self.prev_treatment.isChecked(),
+            "hba1c": 0.0,
+            "prev_treatment": prev_treatment_checked,
             "va_left": self.va_left.text().strip() if hasattr(self, "va_left") else "",
             "va_right": self.va_right.text().strip() if hasattr(self, "va_right") else "",
             "bp_systolic": self.bp_systolic.value() if hasattr(self, "bp_systolic") else 0,
             "bp_diastolic": self.bp_diastolic.value() if hasattr(self, "bp_diastolic") else 0,
             "fbs": self.fbs.value() if hasattr(self, "fbs") else 0,
             "rbs": self.rbs.value() if hasattr(self, "rbs") else 0,
-            "symptom_blurred": self.symptom_blurred.isChecked(),
-            "symptom_floaters": self.symptom_floaters.isChecked(),
-            "symptom_flashes": self.symptom_flashes.isChecked(),
-            "symptom_vision_loss": self.symptom_vision_loss.isChecked(),
-            "symptom_other": self.symptom_other.text().strip(),
-            "notes": self.notes.toPlainText(),
+            "symptom_blurred": bool(getattr(getattr(self, "symptom_blurred", None), "isChecked", lambda: False)()),
+            "symptom_floaters": bool(getattr(getattr(self, "symptom_floaters", None), "isChecked", lambda: False)()),
+            "symptom_flashes": bool(getattr(getattr(self, "symptom_flashes", None), "isChecked", lambda: False)()),
+            "symptom_vision_loss": bool(getattr(getattr(self, "symptom_vision_loss", None), "isChecked", lambda: False)()),
+            "symptom_other": (self.symptom_other.text().strip() if hasattr(self, "symptom_other") else ""),
+            "notes": (self.notes.toPlainText() if hasattr(self, "notes") else ""),
             "height": self.height.value() if hasattr(self, "height") else 0,
             "weight": self.weight.value() if hasattr(self, "weight") else 0,
             "bmi": self.bmi.value() if hasattr(self, "bmi") else 0,
@@ -3578,8 +3621,9 @@ class ScreeningPage(QWidget):
         if hasattr(self, "diabetes_diagnosis_date"):
             self.diabetes_diagnosis_date.setText(str(data.get("diagnosis_date") or ""))
         self.diabetes_duration.setValue(int(data.get("duration") or 0))
-        self.hba1c.setValue(float(str(data.get("hba1c") or "").replace("%", "").strip() or 0.0))
-        self.prev_treatment.setChecked(bool(data.get("prev_treatment")))
+        # HbA1c removed from UI.
+        if hasattr(self, "prev_treatment"):
+            self.prev_treatment.setChecked(bool(data.get("prev_treatment")))
 
         if hasattr(self, "va_left"):
             self.va_left.setText(str(data.get("va_left") or ""))
@@ -3872,7 +3916,26 @@ class ScreeningPage(QWidget):
                 "Severe DR": 3,
                 "Proliferative DR": 4,
             }
-            final_grade = label_to_grade.get(final_diagnosis_icdr) or label_to_grade.get(doctor_classification)
+            def _norm(v: str) -> str:
+                t = str(v or "").strip()
+                low = t.lower()
+                if "proliferative" in low or low in {"pdr"}:
+                    return "Proliferative DR"
+                if "severe" in low:
+                    return "Severe DR"
+                if "moderate" in low:
+                    return "Moderate DR"
+                if "mild" in low:
+                    return "Mild DR"
+                if "no dr" in low or low in {"normal", "none"}:
+                    return "No DR"
+                return t
+
+            final_diagnosis_icdr = _norm(final_diagnosis_icdr)
+            doctor_classification = _norm(doctor_classification)
+            final_grade = label_to_grade.get(final_diagnosis_icdr)
+            if final_grade is None:
+                final_grade = label_to_grade.get(doctor_classification)
             if final_grade is None:
                 QMessageBox.warning(self, "Save Failed", "Please select a valid final DR classification before saving.")
                 return {"status": "invalid"}
@@ -3887,7 +3950,7 @@ class ScreeningPage(QWidget):
                 "random_blood_sugar": float(self.rbs.value()) if hasattr(self, "rbs") and self.rbs.value() > 0 else None,
                 "diabetes_type": (self.diabetes_type.currentText().strip() if hasattr(self, "diabetes_type") else "") or None,
                 "dm_duration_years": float(self.diabetes_duration.value()) if hasattr(self, "diabetes_duration") and self.diabetes_duration.value() > 0 else None,
-                "hba1c": float(self.hba1c.value()) if hasattr(self, "hba1c") and self.hba1c.value() > 0 else None,
+                "hba1c": None,
                 "diabetes_diagnosis_date": (self.diabetes_diagnosis_date.text().strip() if hasattr(self, "diabetes_diagnosis_date") else "") or None,
                 "treatment_regimen": (self.treatment_regimen.currentText().strip() if hasattr(self, "treatment_regimen") else "") or None,
             "prev_dr_stage": (self.clinical_prev_dr_stage.currentText().strip() if hasattr(self, "clinical_prev_dr_stage") else "") or None,
@@ -4007,8 +4070,8 @@ class ScreeningPage(QWidget):
         eye = self.p_eye.currentText()
         diabetes_type = self.diabetes_type.currentText()
         duration = self.diabetes_duration.value()
-        hba1c = f"{self.hba1c.value():.1f}%" if self.hba1c.value() > 0 else ""
-        prev_treatment = "Yes" if self.prev_treatment.isChecked() else "No"
+        hba1c = ""
+        prev_treatment = "Yes" if bool(getattr(getattr(self, "prev_treatment", None), "isChecked", lambda: False)()) else "No"
         notes = self.notes.toPlainText().strip()
         result = self.last_result_class
         confidence = self.last_result_conf
@@ -4404,8 +4467,8 @@ class ScreeningPage(QWidget):
         contact = self.p_contact.text()
         d_type = self.diabetes_type.currentText()
         d_dur = self.diabetes_duration.value()
-        hba1c_val = self.hba1c.value()
-        prev = self.prev_treatment.isChecked()
+        hba1c_val = 0.0
+        prev = bool(getattr(getattr(self, "prev_treatment", None), "isChecked", lambda: False)())
         notes_text = self.notes.toPlainText()
 
         # Capture vitals
@@ -4463,8 +4526,9 @@ class ScreeningPage(QWidget):
         self.p_contact.setText(contact)
         self.diabetes_type.setCurrentText(d_type)
         self.diabetes_duration.setValue(d_dur)
-        self.hba1c.setValue(hba1c_val)
-        self.prev_treatment.setChecked(prev)
+        # HbA1c removed from UI.
+        if hasattr(self, "prev_treatment"):
+            self.prev_treatment.setChecked(prev)
         self.notes.setPlainText(notes_text)
 
         # Restore vitals

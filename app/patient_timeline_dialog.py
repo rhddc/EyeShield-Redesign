@@ -355,6 +355,13 @@ class PatientTimelineDialog(QWidget):
             return
         table: QTableWidget = self._history_table
         rows = list(self.timeline_records or [])
+        # Hide unfinished screenings from history (keep history as "completed-only").
+        rows = [
+            r for r in rows
+            if str(r.get("result") or "").strip().lower() != "pending"
+            and str(r.get("final_diagnosis_icdr") or "").strip().lower() != "pending"
+            and bool(str(r.get("source_image_path") or "").strip())
+        ]
         # Newest first in the list view.
         rows.sort(key=lambda r: (_parse_dt(r.get("screened_at")) or datetime.min, int(r.get("id") or 0)), reverse=True)
 
