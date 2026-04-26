@@ -26,7 +26,7 @@ from PySide6.QtWidgets import (
     QMainWindow, QWidget, QLabel, QPushButton, QVBoxLayout, QHBoxLayout,
     QStackedWidget, QGroupBox, QMessageBox, QProgressBar, QSizePolicy,
     QFrame, QMenu, QInputDialog, QTableWidget, QTableWidgetItem, QAbstractItemView,
-    QHeaderView, QDialog, QApplication, QLineEdit, QCalendarWidget
+    QHeaderView, QDialog, QApplication, QLineEdit, QCalendarWidget, QScrollArea
 )
 from PySide6.QtCore import Qt, QSize, QByteArray, QEvent, QTimer, QCoreApplication
 from PySide6.QtGui import QIcon, QPixmap, QImage, QPainter, QFont, QShortcut, QKeySequence, QColor, QGuiApplication, QPainterPath
@@ -2049,7 +2049,17 @@ class EyeShieldApp(QMainWindow):
         content_row.addWidget(sidebar_w, 4)
         outer.addLayout(content_row, 1)
 
-        return page
+        scroll_area = QScrollArea()
+        scroll_area.setObjectName("dashboardScroll")
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setFrameShape(QFrame.Shape.NoFrame)
+        scroll_area.setStyleSheet("QScrollArea#dashboardScroll { background: #f0f4f8; border: none; }")
+        
+        # Give the inner page a minimum width so texts don't get scrambled when resolution is reduced
+        page.setMinimumWidth(850)
+        
+        scroll_area.setWidget(page)
+        return scroll_area
 
     def _dash_load_frontdesk_patient_records(self, query: str) -> None:
         """Frontdesk Dashboard: populate patient record search table."""

@@ -44,10 +44,10 @@ from PySide6.QtWidgets import (
 
 try:
     from . import emr_service as emr
-    from .ui_feedback import show_success, show_error, show_warning, confirm, loading_state
+    from .ui_feedback import show_success, show_error, show_warning, confirm, loading_state, apply_dialog_style
 except Exception:  # pragma: no cover
     import emr_service as emr
-    from ui_feedback import show_success, show_error, show_warning, confirm, loading_state
+    from ui_feedback import show_success, show_error, show_warning, confirm, loading_state, apply_dialog_style
 try:
     from .patient_record_groups import group_patient_record_rows
 except Exception:
@@ -1203,64 +1203,7 @@ class EmrVisitsPage(QWidget):
         content_l.setSpacing(10)
         qp_layout.addWidget(content, 1)
 
-        # ── Header card (match PatientTimeline aesthetic) ────────────────────
-        header_card = QFrame()
-        header_card.setObjectName("queueHeaderCard")
-        header_l = QVBoxLayout(header_card)
-        header_l.setContentsMargins(14, 12, 14, 12)
-        header_l.setSpacing(10)
-
-        title_row = QHBoxLayout()
-        title_row.setSpacing(10)
-        title_col = QVBoxLayout()
-        title_col.setSpacing(1)
-        title = QLabel("Patient Queue")
-        title.setObjectName("queueTitle")
-        title_col.addWidget(title)
-        title_row.addLayout(title_col, 1)
-        header_l.addLayout(title_row)
-
-        controls_row = QHBoxLayout()
-        controls_row.setSpacing(10)
-
-        self.queue_search = QLineEdit()
-        self.queue_search.setObjectName("queueSearch")
-        self.queue_search.setPlaceholderText("Search name, queue number, sex…")
-        self.queue_search.setMinimumHeight(36)
-        self.queue_search.textChanged.connect(self.refresh)
-        controls_row.addWidget(self.queue_search, 1)
-
-        self.btn_refresh = QPushButton("Refresh")
-        self.btn_refresh.setObjectName("queueBtnSecondary")
-        self.btn_refresh.setCursor(Qt.PointingHandCursor)
-        self.btn_refresh.clicked.connect(self.refresh)
-        controls_row.addWidget(self.btn_refresh, 0)
-
-        # Front desk actions (grouped on the right)
-        self.btn_new_patient_visit = QPushButton("+ New patient / visit")
-        self.btn_new_patient_visit.setObjectName("queueBtnPrimary")
-        self.btn_new_patient_visit.setCursor(Qt.PointingHandCursor)
-        self.btn_new_patient_visit.clicked.connect(self._go_to_new_patient_intake)
-        self.btn_new_patient_visit.setVisible(self._is_front())
-        controls_row.addWidget(self.btn_new_patient_visit, 0)
-
-        self.btn_cancel_visit = QPushButton("Cancel visit")
-        self.btn_cancel_visit.setObjectName("queueBtnDanger")
-        self.btn_cancel_visit.setCursor(Qt.PointingHandCursor)
-        self.btn_cancel_visit.clicked.connect(self._cancel_selected_visit)
-        self.btn_cancel_visit.setVisible(self._is_front())
-        controls_row.addWidget(self.btn_cancel_visit, 0)
-
-        self.btn_clear_queue = QPushButton("Clear today’s queue")
-        self.btn_clear_queue.setObjectName("queueBtnSecondary")
-        self.btn_clear_queue.setCursor(Qt.PointingHandCursor)
-        self.btn_clear_queue.clicked.connect(self._clear_today_queue)
-        # Allow clearing from both frontdesk and clinical POV when resetting the queue.
-        self.btn_clear_queue.setVisible(self._is_front() or self._is_clinical())
-        controls_row.addWidget(self.btn_clear_queue, 0)
-
-        header_l.addLayout(controls_row)
-        content_l.addWidget(header_card)
+        # header_card will be added inside queue_list_page instead of here to allow hiding it during review.
 
         # ── Table card ───────────────────────────────────────────────────────
         table_card = QFrame()
@@ -1306,25 +1249,73 @@ class EmrVisitsPage(QWidget):
         queue_list_page = QWidget()
         qlp = QVBoxLayout(queue_list_page)
         qlp.setContentsMargins(0, 0, 0, 0)
-        qlp.setSpacing(0)
+        qlp.setSpacing(10)
+
+        # ── Header card (Relocated here to hide it during review) ────────────
+        self.header_card = QFrame()
+        self.header_card.setObjectName("queueHeaderCard")
+        header_l = QVBoxLayout(self.header_card)
+        header_l.setContentsMargins(14, 12, 14, 12)
+        header_l.setSpacing(10)
+
+        title_row = QHBoxLayout()
+        title_row.setSpacing(10)
+        title_col = QVBoxLayout()
+        title_col.setSpacing(1)
+        title = QLabel("Patient Queue")
+        title.setObjectName("queueTitle")
+        title_col.addWidget(title)
+        title_row.addLayout(title_col, 1)
+        header_l.addLayout(title_row)
+
+        controls_row = QHBoxLayout()
+        controls_row.setSpacing(10)
+
+        self.queue_search = QLineEdit()
+        self.queue_search.setObjectName("queueSearch")
+        self.queue_search.setPlaceholderText("Search name, queue number, sex…")
+        self.queue_search.setMinimumHeight(36)
+        self.queue_search.textChanged.connect(self.refresh)
+        controls_row.addWidget(self.queue_search, 1)
+
+        self.btn_refresh = QPushButton("Refresh")
+        self.btn_refresh.setObjectName("queueBtnSecondary")
+        self.btn_refresh.setCursor(Qt.PointingHandCursor)
+        self.btn_refresh.clicked.connect(self.refresh)
+        controls_row.addWidget(self.btn_refresh, 0)
+
+        # Front desk actions
+        self.btn_new_patient_visit = QPushButton("+ New patient / visit")
+        self.btn_new_patient_visit.setObjectName("queueBtnPrimary")
+        self.btn_new_patient_visit.setCursor(Qt.PointingHandCursor)
+        self.btn_new_patient_visit.clicked.connect(self._go_to_new_patient_intake)
+        self.btn_new_patient_visit.setVisible(self._is_front())
+        controls_row.addWidget(self.btn_new_patient_visit, 0)
+
+        self.btn_cancel_visit = QPushButton("Cancel visit")
+        self.btn_cancel_visit.setObjectName("queueBtnDanger")
+        self.btn_cancel_visit.setCursor(Qt.PointingHandCursor)
+        self.btn_cancel_visit.clicked.connect(self._cancel_selected_visit)
+        self.btn_cancel_visit.setVisible(self._is_front())
+        controls_row.addWidget(self.btn_cancel_visit, 0)
+
+        self.btn_clear_queue = QPushButton("Clear today’s queue")
+        self.btn_clear_queue.setObjectName("queueBtnSecondary")
+        self.btn_clear_queue.setCursor(Qt.PointingHandCursor)
+        self.btn_clear_queue.clicked.connect(self._clear_today_queue)
+        self.btn_clear_queue.setVisible(self._is_front() or self._is_clinical())
+        controls_row.addWidget(self.btn_clear_queue, 0)
+
+        header_l.addLayout(controls_row)
+        qlp.addWidget(self.header_card)
         qlp.addWidget(table_card, 1)
+
         self._queue_stack.addWidget(queue_list_page)  # 0
 
         review_page = QWidget()
         rlp = QVBoxLayout(review_page)
         rlp.setContentsMargins(0, 0, 0, 0)
-        rlp.setSpacing(12)
-        top = QHBoxLayout()
-        top.addStretch()
-        self.btn_review_start_dx = QPushButton("Start diagnosis")
-        # Single CTA for follow-up review (avoid duplicate buttons inside the panel).
-        self.btn_review_start_dx.setObjectName("queueBtnPrimary")
-        self.btn_review_start_dx.setCursor(Qt.PointingHandCursor)
-        self.btn_review_start_dx.setFixedHeight(38)
-        self.btn_review_start_dx.setMinimumWidth(170)
-        self.btn_review_start_dx.clicked.connect(self._start_diagnosis_from_review)
-        top.addWidget(self.btn_review_start_dx)
-        rlp.addLayout(top)
+        rlp.setSpacing(0)
         self._review_host = QWidget()
         self._review_host_layout = QVBoxLayout(self._review_host)
         self._review_host_layout.setContentsMargins(0, 0, 0, 0)
@@ -1338,14 +1329,9 @@ class EmrVisitsPage(QWidget):
         diagnosis_page = QWidget()
         dp_layout = QVBoxLayout(diagnosis_page)
         dp_layout.setContentsMargins(0, 0, 0, 0)
-        dp_layout.setSpacing(12)
-        diag_top = QHBoxLayout()
-        self.btn_back_queue = QPushButton("← Back to patient queue")
-        self.btn_back_queue.setObjectName("queueNeutral")
-        self.btn_back_queue.clicked.connect(self._on_back_from_diagnosis)
-        diag_top.addWidget(self.btn_back_queue)
-        diag_top.addStretch()
-        dp_layout.addLayout(diag_top)
+        dp_layout.setSpacing(0)
+
+        # Removed the redundant back button row here as it's now handled inside the diagnosis form or via the form's header.
         self._diagnosis_host = QWidget()
         self._diagnosis_layout = QVBoxLayout(self._diagnosis_host)
         self._diagnosis_layout.setContentsMargins(0, 0, 0, 0)
@@ -1405,7 +1391,8 @@ class EmrVisitsPage(QWidget):
             if self._is_clinical() and self.table.columnCount() > 6:
                 qid = r.get("queue_id")
                 pid = r.get("patient_id")
-                btn = QPushButton("Start diagnosis")
+                btn_text = "Start Follow-up" if purpose == "Follow-up" else "Start diagnosis"
+                btn = QPushButton(btn_text)
                 btn.setObjectName("queueBtnPrimary")
                 btn.setCursor(Qt.PointingHandCursor)
                 btn.setFixedHeight(34)
@@ -1533,14 +1520,7 @@ class EmrVisitsPage(QWidget):
             show_warning(self, "Screening In Progress", "Please wait for image analysis to finish before leaving.")
             return
 
-        confirm = QMessageBox.question(
-            self,
-            "Return to Patient Queue",
-            "Are you sure you want to go back to the list?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
-        )
-        if confirm != QMessageBox.StandardButton.Yes:
+        if not confirm(self, "Return to Patient Queue", "Are you sure you want to go back to the list?"):
             return
 
         # If the global screening page is embedded, release it; otherwise just navigate back.
@@ -1592,6 +1572,11 @@ class EmrVisitsPage(QWidget):
             qrow = emr.get_queue_entry(int(qid_i)) or {}
             is_follow_up = str(qrow.get("screening_purpose") or "").strip().lower() == "follow_up"
         if is_follow_up:
+            show_warning(
+                self,
+                "Follow-up screening",
+                "System found a previous screening for this patient.\n\nPlease review it first before proceeding to the diagnosis."
+            )
             self._show_followup_review(qid_i, pid_i)
             return
         self._launch_screening_from_queue(qid_i, pid_i)
@@ -1680,15 +1665,12 @@ class EmrVisitsPage(QWidget):
             on_view_report=None,
             on_compare=None,
             on_export=None,
+            on_start_diagnosis=self._start_diagnosis_from_review,
             initial_record=initial_record,
             show_actions=False,
             show_history_tab=True,
         )
         panel.back_requested.connect(lambda: self._show_review_list())
-        # Use the single top-right CTA; keep the panel focused on previews/history.
-        if hasattr(self, "btn_review_start_dx"):
-            self.btn_review_start_dx.setVisible(True)
-            self.btn_review_start_dx.setText("Start diagnosis")
         self._review_host_layout.addWidget(panel, 1)
         self._review_ctx = {"qid": int(qid), "pid": int(pid)}
         self._queue_stack.setCurrentIndex(1)
@@ -1968,6 +1950,7 @@ class EmrVisitsPage(QWidget):
         if not ok:
             ex = emr.get_today_active_queue_for_patient(pid) or {}
             m = QMessageBox(self)
+            apply_dialog_style(m)
             m.setWindowTitle("Active visit exists")
             m.setIcon(QMessageBox.Icon.Warning)
             m.setText(

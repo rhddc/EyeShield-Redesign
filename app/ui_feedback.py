@@ -11,8 +11,37 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QMessageBox, QPushButton, QWidget
 
 
+
+_DIALOG_STYLE = """
+QMessageBox {
+    background-color: white;
+}
+QLabel {
+    color: #111827;
+}
+QPushButton {
+    background-color: #f1f5f9;
+    color: #374151;
+    border: 1px solid #e2e8f0;
+    border-radius: 6px;
+    padding: 6px 16px;
+    font-size: 12px;
+    font-weight: 600;
+    min-width: 80px;
+}
+QPushButton:hover {
+    background-color: #e2e8f0;
+    color: #0f172a;
+}
+"""
+
+def apply_dialog_style(box: QMessageBox):
+    box.setStyleSheet(_DIALOG_STYLE)
+
+
 def show_success(parent: QWidget, title: str, message: str) -> None:
     box = QMessageBox(parent)
+    apply_dialog_style(box)
     box.setIcon(QMessageBox.Icon.Information)
     box.setWindowTitle(title)
     box.setText(message)
@@ -22,6 +51,7 @@ def show_success(parent: QWidget, title: str, message: str) -> None:
 
 def show_error(parent: QWidget, title: str, message: str) -> None:
     box = QMessageBox(parent)
+    apply_dialog_style(box)
     box.setIcon(QMessageBox.Icon.Critical)
     box.setWindowTitle(title)
     box.setText(message)
@@ -31,6 +61,7 @@ def show_error(parent: QWidget, title: str, message: str) -> None:
 
 def show_warning(parent: QWidget, title: str, message: str) -> None:
     box = QMessageBox(parent)
+    apply_dialog_style(box)
     box.setIcon(QMessageBox.Icon.Warning)
     box.setWindowTitle(title)
     box.setText(message)
@@ -40,7 +71,8 @@ def show_warning(parent: QWidget, title: str, message: str) -> None:
 
 def confirm(parent: QWidget, title: str, message: str, *, yes_text: str = "Yes", no_text: str = "No") -> bool:
     box = QMessageBox(parent)
-    box.setIcon(QMessageBox.Icon.Warning)
+    apply_dialog_style(box)
+    box.setIcon(QMessageBox.Icon.Question)
     box.setWindowTitle(title)
     box.setText(message)
     yes = box.addButton(yes_text, QMessageBox.ButtonRole.AcceptRole)

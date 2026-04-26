@@ -22,13 +22,20 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QSizePolicy,
     QGridLayout,
+    QScrollArea,
 )
 from PySide6.QtCore import Qt, QDate
+from PySide6.QtGui import QPixmap
 
 try:
     from .screening_form import ScreeningPage
 except Exception:
     from screening_form import ScreeningPage
+
+try:
+    from .ui_feedback import show_warning, apply_dialog_style
+except Exception:
+    from ui_feedback import show_warning, apply_dialog_style
 
 try:
     import emr_service as emr
@@ -37,10 +44,10 @@ except Exception:
 
 
 # ── Shared style tokens ────────────────────────────────────────────────────────
-_CARD_BG   = "background:#ffffff;border:none;border-radius:8px;"
-_LBL_KEY   = "font-size:9px;color:#94a3b8;font-weight:600;letter-spacing:0.4px;text-transform:uppercase;"
-_LBL_VAL   = "font-size:11px;color:#0f172a;font-weight:700;"
-_CARD_TTL  = "font-size:11px;font-weight:800;color:#0f172a;letter-spacing:-0.2px;"
+_CARD_BG   = "background:#ffffff;border:none;border-radius:0px;"
+_LBL_KEY   = "font-size:10px;color:#475569;font-weight:500;text-transform:uppercase;letter-spacing:0.2px;"
+_LBL_VAL   = "font-size:12px;color:#1e293b;font-weight:600;"
+_CARD_TTL  = "font-size:13px;font-weight:700;color:#1e293b;"
 _DIVIDER   = "background:#f1f5f9;max-height:1px;min-height:1px;border:none;"
 
 
@@ -62,6 +69,28 @@ def _divider() -> QFrame:
     line.setStyleSheet(_DIVIDER)
     line.setFixedHeight(1)
     return line
+
+
+def _data_box(key: str, val_widget: QLabel) -> QWidget:
+    w = QWidget()
+    w.setStyleSheet("background:transparent; border:none;")
+    l = QVBoxLayout(w)
+    l.setContentsMargins(0, 0, 0, 0)
+    l.setSpacing(1)
+    l.addWidget(_key_label(key))
+    l.addWidget(val_widget)
+    return w
+
+
+def _anthro_card(key: str, val_widget: QLabel) -> QFrame:
+    f = QFrame()
+    f.setStyleSheet("background:transparent;border:none;border-radius:0px;")
+    l = QVBoxLayout(f)
+    l.setContentsMargins(8, 6, 8, 6)
+    l.setSpacing(1)
+    l.addWidget(_key_label(key))
+    l.addWidget(val_widget)
+    return f
 
 
 class DoctorDiagnosisForm(QWidget):
@@ -100,12 +129,26 @@ class DoctorDiagnosisForm(QWidget):
         hl.setContentsMargins(20, 0, 20, 0)
         hl.setSpacing(8)
 
+        self.btn_back = QPushButton("← Back")
+        self.btn_back.setCursor(Qt.PointingHandCursor)
+        self.btn_back.setStyleSheet(
+            "QPushButton{"
+            "background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #ffffff,stop:1 #f1f5f9);"
+            "border:1px solid #cbd5e1;border-radius:8px;"
+            "color:#334155;font-size:12px;font-weight:700;padding:6px 18px;}"
+            "QPushButton:hover{"
+            "background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #f8fafc,stop:1 #e2e8f0);"
+            "border-color:#94a3b8;color:#0f172a;}"
+            "QPushButton:pressed{background:#e2e8f0;border-color:#94a3b8;}"
+        )
+        self.btn_back.clicked.connect(self.back_requested.emit)
+        hl.addWidget(self.btn_back)
+
+        hl.addStretch(1)
+
         title = QLabel("Diagnosis")
-        title.setStyleSheet("font-size:16px;font-weight:800;color:#0f172a;")
-        subtitle = QLabel("Upload a fundus image to start analysis.")
-        subtitle.setStyleSheet("font-size:11px;color:#94a3b8;font-weight:500;")
-        hl.addWidget(title)
-        hl.addWidget(subtitle, 1, Qt.AlignVCenter)
+        title.setStyleSheet("font-size:16px;font-weight:700;color:#0f172a;")
+        hl.addWidget(title, 0, Qt.AlignVCenter)
 
         root.addWidget(header, 0)
 
@@ -114,24 +157,24 @@ class DoctorDiagnosisForm(QWidget):
 
         # ── Content row ────────────────────────────────────────────────────────
         content = QWidget()
-        content.setStyleSheet("background:transparent;")
+        content.setObjectName("contentArea")
+        content.setStyleSheet("QWidget#contentArea{background:#f8fafc;}")
         content_row = QHBoxLayout(content)
-        content_row.setContentsMargins(16, 10, 16, 10)
-        content_row.setSpacing(10)
+        content_row.setContentsMargins(16, 12, 16, 12)
+        content_row.setSpacing(12)
         self._content_row = content_row
 
         # Left panel: patient info + clinical history
         left = QWidget()
         left.setStyleSheet("background:transparent;")
-        left.setMinimumWidth(420)
-        left.setMaximumWidth(600)
         self._left_panel = left
+        left.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         left_l = QVBoxLayout(left)
         left_l.setContentsMargins(0, 0, 0, 0)
-        left_l.setSpacing(6)
+        left_l.setSpacing(12)
         left_l.addWidget(self._build_patient_info_card())
         left_l.addWidget(self._build_clinical_history_card())
-        # No addStretch — cards should fill exactly what they need
+        left_l.addStretch(1)
 
         # ── Screening page (fundus upload + results) ───────────────────────────
         self.screening = ScreeningPage()
@@ -143,22 +186,26 @@ class DoctorDiagnosisForm(QWidget):
 
         if hasattr(self.screening, "set_embedded_compact"):
             try:
-                self.screening.set_embedded_compact(True, max_width=480)
+                self.screening.set_embedded_compact(True, max_width=None)
             except Exception:
                 pass
-        self.screening.setMinimumWidth(300)
-        self.screening.setMaximumWidth(480)
-        self.screening.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
-        if hasattr(self.screening, "_upload_card"):
-            try:
-                self.screening._upload_card.setMaximumWidth(480)
-            except Exception:
-                pass
+        
+        self.screening.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.screening.setMinimumWidth(0)
+        
+        content_row.addWidget(left, 2)
+        content_row.addWidget(self.screening, 3)
 
-        content_row.addWidget(left, 6)
-        content_row.addWidget(self.screening, 5)
-
-        root.addWidget(content, 1)
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setFrameShape(QFrame.Shape.NoFrame)
+        scroll_area.setStyleSheet("QScrollArea { background: transparent; border: none; } QScrollBar:vertical { width: 10px; } QScrollBar:horizontal { height: 10px; }")
+        
+        # Give the content a minimum width to prevent text scrambling at lower resolutions
+        content.setMinimumWidth(850)
+        
+        scroll_area.setWidget(content)
+        root.addWidget(scroll_area, 1)
         self._update_results_focus_mode(0)
 
     # ── Style helpers ──────────────────────────────────────────────────────────
@@ -181,19 +228,41 @@ class DoctorDiagnosisForm(QWidget):
     ) -> None:
         hdr = QHBoxLayout()
         hdr.setContentsMargins(0, 0, 0, 0)
-        hdr.setSpacing(6)
-        title = QLabel(title_text)
-        title.setStyleSheet(_CARD_TTL)
+        hdr.setSpacing(8)
+
+        title = QLabel(title_text.upper())
+        title.setStyleSheet(
+            "font-size:13px;font-weight:700;letter-spacing:1.2px;"
+            "color:#3f7ca7;background:transparent;"
+        )
         hdr.addWidget(title)
-        hdr.addStretch(1)
+
+        line = QFrame()
+        line.setFrameShape(QFrame.Shape.HLine)
+        line.setStyleSheet("background:#dde3ea;max-height:1px;")
+        hdr.addWidget(line, 1)
+
         if with_edit:
             btn = QPushButton("Edit")
-            btn.setFixedSize(44, 22)
+            btn.setFixedSize(50, 26)
             btn.setCursor(Qt.PointingHandCursor)
-            btn.setStyleSheet(self._edit_button_stylesheet())
+            btn.setStyleSheet(
+                "QPushButton{background:#ffffff;border:1.1px solid #cbd5e1;border-radius:6px;"
+                "color:#475569;font-size:11px;font-weight:600;padding:0 10px;}"
+                "QPushButton:hover{background:#f8fafc;color:#1e293b;border-color:#94a3b8;}"
+            )
             btn.clicked.connect(self._open_edit_dialog)
             hdr.addWidget(btn)
         layout.addLayout(hdr)
+
+    def _resolve_icon(self, name: str) -> str:
+        import os
+        from pathlib import Path
+        base = Path(__file__).parent / "icons"
+        p = base / name
+        if p.exists():
+            return str(p.resolve())
+        return ""
 
     # ── Signal bindings ────────────────────────────────────────────────────────
 
@@ -216,70 +285,70 @@ class DoctorDiagnosisForm(QWidget):
     def _build_patient_info_card(self) -> QWidget:
         card = self._card_frame()
         v = QVBoxLayout(card)
-        v.setContentsMargins(12, 8, 12, 8)
-        v.setSpacing(6)
+        v.setContentsMargins(14, 12, 14, 12)
+        v.setSpacing(12)
         self._add_card_header(v, "Patient Information", with_edit=True)
-        v.addWidget(_divider())
 
         self._pi = {}
 
-        # 3-column grid: Name/ID/DoB on left block, Age/Sex/Contact on right
+        # 2-column grid for basic info: Name/ID/DOB vs Age/Sex/Contact
         grid = QGridLayout()
         grid.setContentsMargins(0, 0, 0, 0)
         grid.setHorizontalSpacing(20)
-        grid.setVerticalSpacing(3)
+        grid.setVerticalSpacing(8)
 
-        fields_left  = [("name", "Patient Name"), ("code", "Patient ID"), ("dob", "Date of Birth")]
-        fields_right = [("age", "Age"), ("sex", "Sex"), ("contact", "Contact")]
+        left_fields  = [("name", "Patient Name"), ("code", "Patient ID"), ("dob", "Date of Birth")]
+        right_fields = [("age", "Age"), ("sex", "Sex"), ("contact", "Contact")]
 
-        for row_i, (key, label) in enumerate(fields_left):
-            grid.addWidget(_key_label(label), row_i * 2,     0)
+        for i, (key, label) in enumerate(left_fields):
             self._pi[key] = _val_label()
-            grid.addWidget(self._pi[key],     row_i * 2 + 1, 0)
+            grid.addWidget(_data_box(label, self._pi[key]), i, 0)
 
-        for row_i, (key, label) in enumerate(fields_right):
-            grid.addWidget(_key_label(label), row_i * 2,     1)
+        for i, (key, label) in enumerate(right_fields):
             self._pi[key] = _val_label()
-            grid.addWidget(self._pi[key],     row_i * 2 + 1, 1)
+            grid.addWidget(_data_box(label, self._pi[key]), i, 1)
 
         v.addLayout(grid)
 
-        # Anthropometrics row — single horizontal strip
+        # Anthropometrics row
         anthro = QHBoxLayout()
         anthro.setContentsMargins(0, 2, 0, 0)
-        anthro.setSpacing(0)
-        for key, label in [("height", "Height"), ("weight", "Weight"), ("bmi", "BMI")]:
-            blk = QVBoxLayout()
-            blk.setSpacing(2)
-            blk.addWidget(_key_label(label))
-            self._pi[key] = _val_label()
-            blk.addWidget(self._pi[key])
-            anthro.addLayout(blk, 1)
+        anthro.setSpacing(10)
+        
+        self._pi["height"] = _val_label()
+        anthro.addWidget(_anthro_card("Height", self._pi["height"]), 1)
+        
+        self._pi["weight"] = _val_label()
+        anthro.addWidget(_anthro_card("Weight", self._pi["weight"]), 1)
+        
+        self._pi["bmi"] = _val_label()
+        anthro.addWidget(_anthro_card("BMI", self._pi["bmi"]), 1)
+        
         v.addLayout(anthro)
 
-        # Eye selector — compact inline row
-        v.addWidget(_divider())
-        eye_row = QHBoxLayout()
-        eye_row.setContentsMargins(0, 0, 0, 0)
-        eye_row.setSpacing(8)
-        eye_lbl = QLabel("Eye to Screen")
-        eye_lbl.setStyleSheet(_LBL_KEY)
+        # Distance input row
+        dist_row = QHBoxLayout()
+        dist_row.setContentsMargins(0, 0, 0, 0)
+        dist_row.setSpacing(6)
+        
+        dist_lbl = QLabel("Eye to be screened :")
+        dist_lbl.setStyleSheet("font-size:11px;color:#1e293b;font-weight:700;letter-spacing:0.2px;")
+        dist_row.addWidget(dist_lbl)
+        
         self.eye_combo = QComboBox()
-        # Start blank so clinician explicitly selects an eye.
         self.eye_combo.addItems(["", "Right Eye", "Left Eye"])
-        self.eye_combo.setCursor(Qt.PointingHandCursor)
-        self.eye_combo.setFixedHeight(26)
-        self.eye_combo.setMaximumWidth(130)
+        self.eye_combo.setFixedHeight(28)
+        self.eye_combo.setMinimumWidth(120)
         self.eye_combo.setStyleSheet(
-            "QComboBox{background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;"
-            "padding:2px 8px;font-size:10px;font-weight:700;color:#0f172a;}"
-            "QComboBox::drop-down{border:none;width:18px;}"
+            "QComboBox{background:#ffffff;border:1px solid #cbd5e1;border-radius:4px;"
+            "padding:2px 8px;font-size:11px;font-weight:600;color:#1e293b;}"
+            "QComboBox::drop-down{border:none;width:20px;}"
         )
         self.eye_combo.currentTextChanged.connect(self._on_eye_changed)
-        eye_row.addWidget(eye_lbl, 0, Qt.AlignVCenter)
-        eye_row.addWidget(self.eye_combo)
-        eye_row.addStretch(1)
-        v.addLayout(eye_row)
+        dist_row.addWidget(self.eye_combo)
+        dist_row.addStretch(1)
+        
+        v.addLayout(dist_row)
 
         return card
 
@@ -288,18 +357,16 @@ class DoctorDiagnosisForm(QWidget):
     def _build_clinical_history_card(self) -> QWidget:
         card = self._card_frame()
         v = QVBoxLayout(card)
-        v.setContentsMargins(12, 8, 12, 8)
-        v.setSpacing(6)
+        v.setContentsMargins(14, 12, 14, 12)
+        v.setSpacing(12)
         self._add_card_header(v, "Diabetic History", with_edit=True)
-        v.addWidget(_divider())
 
         self._ch = {}
 
-        # Two-column compact grid
         grid = QGridLayout()
         grid.setContentsMargins(0, 0, 0, 0)
         grid.setHorizontalSpacing(20)
-        grid.setVerticalSpacing(3)
+        grid.setVerticalSpacing(8)
 
         left_fields = [
             ("diabetes_type",    "DM Type"),
@@ -312,15 +379,13 @@ class DoctorDiagnosisForm(QWidget):
             ("prev_treatment",   "Prev Treatment"),
         ]
 
-        for row_i, (key, label) in enumerate(left_fields):
-            grid.addWidget(_key_label(label),   row_i * 2,     0)
+        for i, (key, label) in enumerate(left_fields):
             self._ch[key] = _val_label()
-            grid.addWidget(self._ch[key],       row_i * 2 + 1, 0)
+            grid.addWidget(_data_box(label, self._ch[key]), i, 0)
 
-        for row_i, (key, label) in enumerate(right_fields):
-            grid.addWidget(_key_label(label),   row_i * 2,     1)
+        for i, (key, label) in enumerate(right_fields):
             self._ch[key] = _val_label()
-            grid.addWidget(self._ch[key],       row_i * 2 + 1, 1)
+            grid.addWidget(_data_box(label, self._ch[key]), i, 1)
 
         v.addLayout(grid)
         return card
@@ -372,6 +437,7 @@ class DoctorDiagnosisForm(QWidget):
                 emr.set_queue_status(qid, "completed", int(uid))
 
         box = QMessageBox(self)
+        apply_dialog_style(box)
         box.setWindowTitle("Visit Completed")
         box.setIcon(QMessageBox.Icon.Information)
         box.setText("Visit is complete. The patient was removed from the queue.")
@@ -407,20 +473,20 @@ class DoctorDiagnosisForm(QWidget):
                     self.screening.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
                 else:
                     if hasattr(self.screening, "set_embedded_compact"):
-                        self.screening.set_embedded_compact(True, max_width=480)
-                    self.screening.setMinimumWidth(300)
-                    self.screening.setMaximumWidth(480)
-                    self.screening.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
+                        self.screening.set_embedded_compact(True, max_width=None)
+                    self.screening.setMinimumWidth(0)
+                    self.screening.setMaximumWidth(16777215)
+                    self.screening.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
             except Exception:
                 pass
         if hasattr(self, "_content_row"):
             self._content_row.setContentsMargins(
                 0 if on_results else 16,
-                0,
                 0 if on_results else 16,
-                0 if on_results else 10,
+                0 if on_results else 16,
+                0 if on_results else 16,
             )
-            self._content_row.setSpacing(0 if on_results else 10)
+            self._content_row.setSpacing(0 if on_results else 16)
 
     # ── Static helpers ─────────────────────────────────────────────────────────
 
@@ -644,11 +710,11 @@ class DoctorDiagnosisForm(QWidget):
         p = self._emr_patient or {}
         pid_pk = p.get("patient_id")
         if pid_pk is None:
-            QMessageBox.warning(self, "Edit", "Missing EMR patient id.")
+            show_warning(self, "Edit", "Missing EMR patient id.")
             return
         uid = emr.get_user_id(self.username) if self.username else None
         if not uid:
-            QMessageBox.warning(self, "Edit", "Could not resolve current user.")
+            show_warning(self, "Edit", "Could not resolve current user.")
             return
 
         dlg = QDialog(self)
@@ -792,7 +858,7 @@ class DoctorDiagnosisForm(QWidget):
                     action="DOCTOR_UPDATE_PATIENT", target_type="patient",
                 )
                 if not ok:
-                    QMessageBox.warning(dlg, "Save", "Could not update patient information.")
+                    show_warning(dlg, "Save", "Could not update patient information.")
                     return
 
             self._emr_patient = emr.get_patient(int(pid_pk)) or self._emr_patient

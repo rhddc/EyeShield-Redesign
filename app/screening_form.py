@@ -159,7 +159,7 @@ class DropZoneLabel(QLabel):
         " font-size:13px; font-weight:500; }"
     )
     _LOADED = (
-        "QLabel { border:2px solid #3f7ca7; border-radius:10px;"
+        "QLabel { border:2px solid #2563eb; border-radius:12px;"
         " background:#000000; }"
     )
 
@@ -177,7 +177,7 @@ class DropZoneLabel(QLabel):
     def set_compact(self, enabled: bool = True) -> None:
         """Reduce height/typography for embedded layouts."""
         if bool(enabled):
-            self.setMinimumHeight(240)
+            self.setMinimumHeight(180)
             self.setStyleSheet(self._IDLE.replace("font-size:13px", "font-size:12px"))
         else:
             self.setMinimumHeight(400)
@@ -203,9 +203,13 @@ class DropZoneLabel(QLabel):
     def _reset_placeholder(self):
         self.setStyleSheet(self._IDLE)
         self.setPixmap(QPixmap())
+        
+        # Pure text-based placeholder per redesign
         self.setText(
-            "Drop fundus image here or click to browse\n\n"
-            "Supports JPG, PNG, JPEG"
+            "<div style='text-align:center;'>"
+            "<div style='font-size:14px;color:#1e293b;font-weight:600;margin-top:20px;'>Drop fundus image here or click to browse</div>"
+            "<div style='font-size:11px;color:#94a3b8;margin-top:8px;'>Supports JPG, PNG, JPEG</div>"
+            "</div>"
         )
         self.setCursor(Qt.CursorShape.PointingHandCursor)
 
@@ -562,9 +566,9 @@ class ModernCalendarDateEdit(QDateEdit):
 
 _REDESIGN_STYLESHEET = """
 QWidget { background:#ffffff; color:#1f2937; font-family:"Segoe UI","Inter","Calibri",sans-serif; font-size:13px; }
-QFrame#card { background:#ffffff; border:1px solid #dde3ea; border-radius:14px; }
+QFrame#card { background:#ffffff; border:1px solid #dde3ea; border-radius:0px; }
 QLineEdit, QDateEdit, QComboBox, QSpinBox, QDoubleSpinBox, QTextEdit {
-    background:#ffffff; border:1.5px solid #d3dae3; border-radius:6px; padding:6px 10px;
+    background:#ffffff; border:1.5px solid #d3dae3; border-radius:0px; padding:6px 10px;
     color:#1f2937; min-height:28px; selection-background-color:#3f7ca7;
 }
 QLineEdit:focus, QDateEdit:focus, QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus, QTextEdit:focus {
@@ -607,7 +611,7 @@ QPushButton#btnPrimary, QPushButton#btnDanger, QPushButton#btnAnalyze {
     background:#ffffff;
     color:#1a1a1a;
     border:1px solid #bfdbfe;
-    border-radius:8px;
+    border-radius:0px;
     padding:8px 14px;
     font-weight:600;
     font-size:13px;
@@ -700,10 +704,21 @@ class ScreeningPage(QWidget):
             return
         if self._embedded_compact:
             root.setMinimumWidth(0)
-            root.setMaximumWidth(int(max_width) if int(max_width) > 0 else 560)
-            root.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
+            # Remove maximum width limit to allow 50/50 split to function correctly
+            root.setMaximumWidth(16777215)
+            root.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+            # Collapse any centering gutters (addStretch spacers) that were added
+            # during non-embedded build so content_root fills its parent fully.
+            center_row = getattr(self, "_center_row_ref", None)
+            if center_row is not None:
+                center_row.setStretchFactor(root, 1000)
+            # Remove layout margins to align with external components
+            if self.layout() is not None:
+                self.layout().setContentsMargins(0, 0, 0, 0)
         else:
             root.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+            if self.layout() is not None:
+                self.layout().setContentsMargins(16, 16, 16, 16)
 
     def _ensure_patient_records_schema(self) -> None:
         """Keep the local patient_records DB compatible with newer save payloads."""
@@ -986,7 +1001,7 @@ class ScreeningPage(QWidget):
         assess_max_w = max(1100, min(1440, int(screen_w * 0.92)))
         assess_min_w = max(880, min(1120, int(screen_w * 0.70)))
         if bool(getattr(self, "_embedded_compact", False)):
-            assess_max_w = min(620, assess_max_w)
+            assess_max_w = 16777215 # No artificial cap when embedded
             assess_min_w = 0
         content_root.setMinimumWidth(assess_min_w)
         content_root.setMaximumWidth(assess_max_w)
@@ -997,6 +1012,7 @@ class ScreeningPage(QWidget):
         content_layout.setSpacing(8)
 
         center_row.addWidget(content_root, 1)
+        self._center_row_ref = center_row
         if not embedded:
             center_row.addStretch(1)
             root_layout.addWidget(center_wrap, 1)
@@ -1411,9 +1427,9 @@ class ScreeningPage(QWidget):
         self._upload_card = card3
         c3 = QVBoxLayout(card3)
         if embedded:
-            c3.setContentsMargins(16, 14, 16, 14)
-            c3.setSpacing(10)
-            card3.setMaximumWidth(520)
+            c3.setContentsMargins(16, 12, 16, 12)
+            c3.setSpacing(8)
+            # card3.setMaximumWidth(500) # Removed per user request for wider area
         else:
             c3.setContentsMargins(24, 20, 24, 22)
             c3.setSpacing(12)
@@ -1438,24 +1454,16 @@ class ScreeningPage(QWidget):
         btn_row.setSpacing(10)
         self.btn_upload = QPushButton("Upload Image")
         self.btn_upload.setObjectName("btnPrimary")
-        self.btn_upload.setMinimumHeight(36)
+        self.btn_upload.setMinimumHeight(38)
         self.btn_upload.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        upload_icon = self._resolve_icon_path("upload.svg", "camera.svg")
-        if upload_icon:
-            self.btn_upload.setIcon(self._tinted_icon(upload_icon, "#60a5fa", 18))
-            self.btn_upload.setIconSize(QSize(18, 18))
         self.btn_upload.clicked.connect(self.upload_image)
 
         self.btn_take_picture = None
 
         self.btn_clear = QPushButton("Clear")
         self.btn_clear.setObjectName("btnDanger")
-        self.btn_clear.setMinimumHeight(36)
+        self.btn_clear.setMinimumHeight(38)
         self.btn_clear.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        clear_icon = self._resolve_icon_path("discard.svg")
-        if clear_icon:
-            self.btn_clear.setIcon(self._tinted_icon(clear_icon, "#60a5fa", 18))
-            self.btn_clear.setIconSize(QSize(18, 18))
         self.btn_clear.clicked.connect(self.clear_image)
         btn_row.addWidget(self.btn_upload)
         btn_row.addWidget(self.btn_clear)
@@ -1463,10 +1471,30 @@ class ScreeningPage(QWidget):
 
         self.btn_analyze = QPushButton("Analyze Image")
         self.btn_analyze.setObjectName("btnAnalyze")
-        self.btn_analyze.setMinimumHeight(42)
-        self.btn_analyze.setEnabled(True)
+        self.btn_analyze.setMinimumHeight(44)
+        self.btn_analyze.setStyleSheet(
+            "QPushButton{background:#f1f5f9;color:#94a3b8;border:1.1px solid #e2e8f0;border-radius:6px;font-size:14px;font-weight:700;}"
+            "QPushButton:enabled{background:#2563eb;color:#ffffff;border-color:#2563eb;}"
+            "QPushButton:hover:enabled{background:#1d4ed8;}"
+        )
+        self.btn_analyze.setEnabled(False) # Disabled until image uploaded
         self.btn_analyze.clicked.connect(self.open_results_window)
         c3.addWidget(self.btn_analyze)
+
+        # Added tip at the bottom per redesign
+        tip = QFrame()
+        tip.setStyleSheet("background:#eff6ff;border-radius:8px;")
+        tl = QHBoxLayout(tip)
+        tl.setContentsMargins(10, 8, 10, 8)
+        tl.setSpacing(8)
+        info_icon = QLabel("ⓘ")
+        info_icon.setStyleSheet("color:#3b82f6;font-size:14px;font-weight:bold;")
+        tip_text = QLabel("Ensure the fundus image is clear and properly focused for accurate analysis.")
+        tip_text.setWordWrap(True)
+        tip_text.setStyleSheet("color:#1e40af;font-size:11px;font-weight:400;")
+        tl.addWidget(info_icon)
+        tl.addWidget(tip_text, 1)
+        c3.addWidget(tip)
 
         self.upload_error_label = QLabel("")
         self.upload_error_label.setStyleSheet("color:#dc2626;background:transparent;font-size:12px;font-weight:600;")
@@ -1484,7 +1512,17 @@ class ScreeningPage(QWidget):
         handle.setCursor(Qt.CursorShape.ArrowCursor)
         self._apply_role_permissions()
         self._set_tab_order_unified()
-        return root
+
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setFrameShape(QFrame.Shape.NoFrame)
+        scroll_area.setStyleSheet("QScrollArea { background: transparent; border: none; } QScrollBar:vertical { width: 10px; } QScrollBar:horizontal { height: 10px; }")
+        
+        # Give the root a minimum width to prevent overlapping/scrambling at lower resolutions
+        root.setMinimumWidth(850)
+        
+        scroll_area.setWidget(root)
+        return scroll_area
 
     def _current_role(self) -> str:
         return str(getattr(self, "role", "") or "").strip().lower()
@@ -3843,7 +3881,7 @@ class ScreeningPage(QWidget):
             self.image_label.clear_image()
         else:
             self._apply_upload_placeholder_style()
-        self.btn_analyze.setEnabled(True)
+        self.btn_analyze.setEnabled(False)
         self._set_upload_error("")
 
     def _persist_screening_assets(self, patient_id: str, eye_label: str) -> tuple[str, str, str, str]:

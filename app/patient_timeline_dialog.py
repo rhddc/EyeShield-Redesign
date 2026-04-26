@@ -12,6 +12,11 @@ from PySide6.QtWidgets import (
     QAbstractItemView, QHeaderView, QStackedWidget, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
+try:
+    from .ui_feedback import confirm, apply_dialog_style
+except Exception:
+    from ui_feedback import confirm, apply_dialog_style
+
 _APP_ROOT  = Path(__file__).resolve().parent
 _ICONS_DIR = _APP_ROOT / "icons"
 _REPO_ROOT = _APP_ROOT.parent
@@ -75,7 +80,7 @@ def _display_severity(rec: dict) -> str:
 def _risk_for(v: str) -> tuple[str, str]:
     rank = _SEVERITY_RANK.get(_normalize_severity(v), -1)
     if rank <= 0:  return "LOW RISK",      "#16a34a"
-    if rank == 1:  return "WATCH CLOSELY", "#ca8a04"
+    if rank == 1:  return "MEDIUM RISK",   "#ca8a04"
     return              "HIGH RISK",       "#dc2626"
 
 
@@ -168,6 +173,7 @@ class PatientTimelineDialog(QWidget):
         on_view_report=None,
         on_compare=None,
         on_export=None,
+        on_start_diagnosis=None,
         *,
         initial_record: dict | None = None,
         show_actions: bool = True,
@@ -179,6 +185,7 @@ class PatientTimelineDialog(QWidget):
         self._show_actions = bool(show_actions)
         self._show_history_tab = bool(show_history_tab) and not bool(frontdesk_mode)
         self._frontdesk_mode = bool(frontdesk_mode)
+        self._on_start_diagnosis = on_start_diagnosis
         self.patient_summary  = dict(patient_summary or {})
         self.timeline_records = self._sorted_records(list(timeline_records or []))
         self._selected_record = (
@@ -228,24 +235,27 @@ class PatientTimelineDialog(QWidget):
         row.setSpacing(10)
 
         # Back
-        back = QPushButton("← Back")
-        back.setCursor(Qt.PointingHandCursor)
-        back.setFixedSize(76, 32)
-        back.setStyleSheet(
-            "QPushButton{background:#f1f5f9;border:none;border-radius:8px;"
-            "color:#374151;font-size:12px;font-weight:600;}"
-            "QPushButton:hover{background:#e2e8f0;}")
-        back.clicked.connect(self._confirm_back_to_list)
-        row.addWidget(back, 0, Qt.AlignVCenter)
+        self.btn_back = QPushButton("← Back")
+        self.btn_back.setCursor(Qt.PointingHandCursor)
+        self.btn_back.setStyleSheet(
+            "QPushButton{background:#f1f5f9;border:none;border-radius:10px;"
+            "color:#475569;font-size:12px;font-weight:700;padding:0 12px;}"
+            "QPushButton:hover{background:#e2e8f0;color:#0f172a;}"
+        )
+        self.btn_back.setFixedHeight(34)
+        self.btn_back.setMinimumWidth(80)
+        self.btn_back.clicked.connect(self._confirm_back_to_list)
+        row.addWidget(self.btn_back, 0, Qt.AlignVCenter)
 
         # Avatar
         initials = self._initials(self.patient_summary.get("name"))
         av = QLabel(initials)
-        av.setFixedSize(46, 46)
+        av.setFixedSize(48, 48)
         av.setAlignment(Qt.AlignCenter)
         av.setStyleSheet(
-            "background:#5b9ea0;color:#fff;font-size:14px;"
-            "font-weight:600;border-radius:23px;")
+            "background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #1e293b, stop:1 #334155);"
+            "color:#fff;font-size:14px;"
+            "font-weight:700;border-radius:24px;")
         self.avatar_lbl = av
         row.addWidget(av)
 
@@ -273,14 +283,11 @@ class PatientTimelineDialog(QWidget):
         return card
 
     def _confirm_back_to_list(self) -> None:
-        confirm = QMessageBox.question(
-            self,
-            "Return",
-            "Are you sure you want to go back to the list?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
-        )
-        if confirm == QMessageBox.StandardButton.Yes:
+        if self._frontdesk_mode:
+            self.back_requested.emit()
+            return
+
+        if confirm(self, "Return", "Are you sure you want to go back to the list?"):
             self.back_requested.emit()
 
     def _chip(self, title: str, value: str, sub: str, color: str) -> QWidget:
@@ -362,11 +369,27 @@ class PatientTimelineDialog(QWidget):
                 right_widgets=[self._card_screening] + ([self._card_actions] if self._show_actions else []),
             )
         else:
+            right_widgets = [self._card_context]
+            if self._on_start_diagnosis:
+                btn_start = QPushButton("Start diagnosis")
+                btn_start.setCursor(Qt.PointingHandCursor)
+                btn_start.setFixedHeight(40)
+                btn_start.setStyleSheet(
+                    "QPushButton{background:#2563eb;color:#fff;border:none;border-radius:9px;"
+                    "font-size:13px;font-weight:700;}"
+                    "QPushButton:hover{background:#1d4ed8;}"
+                )
+                btn_start.clicked.connect(self._on_start_diagnosis)
+                right_widgets.append(btn_start)
+            
+            if self._show_actions:
+                right_widgets.append(self._card_actions)
+
             overview_page = self._build_three_col_page(
                 # Vital Signs & Symptoms removed from Patient Overview per request.
                 left_widgets=[self._card_patient_info, self._card_history],
                 center_widgets=[self._card_screening, self._card_images],
-                right_widgets=[self._card_context] + ([self._card_actions] if self._show_actions else []),
+                right_widgets=right_widgets,
             )
 
         self._tab_index = {"Overview": 0}
@@ -678,9 +701,9 @@ class PatientTimelineDialog(QWidget):
         self.eye_lbl.hide()
         v.addWidget(date_row)
 
-        # ── Diagnosis (AI) — hidden in frontdesk_mode ─────────────────────
         # Collect all diagnosis/AI widgets so they can be hidden in frontdesk_mode.
         self._diag_widgets = []
+        self._metric_widgets = []
 
         sep1 = QFrame()
         sep1.setFrameShape(QFrame.HLine)
@@ -688,7 +711,7 @@ class PatientTimelineDialog(QWidget):
         v.addWidget(sep1)
         self._diag_widgets.append(sep1)
 
-        diag_title = QLabel("Diagnosis (AI)")
+        diag_title = QLabel("Final Diagnosis")
         diag_title.setStyleSheet("font-size:10px;color:#9ca3af;font-weight:500;")
         v.addWidget(diag_title)
         self._diag_widgets.append(diag_title)
@@ -735,7 +758,7 @@ class PatientTimelineDialog(QWidget):
         ai_title = QLabel("AI Metrics")
         ai_title.setStyleSheet("font-size:10px;color:#9ca3af;font-weight:500;")
         v.addWidget(ai_title)
-        self._diag_widgets.append(ai_title)
+        self._metric_widgets.append(ai_title)
 
         self.conf_row = self._metric_row("AI Confidence", "#16a34a")
         self.unc_row  = self._metric_row("Uncertainty",   "#f59e0b")
@@ -746,7 +769,7 @@ class PatientTimelineDialog(QWidget):
         conf_l.setContentsMargins(0, 0, 0, 0)
         conf_l.addLayout(self.conf_row[0])
         v.addWidget(conf_w)
-        self._diag_widgets.append(conf_w)
+        self._metric_widgets.append(conf_w)
 
         unc_w = QWidget()
         unc_w.setStyleSheet("background:transparent;")
@@ -754,7 +777,11 @@ class PatientTimelineDialog(QWidget):
         unc_l.setContentsMargins(0, 0, 0, 0)
         unc_l.addLayout(self.unc_row[0])
         v.addWidget(unc_w)
-        self._diag_widgets.append(unc_w)
+        self._metric_widgets.append(unc_w)
+
+        # Hide metrics for everyone per request (Doctor Dashboard POV)
+        for w in self._metric_widgets:
+            w.hide()
 
         # Hide diagnosis/AI sections in frontdesk mode
         if self._frontdesk_mode:
@@ -933,7 +960,12 @@ class PatientTimelineDialog(QWidget):
             idx = int(getattr(self, "_tab_index", {}).get(label, 0))
             self._tab_stack.setCurrentIndex(idx)
             return
-        QMessageBox.information(self, "Coming Soon", f"The {label} tab is not available yet.")
+        msg = QMessageBox(self)
+        apply_dialog_style(msg)
+        msg.setWindowTitle("Coming Soon")
+        msg.setIcon(QMessageBox.Icon.Information)
+        msg.setText(f"The {label} tab is not available yet.")
+        msg.exec()
         if "Overview" in self.tab_buttons:
             self.tab_buttons["Overview"].setChecked(True)
         if hasattr(self, "_tab_stack"):
@@ -1193,7 +1225,10 @@ class PatientTimelineDialog(QWidget):
 
         for detail in eye_details:
             eye_key = str(detail.get("eye_key") or "")
-            btn = QPushButton(str(detail.get("eye_label") or "Eye"))
+            label_text = str(detail.get("eye_label") or "Eye")
+            if not self._frontdesk_mode and "both" in label_text.lower():
+                continue
+            btn = QPushButton(label_text)
             btn.setCheckable(True)
             btn.setChecked(eye_key == selected_key)
             btn.setCursor(Qt.PointingHandCursor)

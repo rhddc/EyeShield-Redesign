@@ -135,7 +135,7 @@ def _risk_status_for(value: str) -> tuple[str, str]:
     if rank <= 0:
         return "Low risk", "#16a34a"
     if rank == 1:
-        return "Watch closely", "#ca8a04"
+        return "Medium risk", "#ca8a04"
     return "High risk", "#dc2626"
 
 
@@ -259,10 +259,10 @@ class ScreeningComparisonDialog(QDialog):
             self._render_single(self.previous_record, self.latest_record, eye_label_override=None)
             return
 
-        # Enable/disable toggle based on what eyes actually exist in the compared visits.
-        available = set(self._eye_map_prev.keys()) | set(self._eye_map_latest.keys())
-        has_od = "od" in available
-        has_os = "os" in available
+        # Enable/disable toggle based on what eyes exist in the LATEST compared visit.
+        # Per user request: if previous had 2 eyes but latest has only 1, the other eye should be locked.
+        has_od = "od" in self._eye_map_latest
+        has_os = "os" in self._eye_map_latest
         self._btn_od.setEnabled(has_od)
         self._btn_os.setEnabled(has_os)
 
