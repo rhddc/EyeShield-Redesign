@@ -74,10 +74,10 @@ class EyeShieldApp(QMainWindow):
     """Main application window"""
 
     ROLE_PAGE_ACCESS = {
-        "admin": {2, 4, 5, 7},
-        "clinician": {0, 3, 5, 6, 10},
+        "admin": {2, 4, 5},
+        "clinician": {0, 3, 5, 6, 7, 10},
         # Back-compat: older datasets still store role as "doctor".
-        "doctor": {0, 3, 5, 6, 10},
+        "doctor": {0, 3, 5, 6, 7, 10},
         # Frontdesk no longer has a dedicated "Patient Queue" page/tab.
         # The queue is rendered directly inside the Dashboard.
         "frontdesk": {0, 1, 3, 5, 6},
@@ -290,8 +290,8 @@ class EyeShieldApp(QMainWindow):
             },
             {
                 "icon": self._resolve_existing_path(os.path.join(icons_dir, "trusted referred hospitals.svg")),
-                "label": "Trusted Referrals",
-                "display_label": "Trusted Referrals",
+                "label": "Medical Partners",
+                "display_label": "Medical Partners",
                 "page_index": 7,
                 "nav_key": "trusted_referrals",
                 "group": None,

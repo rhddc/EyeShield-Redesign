@@ -2621,9 +2621,9 @@ class ActivityLogPage(QWidget):
         ("Report Export", "REPORT_EXPORT_CSV"),
         ("Referral Assigned", "REFERRAL_ASSIGNED"),
         ("Referral Status Updated", "REFERRAL_STATUS_UPDATED"),
-        ("Trusted Referral Added", "TRUSTED_REFERRAL_ADDED"),
-        ("Trusted Referral Updated", "TRUSTED_REFERRAL_UPDATED"),
-        ("Trusted Referral Deleted", "TRUSTED_REFERRAL_DELETED"),
+        ("Medical Partner Added", "TRUSTED_REFERRAL_ADDED"),
+        ("Medical Partner Updated", "TRUSTED_REFERRAL_UPDATED"),
+        ("Medical Partner Deleted", "TRUSTED_REFERRAL_DELETED"),
     ]
 
     @staticmethod

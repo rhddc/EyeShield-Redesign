@@ -2629,13 +2629,16 @@ img {{
             patient_notes_raw = f"{patient_notes_raw[:217].rstrip()}..."
         patient_notes = esc(patient_notes_raw)
 
-        hospital_name = str(destination.get("hospital_name") or "").strip() or "Ophthalmology Clinic"
-        hospital_dept = str(destination.get("department") or "").strip() or "Ophthalmology Department"
-        hospital_contact = str(destination.get("contact_person") or "").strip() or "Ophthalmologist"
-
-        destination_name = esc(hospital_name)
-        destination_dept = esc(hospital_dept)
-        destination_contact = esc(hospital_contact)
+        doctor_full = str(destination.get("contact_person") or "").strip()
+        hosp_name = str(destination.get("hospital_name") or "").strip()
+        hosp_addr = str(destination.get("address") or "").strip()
+        
+        parts = doctor_full.split()
+        surname = parts[-1] if parts else ""
+        
+        destination_name = esc(hosp_name)
+        doctor_label = esc(doctor_full)
+        destination_addr = esc(hosp_addr)
         current_source_uri = ""
         current_heatmap_uri = ""
         image_path = str(self._current_image_path or "").strip()
@@ -2714,107 +2717,93 @@ img {{
                 + _referral_eye_block(second_eye_label, current_source_uri, image_path)
             )
 
-        html = f"""<!DOCTYPE html>
-<html><head><meta charset="utf-8"><style>
-body {{
-    font-family: 'Segoe UI', 'Calibri', Arial, sans-serif;
-    font-size: 11pt;
-    color: #1f2937;
-    margin: 0;
-    padding: 0;
-    line-height: 1.6;
-}}
-.sheet {{ padding: 20px 30px; }}
-.page-break {{ page-break-before: always; }}
-.header-grid {{ width: 100%; border-collapse: collapse; margin-bottom: 14px; }}
-.header-grid td {{ width: 100%; vertical-align: top; padding: 0; }}
-.header-block {{ font-size: 10.8pt; line-height: 1.65; }}
-.date-line {{ font-size: 10.8pt; line-height: 1.65; margin-bottom: 8px; }}
-.label {{ font-weight: 700; }}
-.subject {{ margin: 10px 0 10px 0; font-size: 11pt; font-weight: 700; }}
-.paragraph {{ margin: 0 0 8px 0; text-align: justify; line-height: 1.45; }}
-.patient-box {{
-    border: 1px solid #d1d5db;
-    background: #fafafa;
-    padding: 12px 14px;
-    margin: 10px 0 10px 0;
-}}
-.patient-box table {{ width: 100%; border-collapse: collapse; }}
-.patient-box td {{ padding: 4px 0; vertical-align: top; font-size: 9.5pt; line-height: 1.35; }}
-.closing {{ margin-top: 12px; }}
-.signature-line {{ margin-top: 20px; border-top: 1px solid #374151; width: 260px; }}
-.keep-together {{ page-break-inside: avoid; break-inside: avoid-page; }}
-.image-box {{ border: 1px solid #d1d5db; background: #fafafa; padding: 12px 14px; margin: 10px 0 16px 0; page-break-inside: avoid; break-inside: avoid-page; }}
-.image-caption {{ font-size: 9pt; color: #4b5563; margin-top: 8px; text-align: center; }}
-</style>
-</head>
-<body>
+        # Build professional 2-page HTML
+        style = """
+        <style>
+            @page { margin: 10mm; }
+            body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; color: #1e293b; line-height: 1.4; font-size: 11.5pt; margin: 0; padding: 0; }
+            .page { width: 100%; }
+            .header { text-align: center; margin-bottom: 20px; }
+            .header h1 { font-size: 20pt; color: #0f172a; text-transform: uppercase; border-bottom: 2px solid #0f172a; padding-bottom: 5px; margin: 0; }
+            .meta-row { margin-bottom: 3px; }
+            .subject { font-weight: bold; margin-top: 15px; margin-bottom: 15px; text-decoration: underline; }
+            .section-title { font-weight: bold; margin-top: 15px; margin-bottom: 5px; color: #334155; text-transform: uppercase; font-size: 11pt; }
+            .findings-list { margin-left: 20px; margin-top: 5px; margin-bottom: 10px; }
+            .findings-list li { margin-bottom: 2px; }
+            .footer { margin-top: 30px; }
+            .page-break { page-break-before: always; }
+            .image-container { text-align: center; margin-top: 15px; margin-bottom: 30px; }
+            .image-container img { border: 1px solid #e2e8f0; border-radius: 4px; max-width: 600px; max-height: 400px; object-fit: contain; }
+            .eye-label { font-size: 16pt; font-weight: bold; color: #1e40af; margin-top: 5px; }
+            .diag-label { font-size: 14pt; margin-top: 3px; color: #1e293b; }
+            p { margin: 0 0 10px 0; }
+        </style>
+        """
 
-<div class="sheet">
-    <div class="date-line"><span class="label">Date:</span> {esc(report_date)}</div>
-    <table class="header-grid">
-        <tr>
-            <td>
-                <div class="header-block"><span class="label">To:</span> {destination_name}</div>
-                <div class="header-block"><span class="label">Department:</span> {destination_dept}</div>
-                <div class="header-block"><span class="label">Attention:</span> {destination_contact}</div>
-            </td>
-        </tr>
-    </table>
+        # Page 1: Letter
+        html = f"<html><head>{style}</head><body>"
+        html += "<div class='page'>"
+        html += "<div class='header'><h1>Medical Referral Letter</h1></div>"
+        html += f"<div class='meta-row'><strong>Date:</strong> {report_date}</div>"
+        html += f"<div class='meta-row'><strong>To:</strong> Dr. {doctor_label}</div>"
+        html += f"<div class='meta-row'><strong>Address:</strong> {destination_addr} ({destination_name})</div>"
+        html += f"<div class='subject'>Subject: Clinical Referral for Patient: {esc(patient_name_raw)}</div>"
+        
+        html += f"<p>Dear Dr. {esc(surname)},</p>"
+        html += "<p>I am writing to formally refer the above-mentioned patient to your specialized care for further evaluation and management.</p>"
+        
+        html += "<div class='section-title'>Clinical Findings:</div>"
+        html += f"<p>Based on the Diabetic Retinopathy (DR) screening conducted today ({screen_date_text}), the following status has been identified:</p>"
+        html += "<ul class='findings-list'>"
+        
+        # Gather images/diagnosis for both eyes if available
+        referral_eyes = []
+        if first_eye_label and first_source_path:
+             referral_eyes.append({
+                 "label": first_eye_label.upper(),
+                 "diagnosis": esc(first_eye_ctx.get("result") or "N/A"),
+                 "path": first_source_path
+             })
+        
+        referral_eyes.append({
+            "label": second_eye_label.upper(),
+            "diagnosis": esc(final_dx),
+            "path": image_path
+        })
 
-    <div class="subject">Subject: Referral for Ophthalmology Evaluation - {patient_name_raw}</div>
+        for eye in referral_eyes:
+            html += f"<li><strong>{eye['label']}:</strong> {eye['diagnosis']}</li>"
+        html += "</ul>"
+        
+        html += "<div class='section-title'>Patient Background:</div>"
+        # Summary background from notes
+        bg_summary = patient_notes if patient_notes and patient_notes != "&#8212;" else "No significant prior history recorded."
+        html += f"<p>{bg_summary}</p>"
+        
+        html += "<p>I would appreciate your expert consultation and any necessary intervention or specialized care that the patient may require. "
+        html += "Screening reports and fundus images have been provided to the patient for your reference.</p>"
+        
+        html += "<p>Thank you for your collaboration in providing comprehensive care for this patient.</p>"
+        
+        html += "<div class='footer'>"
+        html += "<p>Sincerely,</p><br>"
+        html += f"<strong>{screened_by_label}</strong><br>"
+        html += "EyeShield DR Screening System"
+        html += "</div>"
+        html += "</div>" # End Page 1
 
-    <div class="paragraph">Dear Colleague,</div>
-
-    <div class="paragraph">
-        I am referring this patient for specialist ophthalmology assessment following diabetic retinopathy screening.
-        The current AI screening result indicates <b>{esc(self._current_result_class)}</b>. Final diagnosis based on ICDR by doctor is <b>{esc(final_dx)}</b> with <b>{esc(urgency)}</b> referral priority.
-        Screening was performed on {screen_date_text}.
-    </div>
-
-    <div class="patient-box">
-        <table>
-            <tr>
-                <td style="width:50%;"><span class="label">Patient Name:</span> {esc(patient_name_raw)}</td>
-                <td><span class="label">Date of Birth:</span> {patient_dob}</td>
-            </tr>
-            <tr>
-                <td style="width:50%;"><span class="label">Age:</span> {patient_age}</td>
-                <td><span class="label">Sex:</span> {patient_sex}</td>
-            </tr>
-            <tr>
-                <td colspan="2"><span class="label">Referral Reason:</span> {esc(rationale)}</td>
-            </tr>
-        </table>
-    </div>
-
-    <div class="paragraph">
-        Kindly perform comprehensive ophthalmic evaluation and initiate management as
-        clinically indicated. Please provide recommendations and follow-up plan after
-        assessment. If you need to reach me, contact me at {esc(doctor_contact)}.
-    </div>
-
-    <div class="closing keep-together">
-        <div style="margin-bottom:8px;">Sincerely,</div>
-        <div class="signature-line"></div>
-        <div style="margin-top:8px;"><b>{esc(screened_by_label)}</b></div>
-        <div style="font-size:10pt;color:#4b5563;">Referring Clinician</div>
-    </div>
-</div>
-
-<div class="page-break"></div>
-
-<div class="sheet">
-    {referral_images_html}
-
-    <div style="font-size:10pt;color:#4b5563;margin-top:20px;line-height:1.8;">
-        <span><b>Created by:</b> {esc(screened_by_label)}</span><br>
-        <span><b>Finalized by:</b> {esc(screened_by_label)}</span>
-    </div>
-</div>
-
-</body>
-</html>"""
+        # Page 2: Images
+        html += "<div class='page-break'>"
+        html += "<div class='header'><h1>Screening Images</h1></div>"
+        for eye in referral_eyes:
+            img_url = Path(eye['path']).resolve().as_uri()
+            html += "<div class='image-container'>"
+            html += f"<div class='eye-label'>{eye['label']}</div>"
+            html += f"<img src='{img_url}' width='600'>"
+            html += f"<div class='diag-label'><strong>Diagnosis:</strong> {eye['diagnosis']}</div>"
+            html += "</div>"
+            
+        html += "</body></html>"
 
         doc = QTextDocument()
         doc.setDocumentMargin(0)
@@ -2859,26 +2848,28 @@ body {{
         hospitals = UserManager.list_referral_hospitals(active_only=True)
 
         dialog = QDialog(self)
-        dialog.setWindowTitle("Referral Destination")
-        dialog.setFixedSize(520, 160)
+        dialog.setWindowTitle("Select Medical Partner")
+        dialog.setFixedSize(540, 180)
 
         layout = QVBoxLayout(dialog)
-        layout.setContentsMargins(14, 10, 14, 10)
-        layout.setSpacing(6)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(10)
 
-        hospital_label = QLabel("Referral Hospital")
-        hospital_label.setStyleSheet("font-size:11px;font-weight:700;color:#2f4054;")
+        hospital_label = QLabel("Please select a trusted medical partner")
+        hospital_label.setStyleSheet("font-size:12px;font-weight:700;color:#1e293b;")
+        
         hospital_combo = QComboBox()
-        hospital_combo.setMinimumHeight(34)
+        hospital_combo.setMinimumHeight(36)
         for item in hospitals:
-            dept = str(item.get("department") or "").strip()
-            label = str(item.get("hospital_name") or "").strip()
-            if dept:
-                label = f"{label} ({dept})"
+            doc = str(item.get("contact_person") or "").strip()
+            hosp = str(item.get("hospital_name") or "").strip()
+            label = f"{doc} ({hosp})" if doc and hosp else (doc or hosp or "Unnamed")
+            
             if item.get("is_default"):
                 label = f"{label}  [Default]"
             hospital_combo.addItem(label, item)
-        hospital_combo.addItem("Other (manual entry)", None)
+            
+        hospital_combo.addItem("Manual Entry (Other)", None)
         layout.addWidget(hospital_label)
         layout.addWidget(hospital_combo)
 
@@ -2897,22 +2888,26 @@ body {{
 
         def _prompt_manual_destination() -> dict | None:
             manual_dialog = QDialog(dialog)
-            manual_dialog.setWindowTitle("Manual Referral Destination")
-            manual_dialog.setFixedSize(520, 220)
+            manual_dialog.setWindowTitle("Manual Medical Partner Entry")
+            manual_dialog.setFixedSize(520, 260)
 
             manual_layout = QVBoxLayout(manual_dialog)
-            manual_layout.setContentsMargins(14, 12, 14, 12)
-            manual_layout.setSpacing(8)
+            manual_layout.setContentsMargins(16, 16, 16, 16)
+            manual_layout.setSpacing(10)
 
-            name_input = QLineEdit()
-            name_input.setPlaceholderText("Hospital or clinic name")
-            dept_input = QLineEdit()
-            dept_input.setPlaceholderText("Department (optional)")
-            contact_input = QLineEdit()
-            contact_input.setPlaceholderText("Contact person / phone (optional)")
-            manual_layout.addWidget(name_input)
-            manual_layout.addWidget(dept_input)
-            manual_layout.addWidget(contact_input)
+            doc_input = QLineEdit()
+            doc_input.setPlaceholderText("Doctor Name")
+            hosp_input = QLineEdit()
+            hosp_input.setPlaceholderText("Hospital or Clinic")
+            addr_input = QLineEdit()
+            addr_input.setPlaceholderText("Address")
+            
+            manual_layout.addWidget(QLabel("Doctor Name"))
+            manual_layout.addWidget(doc_input)
+            manual_layout.addWidget(QLabel("Hospital / Clinic"))
+            manual_layout.addWidget(hosp_input)
+            manual_layout.addWidget(QLabel("Address"))
+            manual_layout.addWidget(addr_input)
 
             manual_actions = QHBoxLayout()
             manual_actions.addStretch(1)
@@ -2929,17 +2924,19 @@ body {{
             while True:
                 if manual_dialog.exec() != QDialog.DialogCode.Accepted:
                     return None
-                name = name_input.text().strip()
-                if not name:
-                    QMessageBox.warning(manual_dialog, "Referral Destination", "Hospital/clinic name is required for manual entry.")
+                doc_name = doc_input.text().strip()
+                hosp_name = hosp_input.text().strip()
+                addr = addr_input.text().strip()
+                
+                if not doc_name and not hosp_name:
+                    QMessageBox.warning(manual_dialog, "Validation Error", "Please provide at least a Doctor or Hospital name.")
                     continue
-                department = dept_input.text().strip()
-                contact = contact_input.text().strip()
-                display = name if not department else f"{name} ({department})"
+                
+                display = f"{doc_name} ({hosp_name})" if doc_name and hosp_name else (doc_name or hosp_name)
                 return {
-                    "hospital_name": name,
-                    "department": department,
-                    "contact_person": contact,
+                    "contact_person": doc_name,
+                    "hospital_name": hosp_name,
+                    "address": addr,
                     "display": display,
                 }
 

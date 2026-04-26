@@ -26,6 +26,8 @@ DB_FILE = str(USERS_DB_PATH)
 VALID_ROLES = {"clinician", "admin", "frontdesk"}
 VALID_SPECIALIZATIONS = {"optometrist", "ophthalmologist"}
 ADMIN_ROLE = "admin"
+CLINICIAN_ROLE = "clinician"
+FRONTDESK_ROLE = "frontdesk"
 MIN_PASSWORD_LENGTH = 12
 MAX_ACTIVITY_QUERY_LIMIT = 500
 USERNAME_PATTERN = re.compile(r"^[A-Za-z0-9_.-]{3,32}$")
@@ -770,8 +772,9 @@ class UserManager:
         acting_username: Optional[str] = None,
         acting_role: Optional[str] = None,
     ) -> tuple[bool, str, Optional[int]]:
-        if str(acting_role or "").strip().lower() != ADMIN_ROLE:
-            return False, "Only admin accounts can manage trusted referrals.", None
+        acting_role_clean = str(acting_role or "").strip().lower()
+        if acting_role_clean not in {ADMIN_ROLE, CLINICIAN_ROLE, "doctor"}:
+            return False, "Insufficient permissions to manage trusted referrals.", None
         clean_name = str(hospital_name or "").strip()
         if not clean_name:
             return False, "Hospital name is required.", None
@@ -859,9 +862,10 @@ class UserManager:
         during development, callers that do not pass `acting_role` are allowed only when
         `EYESHIELD_DEV_MODE=1`.
         """
-        if str(acting_role or "").strip().lower() != ADMIN_ROLE:
+        acting_role_clean = str(acting_role or "").strip().lower()
+        if acting_role_clean not in {ADMIN_ROLE, CLINICIAN_ROLE, "doctor"}:
             if os.environ.get("EYESHIELD_DEV_MODE") != "1":
-                return False, "Only admin accounts can manage trusted referrals."
+                return False, "Only admin or clinician accounts can manage trusted referrals."
         conn = get_connection()
         cur = conn.cursor()
         try:

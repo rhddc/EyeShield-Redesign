@@ -1130,7 +1130,7 @@ class SettingsPage(QWidget):
         self.warning_spin.setVisible(True)
 
     def _configure_referral_hospitals_section(self):
-        show_referrals = self._active_role() == "admin"
+        show_referrals = False
         self.referral_hospitals_group.setVisible(show_referrals)
         if not show_referrals:
             return

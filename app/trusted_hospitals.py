@@ -31,7 +31,7 @@ except Exception:  # pragma: no cover
 class ReferralHospitalDialog(QDialog):
     def __init__(self, parent=None, item=None):
         super().__init__(parent)
-        self.setWindowTitle("Trusted Referral")
+        self.setWindowTitle("Medical Partner")
         self.setModal(True)
         self.setMinimumWidth(520)
 
@@ -41,7 +41,7 @@ class ReferralHospitalDialog(QDialog):
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(10)
 
-        title = QLabel("Add Hospital / Clinic")
+        title = QLabel("Add Medical Partner")
         title.setObjectName("headerTitle")
         layout.addWidget(title)
 
@@ -51,55 +51,47 @@ class ReferralHospitalDialog(QDialog):
         form.setColumnStretch(0, 1)
         form.setColumnStretch(1, 1)
 
+        # Removed department field as per user request
+        self.contact_label = QLabel("Doctor's Name")
+        self.contact_label.setObjectName("fieldLabel")
+        self.contact_input = QLineEdit()
+        self.contact_input.setPlaceholderText("e.g., Dr. Juan Dela Cruz")
+        form.addWidget(self.contact_label, 0, 0)
+        form.addWidget(self.contact_input, 1, 0)
+
         self.hospital_name_label = QLabel("Hospital Name")
         self.hospital_name_label.setObjectName("fieldLabel")
         self.hospital_name_input = QLineEdit()
         self.hospital_name_input.setPlaceholderText("e.g., St. Mary's Medical Center")
-        form.addWidget(self.hospital_name_label, 0, 0)
-        form.addWidget(self.hospital_name_input, 1, 0)
-
-        self.department_label = QLabel("Department")
-        self.department_label.setObjectName("fieldLabel")
-        self.department_input = QLineEdit()
-        self.department_input.setPlaceholderText("e.g., Ophthalmology Department")
-        form.addWidget(self.department_label, 0, 1)
-        form.addWidget(self.department_input, 1, 1)
-
-        self.contact_label = QLabel("Contact Person (optional)")
-        self.contact_label.setObjectName("fieldLabel")
-        self.contact_input = QLineEdit()
-        self.contact_input.setPlaceholderText("Optional")
-        form.addWidget(self.contact_label, 2, 0)
-        form.addWidget(self.contact_input, 3, 0)
+        form.addWidget(self.hospital_name_label, 0, 1)
+        form.addWidget(self.hospital_name_input, 1, 1)
 
         self.phone_label = QLabel("Phone (optional)")
         self.phone_label.setObjectName("fieldLabel")
         self.phone_input = QLineEdit()
         self.phone_input.setPlaceholderText("Optional")
-        form.addWidget(self.phone_label, 2, 1)
-        form.addWidget(self.phone_input, 3, 1)
+        form.addWidget(self.phone_label, 2, 0)
+        form.addWidget(self.phone_input, 3, 0)
 
         self.email_label = QLabel("Email (optional)")
         self.email_label.setObjectName("fieldLabel")
         self.email_input = QLineEdit()
         self.email_input.setPlaceholderText("Optional")
-        form.addWidget(self.email_label, 4, 0)
-        form.addWidget(self.email_input, 5, 0)
+        form.addWidget(self.email_label, 2, 1)
+        form.addWidget(self.email_input, 3, 1)
 
         self.address_label = QLabel("Address")
         self.address_label.setObjectName("fieldLabel")
         self.address_input = QLineEdit()
         self.address_input.setPlaceholderText("City / complete address")
-        form.addWidget(self.address_label, 4, 1)
-        form.addWidget(self.address_input, 5, 1)
+        form.addWidget(self.address_label, 4, 0, 1, 2)
+        form.addWidget(self.address_input, 5, 0, 1, 2)
 
         layout.addLayout(form)
 
+        # Removed status column/checkbox as per request
         flags_row = QHBoxLayout()
-        self.active_check = QCheckBox("Active")
-        self.active_check.setChecked(True)
         self.default_check = QCheckBox("Set as default")
-        flags_row.addWidget(self.active_check)
         flags_row.addWidget(self.default_check)
         flags_row.addStretch(1)
         layout.addLayout(flags_row)
@@ -110,31 +102,51 @@ class ReferralHospitalDialog(QDialog):
         save_btn = QPushButton("Save")
         save_btn.setObjectName("primaryAction")
         cancel_btn.clicked.connect(self.reject)
-        save_btn.clicked.connect(self.accept)
+        save_btn.clicked.connect(self.save_data)
         button_row.addWidget(cancel_btn)
         button_row.addWidget(save_btn)
         layout.addLayout(button_row)
 
-        self.hospital_name_input.setText(str(self._item.get("hospital_name") or ""))
-        self.department_input.setText(str(self._item.get("department") or ""))
         self.contact_input.setText(str(self._item.get("contact_person") or ""))
+        self.hospital_name_input.setText(str(self._item.get("hospital_name") or ""))
         self.phone_input.setText(str(self._item.get("phone") or ""))
         self.email_input.setText(str(self._item.get("email") or ""))
         self.address_input.setText(str(self._item.get("address") or ""))
-        self.active_check.setChecked(bool(self._item.get("is_active", True)))
+        self.active_val = bool(self._item.get("is_active", True))
         self.default_check.setChecked(bool(self._item.get("is_default", False)))
 
-        self.hospital_name_input.returnPressed.connect(self.accept)
+        self.hospital_name_input.returnPressed.connect(self.save_data)
+
+    def save_data(self):
+        vals = self.values()
+        if not vals["contact_person"]:
+            QMessageBox.warning(self, "Validation Error", "Please enter a doctor's name.")
+            return
+        if not vals["hospital_name"]:
+            QMessageBox.warning(self, "Validation Error", "Please enter a hospital name.")
+            return
+        if not vals["address"]:
+            QMessageBox.warning(self, "Validation Error", "Please enter an address.")
+            return
+
+        reply = QMessageBox.question(
+            self, 
+            "Confirm Save", 
+            "Please make sure everything is correct. Do you want to proceed?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            self.accept()
 
     def values(self) -> dict:
         return {
-            "hospital_name": self.hospital_name_input.text().strip(),
-            "department": self.department_input.text().strip(),
             "contact_person": self.contact_input.text().strip(),
+            "hospital_name": self.hospital_name_input.text().strip(),
+            "department": "",
             "phone": self.phone_input.text().strip(),
             "email": self.email_input.text().strip(),
             "address": self.address_input.text().strip(),
-            "is_active": self.active_check.isChecked(),
+            "is_active": True, # Always active as per request to remove status
             "is_default": self.default_check.isChecked(),
         }
 
@@ -304,24 +316,24 @@ class TrustedHospitalsPage(QWidget):
         header_row.setSpacing(8)
         title_col = QVBoxLayout()
         title_col.setSpacing(0)
-        title = QLabel("Trusted Referrals")
+        title = QLabel("Medical Partners")
         title.setObjectName("headerTitle")
         title_col.addWidget(title)
         header_row.addLayout(title_col)
         header_row.addStretch(1)
-        self.add_btn = QPushButton("+ Add Hospital / Clinic")
+        self.add_btn = QPushButton("+ Add Medical Partner")
         self.add_btn.setObjectName("ghostAction")
         self.add_btn.clicked.connect(self._add_referral_hospital)
         header_row.addWidget(self.add_btn)
         hero_layout.addLayout(header_row)
         root.addWidget(hero)
 
-        self.referral_hospitals_group = QGroupBox("Hospitals / Clinics")
+        self.referral_hospitals_group = QGroupBox("Medical Partners")
         referral_layout = QVBoxLayout(self.referral_hospitals_group)
         referral_layout.setSpacing(6)
 
-        self.referral_hospitals_table = QTableWidget(0, 4)
-        self.referral_hospitals_table.setHorizontalHeaderLabels(["Hospital / Clinic", "Department", "Contact", "Status"])
+        self.referral_hospitals_table = QTableWidget(0, 5)
+        self.referral_hospitals_table.setHorizontalHeaderLabels(["Doctor's Name", "Hospital", "Address", "Phone", "Email"])
         self.referral_hospitals_table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.referral_hospitals_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.referral_hospitals_table.setSelectionMode(QTableWidget.SingleSelection)
@@ -332,7 +344,8 @@ class TrustedHospitalsPage(QWidget):
         self.referral_hospitals_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
         self.referral_hospitals_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
         self.referral_hospitals_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
-        self.referral_hospitals_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Stretch)
+        self.referral_hospitals_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        self.referral_hospitals_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
         self.referral_hospitals_table.horizontalHeader().setMinimumSectionSize(90)
         self.referral_hospitals_table.setWordWrap(True)
         self.referral_hospitals_table.itemSelectionChanged.connect(self._sync_referral_action_buttons)
@@ -375,10 +388,11 @@ class TrustedHospitalsPage(QWidget):
         return str(username or os.environ.get("EYESHIELD_CURRENT_USER") or "").strip()
 
     def _configure_referral_hospitals_section(self):
-        show_referrals = self._active_role() == "admin"
+        active_role = self._active_role()
+        show_referrals = active_role in {"clinician", "doctor"}
         self.referral_hospitals_group.setVisible(show_referrals)
         if not show_referrals:
-            self.status_label.setText("Trusted referrals are managed by admin users.")
+            self.status_label.setText("Medical partners are managed by clinicians.")
             return
         if not UserManager.ensure_referral_hospitals_table():
             self.status_label.setText("Unable to prepare trusted referral list")
@@ -397,20 +411,18 @@ class TrustedHospitalsPage(QWidget):
             row_index = self.referral_hospitals_table.rowCount()
             self.referral_hospitals_table.insertRow(row_index)
 
-            hospital_item = QTableWidgetItem(str(item.get("hospital_name") or ""))
-            hospital_item.setData(Qt.UserRole, int(item.get("id") or 0))
-            self.referral_hospitals_table.setItem(row_index, 0, hospital_item)
-            self.referral_hospitals_table.setItem(row_index, 1, QTableWidgetItem(str(item.get("department") or "")))
-            contact_label = str(item.get("contact_person") or item.get("phone") or item.get("email") or "")
-            self.referral_hospitals_table.setItem(row_index, 2, QTableWidgetItem(contact_label))
-            status_chunks = ["Active" if item.get("is_active") else "Inactive"]
-            if item.get("is_default"):
-                status_chunks.append("Default")
-            self.referral_hospitals_table.setItem(row_index, 3, QTableWidgetItem(" / ".join(status_chunks)))
+            contact_item = QTableWidgetItem(str(item.get("contact_person") or ""))
+            contact_item.setData(Qt.UserRole, int(item.get("id") or 0))
+            self.referral_hospitals_table.setItem(row_index, 0, contact_item)
             
-            # Apply alternating row background colors for better readability (matching activity log style)
+            self.referral_hospitals_table.setItem(row_index, 1, QTableWidgetItem(str(item.get("hospital_name") or "")))
+            self.referral_hospitals_table.setItem(row_index, 2, QTableWidgetItem(str(item.get("address") or "")))
+            self.referral_hospitals_table.setItem(row_index, 3, QTableWidgetItem(str(item.get("phone") or "")))
+            self.referral_hospitals_table.setItem(row_index, 4, QTableWidgetItem(str(item.get("email") or "")))
+            
+            # Apply alternating row background colors
             bg_color = QColor("#ffffff") if row_index % 2 == 0 else QColor("#f3f4f6")
-            for col in range(4):
+            for col in range(5):
                 item_widget = self.referral_hospitals_table.item(row_index, col)
                 if item_widget:
                     item_widget.setBackground(bg_color)
@@ -438,20 +450,20 @@ class TrustedHospitalsPage(QWidget):
         self._open_referral_dialog(item)
 
     def _delete_selected_referral_hospital(self):
-        if self._active_role() != "admin":
-            QMessageBox.warning(self, "Trusted Referrals", "Only admins can manage trusted referrals.")
+        if self._active_role() not in {"clinician", "doctor"}:
+            QMessageBox.warning(self, "Medical Partners", "Only clinicians can manage medical partners.")
             return
 
         item = self._selected_referral_hospital()
         if not item:
-            QMessageBox.information(self, "Trusted Referrals", "Select a hospital or clinic first.")
+            QMessageBox.information(self, "Medical Partners", "Select a medical partner first.")
             return
 
         hospital_label = str(item.get("hospital_name") or "this hospital")
         reply = QMessageBox.question(
             self,
-            "Delete Trusted Referral",
-            f"Delete {hospital_label} from the trusted referral list?",
+            "Delete Medical Partner",
+            f"Delete {hospital_label} from the medical partners list?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )
@@ -463,12 +475,12 @@ class TrustedHospitalsPage(QWidget):
             acting_role=self._active_role(),
         )
         if not ok:
-            QMessageBox.warning(self, "Trusted Referrals", message)
+            QMessageBox.warning(self, "Medical Partners", message)
             return
 
         self._log_referral_audit(
             "TRUSTED_REFERRAL_DELETED",
-            f"Deleted trusted referral: {hospital_label}",
+            f"Deleted medical partner: {hospital_label}",
             item,
         )
 
@@ -477,11 +489,11 @@ class TrustedHospitalsPage(QWidget):
 
     def _sync_referral_action_buttons(self):
         has_selection = self._selected_referral_hospital() is not None
-        is_admin = self._active_role() == "admin"
+        is_eligible = self._active_role() in {"clinician", "doctor"}
         if hasattr(self, "edit_btn"):
-            self.edit_btn.setEnabled(has_selection and is_admin)
+            self.edit_btn.setEnabled(has_selection and is_eligible)
         if hasattr(self, "delete_btn"):
-            self.delete_btn.setEnabled(has_selection and is_admin)
+            self.delete_btn.setEnabled(has_selection and is_eligible)
 
     def _log_referral_audit(self, event_type: str, action_text: str, item: dict | None = None):
         metadata = {}
@@ -502,8 +514,8 @@ class TrustedHospitalsPage(QWidget):
         )
 
     def _open_referral_dialog(self, item=None):
-        if self._active_role() != "admin":
-            QMessageBox.warning(self, "Trusted Referrals", "Only admins can manage trusted referrals.")
+        if self._active_role() not in {"clinician", "doctor"}:
+            QMessageBox.warning(self, "Medical Partners", "Only clinicians can manage medical partners.")
             return
 
         dialog = ReferralHospitalDialog(self, item=item)
@@ -511,61 +523,52 @@ class TrustedHospitalsPage(QWidget):
             return
 
         values = dialog.values()
-        hospital_name = values["hospital_name"]
-        if not hospital_name:
-            QMessageBox.warning(self, "Validation Error", "Please enter a hospital name.")
-            return
-
-        if not values["department"]:
-            QMessageBox.warning(self, "Validation Error", "Please enter a department.")
-            return
-
-        if not values["address"]:
-            QMessageBox.warning(self, "Validation Error", "Please enter an address.")
-            return
+        # Validation is now handled inside the dialog to prevent accidental closing.
 
         selected_id = int(item.get("id") or 0) if item else None
+        hosp_name = str(values.get("hospital_name") or "").strip()
+        
         ok, message, hospital_id = UserManager.upsert_referral_hospital(
-            hospital_name=hospital_name,
-            department=values["department"],
-            contact_person=values["contact_person"],
-            phone=values["phone"],
-            email=values["email"],
-            address=values["address"],
-            is_active=values["is_active"],
-            is_default=values["is_default"],
+            hospital_name=hosp_name,
+            department=values.get("department", ""),
+            contact_person=values.get("contact_person", ""),
+            phone=values.get("phone", ""),
+            email=values.get("email", ""),
+            address=values.get("address", ""),
+            is_active=values.get("is_active", True),
+            is_default=values.get("is_default", False),
             hospital_id=selected_id,
             acting_username=self._active_username(),
             acting_role=self._active_role(),
         )
+        
         if not ok:
-            QMessageBox.warning(self, "Trusted Referrals", message)
+            QMessageBox.warning(self, "Error", f"Failed to save: {message}")
             return
 
+        # Explicitly reload and refresh UI
         self._reload_referral_hospitals()
+        
         action_label = "Updated" if selected_id else "Added"
         event_type = "TRUSTED_REFERRAL_UPDATED" if selected_id else "TRUSTED_REFERRAL_ADDED"
         
-        # Build audit item with new hospital data
         audit_item = {
             "id": hospital_id,
-            "hospital_name": hospital_name,
+            "hospital_name": hosp_name,
             "department": values.get("department", ""),
             "contact_person": values.get("contact_person", ""),
-            "is_active": values.get("is_active", True),
+            "is_active": True,
             "is_default": values.get("is_default", False),
         }
-        self._log_referral_audit(event_type, f"{action_label} trusted referral: {hospital_name}", item=audit_item)
-        self.status_label.setText(f"{action_label}: {hospital_name}")
-        QMessageBox.information(self, "Trusted Referrals", f"{action_label} successfully: {hospital_name}")
+        self._log_referral_audit(event_type, f"{action_label} trusted referral: {hosp_name}", item=audit_item)
+        
+        self.status_label.setText(f"Success: {hosp_name} {action_label.lower()}")
+        QMessageBox.information(self, "Success", f"Medical partner was successfully {action_label.lower()} on the list: {hosp_name}")
 
+        # Try to highlight the new/updated row
         if hospital_id:
             for row_idx in range(self.referral_hospitals_table.rowCount()):
                 id_item = self.referral_hospitals_table.item(row_idx, 0)
-                if not id_item:
-                    continue
-                found_id = int(id_item.data(Qt.UserRole) or 0)
-                if found_id != int(hospital_id):
-                    continue
-                self.referral_hospitals_table.selectRow(row_idx)
-                break
+                if id_item and int(id_item.data(Qt.UserRole) or 0) == int(hospital_id):
+                    self.referral_hospitals_table.selectRow(row_idx)
+                    break
