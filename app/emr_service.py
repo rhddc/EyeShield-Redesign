@@ -1412,6 +1412,24 @@ def list_emr_timeline_records(patient_id: int) -> list[dict[str, Any]]:
         pcols = [d[0] for d in cur.description]
         patient = dict(zip(pcols, prow))
 
+        # Fallback clinical history values for patients whose screenings are not attached to a queue entry
+        # (e.g., older flows or recovery paths). Prefer the most recent non-empty visit_details values.
+        cur.execute(
+            """
+            SELECT prev_dr_stage
+            FROM emr_visit_details
+            WHERE patient_id = ?
+              AND prev_dr_stage IS NOT NULL
+              AND trim(prev_dr_stage) != ''
+              AND lower(trim(prev_dr_stage)) NOT IN ('select')
+            ORDER BY datetime(captured_at) DESC, visit_detail_id DESC
+            LIMIT 1
+            """,
+            (pid,),
+        )
+        _row_prev = cur.fetchone()
+        fallback_prev_dr_stage = str(_row_prev[0] or "").strip() if _row_prev else ""
+
         cur.execute(
             """
             SELECT screening_id, queue_entry_id, screening_date, screening_type, eye_screened, session_status, performed_by, doctor_notes
@@ -1422,6 +1440,25 @@ def list_emr_timeline_records(patient_id: int) -> list[dict[str, Any]]:
             (pid,),
         )
         screenings = cur.fetchall()
+
+        # Resolve "screened by" / doctor label from the existing performed_by user id.
+        # (No UI input: this is derived from the authenticated clinician that started the screening.)
+        performed_ids = sorted({int(r[6]) for r in screenings if r and r[6] is not None})
+        performed_map: dict[int, dict[str, str]] = {}
+        if performed_ids:
+            placeholders = ",".join(["?"] * len(performed_ids))
+            cur.execute(
+                f"""
+                SELECT id,
+                       COALESCE(NULLIF(display_name,''), NULLIF(full_name,''), NULLIF(username,''), '') AS label,
+                       COALESCE(NULLIF(username,''), '') AS username
+                FROM users
+                WHERE id IN ({placeholders})
+                """,
+                performed_ids,
+            )
+            for uid, label, username in cur.fetchall():
+                performed_map[int(uid)] = {"label": str(label or "").strip(), "username": str(username or "").strip()}
 
         # Visit-level archive state (single source of truth): emr_queue_entries.
         queue_ids = sorted({int(r[1]) for r in screenings if r and r[1] is not None})
@@ -1448,6 +1485,16 @@ def list_emr_timeline_records(patient_id: int) -> list[dict[str, Any]]:
 
         out: list[dict[str, Any]] = []
         for (sid, qid, sdate, stype, eye_screened, sess_status, performed_by, doctor_notes) in screenings:
+            performer_label = ""
+            performer_username = ""
+            if performed_by is not None:
+                try:
+                    hit = performed_map.get(int(performed_by)) or {}
+                    performer_label = str(hit.get("label") or "").strip()
+                    performer_username = str(hit.get("username") or "").strip()
+                except (TypeError, ValueError):
+                    performer_label = ""
+                    performer_username = ""
             cur.execute(
                 """
                 SELECT eye_side, ai_dr_grade, ai_confidence, total_uncertainty, doctor_accepted_ai,
@@ -1508,6 +1555,8 @@ def list_emr_timeline_records(patient_id: int) -> list[dict[str, Any]]:
                     "age": str(patient.get("age") or ""),
                     "sex": str(patient.get("sex") or ""),
                     "contact": str(patient.get("contact_number") or ""),
+                    "email": str(patient.get("email") or ""),
+                    "address": str(patient.get("address") or ""),
                     "eyes": eye_label,
                     "diabetes_type": str((visit_details or {}).get("diabetes_type") or patient.get("diabetes_type") or ""),
                     "duration": str((visit_details or {}).get("dm_duration_years") or patient.get("dm_duration_years") or ""),
@@ -1517,6 +1566,11 @@ def list_emr_timeline_records(patient_id: int) -> list[dict[str, Any]]:
                     "result": final_label or ai_label or "",
                     "confidence": " | ".join(conf_text),
                     "screened_at": str(sdate or ""),
+                    # Attribution (compat with legacy patient_records UI)
+                    "original_screener_username": performer_username,
+                    "original_screener_name": performer_label,
+                    # Some UIs expect a "doctor" field; use display label (not editable).
+                    "decision_by_username": performer_label or performer_username,
                     "ai_classification": ai_label,
                     "doctor_classification": final_label or ai_label,
                     # Raw clinician decision fields (authoritative).
@@ -1539,7 +1593,12 @@ def list_emr_timeline_records(patient_id: int) -> list[dict[str, Any]]:
                     "random_blood_sugar": str((visit_details or {}).get("random_blood_sugar") or ""),
                     "diabetes_diagnosis_date": str((visit_details or {}).get("diabetes_diagnosis_date") or ""),
                     "treatment_regimen": str((visit_details or {}).get("treatment_regimen") or ""),
-                    "prev_dr_stage": str((visit_details or {}).get("prev_dr_stage") or ""),
+                    "prev_dr_stage": str(
+                        (visit_details or {}).get("prev_dr_stage")
+                        or patient.get("prev_dr_stage")
+                        or fallback_prev_dr_stage
+                        or ""
+                    ),
                     "symptom_blurred_vision": "Yes" if (visit_details or {}).get("symptom_blurred_vision") else "No",
                     "symptom_floaters": "Yes" if (visit_details or {}).get("symptom_floaters") else "No",
                     "symptom_flashes": "Yes" if (visit_details or {}).get("symptom_flashes") else "No",
@@ -1896,7 +1955,9 @@ def list_screenings_for_patient(patient_id: int) -> list[dict[str, Any]]:
         cur.execute(
             """
             SELECT s.screening_id, s.screening_type, s.screening_date, s.eye_screened, s.session_status,
-                   s.queue_entry_id, u.username
+                   s.queue_entry_id,
+                   COALESCE(NULLIF(u.display_name,''), NULLIF(u.full_name,''), NULLIF(u.username,''), '') AS performed_by_label,
+                   COALESCE(NULLIF(u.username,''), '') AS performed_by_username
             FROM emr_screenings s
             LEFT JOIN users u ON u.id = s.performed_by
             WHERE s.patient_id = ?
@@ -1949,7 +2010,8 @@ def list_screenings_for_patient(patient_id: int) -> list[dict[str, Any]]:
                     "eye_screened": r[3],
                     "session_status": r[4],
                     "queue_entry_id": r[5],
-                    "performed_by_username": r[6] or "",
+                    "performed_by_label": r[6] or "",
+                    "performed_by_username": r[7] or "",
                     "final_grade_summary": ", ".join(final_labels) if final_labels else "Pending",
                     "eyes": eyes,
                 }

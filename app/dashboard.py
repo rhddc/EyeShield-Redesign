@@ -1671,8 +1671,8 @@ class EyeShieldApp(QMainWindow):
             pr_top.addWidget(self._dash_pr_search_btn, 0)
             pr_v.addLayout(pr_top)
 
-            self._dash_pr_table = QTableWidget(0, 3)
-            self._dash_pr_table.setHorizontalHeaderLabels(["Name", "Screening Date", "Screened by"])
+            self._dash_pr_table = QTableWidget(0, 4)
+            self._dash_pr_table.setHorizontalHeaderLabels(["Name", "Age", "Screening Date", "Screened by"])
             self._dash_pr_table.setSelectionBehavior(QAbstractItemView.SelectRows)
             self._dash_pr_table.setSelectionMode(QAbstractItemView.SingleSelection)
             self._dash_pr_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
@@ -1680,7 +1680,8 @@ class EyeShieldApp(QMainWindow):
             self._dash_pr_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
             self._dash_pr_table.setMinimumHeight(340)
             pr_v.addWidget(self._dash_pr_table, 1)
-            self._dash_pr_table.cellDoubleClicked.connect(self._on_frontdesk_patient_record_action)
+            # Frontdesk UX: double-click opens "View Patient / Ok" dialog.
+            self._dash_pr_table.cellDoubleClicked.connect(self._on_frontdesk_patient_record_view)
 
             def _do_pr_search() -> None:
                 q = str(self._dash_pr_search.text() or "").strip()
@@ -2057,12 +2058,37 @@ class EyeShieldApp(QMainWindow):
         q = str(query or "").strip()
         rows = emr.search_patients(q) if q else []
 
-        # Build (Name, Screening date, Screened by) rows.
-        out: list[tuple[int, str, str, str, str, str]] = []
+        def _doctor_prefix(raw: str) -> str:
+            t = str(raw or "").strip()
+            if not t or t in {"-", "—"}:
+                return t or ""
+            low = t.lower()
+            if low.startswith("dr.") or low.startswith("dr "):
+                return t
+            if low.startswith("doctor "):
+                return f"Dr. {t[7:].strip()}".strip()
+            return f"Dr. {t}"
+
+        def _compute_age(dob_value: str) -> str:
+            from datetime import datetime, date
+            dob = str(dob_value or "").strip()[:10]
+            if not dob:
+                return ""
+            try:
+                born = datetime.strptime(dob, "%Y-%m-%d").date()
+            except ValueError:
+                return ""
+            today = date.today()
+            age = today.year - born.year - ((today.month, today.day) < (born.month, born.day))
+            return str(max(age, 0))
+
+        # Build (Name, Age, Screening date, Screened by) rows.
+        out: list[tuple[int, str, str, str, str, str, str]] = []
         for p in rows:
             pid = int(p.get("patient_id") or 0)
             pcode = str(p.get("patient_code") or "").strip()
             name = f"{p.get('first_name','')} {p.get('last_name','')}".strip()
+            age = _compute_age(str(p.get("date_of_birth") or ""))
             screening_date = ""
             screened_by = ""
             sort_date = ""
@@ -2072,25 +2098,27 @@ class EyeShieldApp(QMainWindow):
                 screenings = []
             if screenings:
                 last = screenings[0] or {}
-                screened_by = str(last.get("performed_by_username") or "")
-                screening_date = str(last.get("created_at") or "")
-                sort_date = last.get("created_at") or ""
-            out.append((pid, pcode, name, screening_date, screened_by, sort_date))
+                performer = str(last.get("performed_by_label") or last.get("performed_by_username") or "").strip()
+                screened_by = _doctor_prefix(performer) if performer else ""
+                screening_date = str(last.get("screening_date") or "")
+                sort_date = str(last.get("screening_date") or "")
+            out.append((pid, pcode, name, age, screening_date, screened_by, sort_date))
 
         # Sort by screening date descending (newest first)
-        out.sort(key=lambda x: x[5] or "", reverse=True)
+        out.sort(key=lambda x: x[6] or "", reverse=True)
 
         self._dash_pr_table.setRowCount(len(out))
-        for i, (pid, pcode, name, screening_date, screened_by, _) in enumerate(out):
+        for i, (pid, pcode, name, age, screening_date, screened_by, _) in enumerate(out):
             it_name = QTableWidgetItem(str(name))
             it_name.setData(int(Qt.ItemDataRole.UserRole), int(pid))
             it_name.setData(int(Qt.ItemDataRole.UserRole) + 1, str(pcode))
             self._dash_pr_table.setItem(i, 0, it_name)
-            self._dash_pr_table.setItem(i, 1, QTableWidgetItem(str(screening_date)))
-            self._dash_pr_table.setItem(i, 2, QTableWidgetItem(str(screened_by)))
+            self._dash_pr_table.setItem(i, 1, QTableWidgetItem(str(age)))
+            self._dash_pr_table.setItem(i, 2, QTableWidgetItem(str(screening_date)))
+            self._dash_pr_table.setItem(i, 3, QTableWidgetItem(str(screened_by)))
 
-    def _on_frontdesk_patient_record_action(self, row: int, _col: int) -> None:
-        """Frontdesk Dashboard: choose action for a patient from the search table."""
+    def _on_frontdesk_patient_record_view(self, row: int, _col: int) -> None:
+        """Frontdesk Dashboard: double-click shows View Patient / Ok dialog."""
         if not hasattr(self, "_dash_pr_table"):
             return
         it = self._dash_pr_table.item(row, 0)
@@ -2105,78 +2133,210 @@ class EyeShieldApp(QMainWindow):
         if not pid:
             return
 
-        msg = QMessageBox(self)
-        msg.setWindowTitle("Patient action")
-        msg.setIcon(QMessageBox.Icon.Question)
-        msg.setText(f"Select an action for:\n\n{pname}")
-        btn_view = msg.addButton("View details", QMessageBox.ButtonRole.AcceptRole)
-        btn_follow = msg.addButton("Follow-up Screening", QMessageBox.ButtonRole.ActionRole)
-        msg.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
-        msg.exec()
+        # Show a simple action dialog with "View Patient" and "Ok"
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Patient Action")
+        dlg.setFixedSize(380, 160)
+        dlg.setStyleSheet(
+            "QDialog{background:#f8fafc;border-radius:12px;}"
+            "QLabel{background:transparent;}"
+        )
+        root = QVBoxLayout(dlg)
+        root.setContentsMargins(20, 18, 20, 16)
+        root.setSpacing(12)
 
-        clicked = msg.clickedButton()
-        if clicked == btn_view:
+        label = QLabel(f"Patient: {pname or 'Unknown'} ({pcode or pid})")
+        label.setWordWrap(True)
+        label.setStyleSheet("font-size:14px;font-weight:700;color:#0f172a;")
+        root.addWidget(label)
+
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(10)
+
+        btn_view = QPushButton("View Patient")
+        btn_view.setMinimumHeight(40)
+        btn_view.setCursor(Qt.PointingHandCursor)
+        btn_view.setStyleSheet(
+            "QPushButton{background:qlineargradient(x1:0,y1:0,x2:1,y2:0,"
+            "stop:0 #2563eb,stop:1 #3b82f6);"
+            "color:#fff;border:none;border-radius:10px;"
+            "padding:0 18px;font-weight:700;font-size:13px;}"
+            "QPushButton:hover{background:qlineargradient(x1:0,y1:0,x2:1,y2:0,"
+            "stop:0 #1d4ed8,stop:1 #2563eb);}"
+            "QPushButton:pressed{background:#1e40af;}"
+        )
+
+        btn_ok = QPushButton("Ok")
+        btn_ok.setMinimumHeight(40)
+        btn_ok.setCursor(Qt.PointingHandCursor)
+        btn_ok.setStyleSheet(
+            "QPushButton{background:#ffffff;color:#334155;border:1px solid #e2e8f0;"
+            "border-radius:10px;padding:0 18px;font-weight:600;font-size:13px;}"
+            "QPushButton:hover{background:#f1f5f9;border-color:#cbd5e1;}"
+            "QPushButton:pressed{background:#e2e8f0;}"
+        )
+
+        btn_row.addWidget(btn_view, 1)
+        btn_row.addWidget(btn_ok, 1)
+        root.addLayout(btn_row)
+
+        def _view_patient():
+            dlg.accept()
+            # Navigate to Patient Records page and pre-search the patient
             self._navigate_to(3, nav_key="Reports")
             rp = getattr(self, "reports_page", None)
-            # Prefill Reports search so the record is immediately visible.
-            if rp is not None and hasattr(rp, "search_input"):
-                try:
-                    rp.search_input.setText(pcode or pname)
-                except Exception:
-                    pass
+            if rp is not None and hasattr(rp, "focus_patient_record"):
+                search_key = pcode or str(pid)
+                rp.focus_patient_record(search_key, open_overview=True)
+
+        btn_view.clicked.connect(_view_patient)
+        btn_ok.clicked.connect(dlg.reject)
+        dlg.exec()
+
+    def _on_frontdesk_patient_record_followup(self, row: int, _col: int) -> None:
+        """Frontdesk Dashboard: double-click starts follow-up screening for selected patient."""
+        if not hasattr(self, "_dash_pr_table"):
+            return
+        it = self._dash_pr_table.item(row, 0)
+        if not it:
+            return
+        try:
+            pid = int(it.data(int(Qt.ItemDataRole.UserRole)) or 0)
+        except Exception:
+            pid = 0
+        pcode = str(it.data(int(Qt.ItemDataRole.UserRole) + 1) or "").strip()
+        pname = str(it.text() or "").strip()
+        if not pid:
+            return
+        label = f"{pname or 'Unknown Patient'} ({pcode or pid})"
+        if QMessageBox.question(
+            self,
+            "Follow-up Screening",
+            (
+                f"Start a follow-up screening for {label}?\n\n"
+                "This will open the follow-up form with the patient's information prefilled.\n"
+                "After reviewing (height/weight only), click “Save & Queue Patient” to queue them again."
+            ),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        ) != QMessageBox.StandardButton.Yes:
             return
 
-        if clicked == btn_follow:
-            if QMessageBox.question(
-                self,
-                "Confirm follow-up screening",
-                (
-                    "Patient will go to a follow-up screening and will add a new entry to the screening history.\n\n"
-                    "Please confirm."
-                ),
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No,
-            ) != QMessageBox.StandardButton.Yes:
-                return
-            # Jump to Assessment with follow-up purpose locked.
-            self._navigate_to(1, nav_key="Screening")
-            sp = getattr(self, "screening_page", None)
-            if sp is None:
-                return
-            # Start from a clean state but keep the purpose lock.
-            if hasattr(sp, "reset_screening"):
-                try:
-                    sp.reset_screening(confirm_unsaved=False)
-                except TypeError:
-                    sp.reset_screening()
-            # Load patient into Assessment.
+        # Resolve latest screening group for this patient.
+        try:
+            timeline = emr.list_emr_timeline_records(int(pid)) or []
+        except Exception:
+            timeline = []
+        grouped = group_patient_record_rows(timeline) if timeline else []
+        latest_group = grouped[-1] if grouped else {}
+
+        # Resolve legacy row id; create a minimal mirror row if missing (same as Reports frontdesk flow).
+        record_id = 0
+        try:
+            src = list((latest_group or {}).get("source_rows") or [])
+        except Exception:
+            src = []
+        legacy_ids = []
+        for r in src:
             try:
-                emr_patient = emr.get_patient(int(pid)) or {}
+                lid = int(r.get("legacy_record_id") or 0)
             except Exception:
-                emr_patient = {}
-            if emr_patient and hasattr(sp, "apply_emr_context"):
+                lid = 0
+            if lid > 0:
+                legacy_ids.append(lid)
+        if legacy_ids:
+            record_id = max(legacy_ids)
+
+        if record_id <= 0:
+            # Create minimal legacy record row for follow-up loader.
+            try:
                 try:
-                    sp.apply_emr_context(emr_patient)
-                except Exception:
-                    pass
-            # Ensure follow-up purpose is selected and cannot be changed.
-            if hasattr(sp, "set_frontdesk_purpose"):
-                try:
-                    sp.set_frontdesk_purpose("follow_up", locked=True)
-                except Exception:
-                    pass
-            else:
+                    from .db import ensure_patient_records_db
+                except Exception:  # pragma: no cover
+                    from db import ensure_patient_records_db
+                ok_db, err = ensure_patient_records_db()
+                if not ok_db:
+                    QMessageBox.warning(self, "Follow-up Screening", f"Unable to open patient records DB: {err}")
+                    return
+                conn = sqlite3.connect(str(PATIENT_RECORDS_DB_PATH))
+                cur = conn.cursor()
+                now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                cur.execute(
+                    """
+                    INSERT INTO patient_records (
+                        patient_id, name, birthdate, age, sex, contact, phone, email, address, eyes,
+                        diabetes_type, duration, treatment_regimen, prev_dr_stage,
+                        notes, result, confidence,
+                        screened_at, screening_type, follow_up, followup_date, followup_label,
+                        original_screener_username, original_screener_name, decision_mode
+                    ) VALUES (
+                        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                        ?, ?, ?, ?,
+                        ?, ?, ?,
+                        ?, ?, ?, ?, ?,
+                        ?, ?, ?
+                    )
+                    """,
+                    (
+                        str(latest_group.get("patient_id") or pcode or ""),
+                        str(latest_group.get("name") or pname or ""),
+                        str(latest_group.get("birthdate") or latest_group.get("date_of_birth") or ""),
+                        str(latest_group.get("age") or ""),
+                        str(latest_group.get("sex") or ""),
+                        str(latest_group.get("contact") or ""),
+                        str(latest_group.get("phone") or ""),
+                        str(latest_group.get("email") or ""),
+                        str(latest_group.get("address") or ""),
+                        str(latest_group.get("eyes") or ""),
+                        str(latest_group.get("diabetes_type") or ""),
+                        str(latest_group.get("duration") or latest_group.get("dm_duration_years") or ""),
+                        str(latest_group.get("treatment_regimen") or ""),
+                        str(latest_group.get("prev_dr_stage") or ""),
+                        str(latest_group.get("doctor_findings") or latest_group.get("notes") or ""),
+                        str(latest_group.get("result") or "Pending"),
+                        str(latest_group.get("confidence") or ""),
+                        now,
+                        "follow_up",
+                        "Yes",
+                        now,
+                        "Follow-up screening",
+                        str(latest_group.get("original_screener_username") or ""),
+                        str(latest_group.get("original_screener_name") or ""),
+                        "emr",
+                    ),
+                )
+                conn.commit()
+                record_id = int(cur.lastrowid or 0)
+            except Exception:
+                QMessageBox.warning(self, "Follow-up Screening", "Unable to prepare the follow-up screening form.")
+                return
+            finally:
                 with contextlib.suppress(Exception):
-                    if hasattr(sp, "fd_purpose_combo"):
-                        idx = sp.fd_purpose_combo.findText("Follow-up patient")
-                        if idx >= 0:
-                            sp.fd_purpose_combo.setCurrentIndex(idx)
-                        sp.fd_purpose_combo.setEnabled(False)
-            # Flag internal follow-up mode for downstream save/history logic.
-            with contextlib.suppress(Exception):
-                sp._current_screening_type = "follow_up"
-                sp._current_follow_up_flag = "Yes"
+                    if "conn" in locals() and conn is not None:
+                        conn.close()
+
+        if record_id <= 0:
+            QMessageBox.warning(self, "Follow-up Screening", "Unable to prepare the follow-up screening form.")
             return
+
+        # Navigate to Screening and load follow-up form.
+        self._navigate_to(1, nav_key="Screening")
+        sp = getattr(self, "screening_page", None)
+        if sp is None or not hasattr(sp, "load_patient_for_followup"):
+            QMessageBox.warning(self, "Follow-up Screening", "Unable to open the screening page.")
+            return
+        if hasattr(sp, "reset_screening"):
+            with contextlib.suppress(Exception):
+                sp.reset_screening(confirm_unsaved=False)
+        if not sp.load_patient_for_followup(int(record_id)):
+            QMessageBox.warning(self, "Follow-up Screening", "Unable to prepare the follow-up screening form.")
+            return
+
+        UserManager.add_activity_log(
+            getattr(self, "username", "") or "",
+            f"FD_DASH_FOLLOW_UP_STARTED patient_id={pcode or pid}; previous_record_id={record_id}",
+        )
+        return
 
     def _dash_refresh_frontdesk_queue(self) -> None:
         """Frontdesk Dashboard: populate the embedded patient queue table."""

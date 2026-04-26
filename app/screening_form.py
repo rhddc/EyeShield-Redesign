@@ -2606,7 +2606,7 @@ class ScreeningPage(QWidget):
         # Editable in follow-up mode: height and weight only.
         _set_ro("height", False)
         _set_ro("weight", False)
-        _set_enabled("prev_dr_stage", not is_follow_up_locked)
+        _set_enabled("prev_dr_stage", False if is_follow_up_locked else True)
 
         # Identity and demographics
         _set_ro("p_first_name", is_follow_up_locked)
@@ -2628,12 +2628,12 @@ class ScreeningPage(QWidget):
                 self.p_dob.setReadOnly(is_follow_up_locked)
 
         # Clinical history
-        _set_enabled("diabetes_type", not is_follow_up_locked)
-        _set_ro("diabetes_diagnosis_date", is_follow_up_locked)
+        _set_enabled("diabetes_type", False if is_follow_up_locked else True)
+        _set_ro("diabetes_diagnosis_date", True if is_follow_up_locked else False)
         # HbA1c removed from UI.
-        _set_enabled("treatment_regimen", not is_follow_up_locked)
+        _set_enabled("treatment_regimen", False if is_follow_up_locked else True)
         if hasattr(self, "prev_treatment"):
-            self.prev_treatment.setEnabled(not is_follow_up_locked)
+            self.prev_treatment.setEnabled(False if is_follow_up_locked else True)
 
         # Vitals, symptoms, notes
         _set_ro("va_left", is_follow_up_locked)

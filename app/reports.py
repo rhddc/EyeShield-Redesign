@@ -1286,8 +1286,24 @@ class ScreeningComparisonDialog(QDialog):
         self._set_metric_bar(self._unc_row, "Uncertainty", unc_pct, "#f59e0b")
 
         # Clinical context (right sidebar)
-        notes = str(chosen.get("notes") or chosen.get("doctor_findings") or "").strip()
-        self._ctx_notes.setPlainText(notes if notes else "")
+        eye_label = str(chosen.get("eye_label") or chosen.get("eyes") or "Eye").strip() or "Eye"
+        doctor_notes = str(chosen.get("doctor_findings") or chosen.get("notes") or "").strip()
+        override_reason = str(chosen.get("override_justification") or "").strip()
+        accepted_raw = chosen.get("doctor_accepted_ai")
+        accepted = str(accepted_raw).strip().lower() in {"1", "true", "yes"}
+
+        ctx_lines: list[str] = []
+        ctx_lines.append("Doctor Notes")
+        ctx_lines.append(doctor_notes if doctor_notes else "—")
+        ctx_lines.append("")
+        ctx_lines.append(f"{eye_label}:")
+        ctx_lines.append("")
+        ctx_lines.append("Override Justification Notes:")
+        if accepted:
+            ctx_lines.append("Doctor Accepted AI Result")
+        else:
+            ctx_lines.append(override_reason if override_reason else "—")
+        self._ctx_notes.setPlainText("\n".join(ctx_lines).strip())
         self._ctx_next.setText(self._build_next_steps_text(result))
 
         self._set_preview_image(self.source_preview, chosen.get("source_image_path"), "Fundus image unavailable")
@@ -1408,6 +1424,8 @@ class PatientDetailsDialog(QDialog):
         add_field("Date of Birth", str(patient_record.get("birthdate") or "N/A"))
         add_field("Sex", str(patient_record.get("sex") or "N/A"))
         add_field("Contact", str(patient_record.get("contact") or "N/A"))
+        add_field("Email", str(patient_record.get("email") or "N/A"))
+        add_field("Address", str(patient_record.get("address") or "N/A"))
         add_field("Eye Screened", str(patient_record.get("eyes") or "N/A"))
         
         # Vital Signs Section
@@ -1443,13 +1461,10 @@ class PatientDetailsDialog(QDialog):
         # Clinical History Section
         add_section("Clinical History")
         add_field("Diabetes Type", str(patient_record.get("diabetes_type") or "N/A"))
-        add_field("Diagnosis Date", str(patient_record.get("diabetes_diagnosis_date") or "N/A"))
+        add_field("Diagnosed Date", str(patient_record.get("diabetes_diagnosis_date") or "N/A"))
         add_field("Duration", str(patient_record.get("duration") or "N/A"))
-        add_field("HbA1c", str(patient_record.get("hba1c") or "N/A") + ("%" if patient_record.get("hba1c") else ""))
         add_field("Treatment Regimen", str(patient_record.get("treatment_regimen") or "N/A"))
-        add_field("Previous DR Stage", str(patient_record.get("prev_dr_stage") or "N/A"))
-        prev_treatment = "Yes" if _is_truthy_flag(patient_record.get("prev_treatment")) else "No"
-        add_field("Previous DR Treatment", prev_treatment)
+        add_field("Prev DR", str(patient_record.get("prev_dr_stage") or "N/A"))
         
         # Screening Result Section
         add_section("Screening Result")
@@ -1457,12 +1472,15 @@ class PatientDetailsDialog(QDialog):
         add_field("Doctor Classification", str(patient_record.get("doctor_classification") or patient_record.get("result") or "N/A"))
         add_field("Final Diagnosis", "Based on ICDR Severity Scale")
         add_field("Decision Mode", str(patient_record.get("decision_mode") or "accepted").title())
-        findings_text = str(patient_record.get("doctor_findings") or "").strip()
-        if findings_text:
-            add_field("Doctor Findings", findings_text)
+        # Keep two separate comment channels (matches Screening Results UI):
+        # - Override justification (required only when overriding)
+        # - Additional doctor comments (free text)
         override_reason = str(patient_record.get("override_justification") or "").strip()
         if override_reason:
             add_field("Override Justification", override_reason)
+        doctor_comments = str(patient_record.get("doctor_findings") or "").strip()
+        if doctor_comments:
+            add_field("Doctor Comments", doctor_comments)
         add_field("Confidence", str(patient_record.get("confidence") or "N/A"))
         add_field("Screened At", str(patient_record.get("screened_at") or "N/A"))
         add_field("Screened By", str(patient_record.get("original_screener_name") or patient_record.get("original_screener_username") or "N/A"))
@@ -1541,6 +1559,8 @@ class ReferralDetailDialog(QDialog):
         add_field("Name", str(patient_record.get("name") or "N/A"))
         add_field("Age", str(patient_record.get("age") or "N/A"))
         add_field("Sex", str(patient_record.get("sex") or "N/A"))
+        add_field("Email", str(patient_record.get("email") or "N/A"))
+        add_field("Address", str(patient_record.get("address") or "N/A"))
 
         add_section("Vital Signs")
         add_field("Height (cm)", str(patient_record.get("height") or "N/A") + (" cm" if patient_record.get("height") else ""))
@@ -1553,21 +1573,25 @@ class ReferralDetailDialog(QDialog):
 
         add_section("Clinical History")
         add_field("Diabetes Type", str(patient_record.get("diabetes_type") or "N/A"))
-        add_field("HbA1c", str(patient_record.get("hba1c") or "N/A") + ("%" if patient_record.get("hba1c") else ""))
-        add_field("Treatment", str(patient_record.get("treatment_regimen") or "N/A"))
-        add_field("Previous DR", str(patient_record.get("prev_dr_stage") or "N/A"))
+        add_field("Duration", str(patient_record.get("duration") or "N/A"))
+        add_field("Diagnosed Date", str(patient_record.get("diabetes_diagnosis_date") or "N/A"))
+        add_field("Treatment Regimen", str(patient_record.get("treatment_regimen") or "N/A"))
+        add_field("Prev DR", str(patient_record.get("prev_dr_stage") or "N/A"))
 
         add_section("Screening Result")
         add_field("AI Classification", str(patient_record.get("ai_classification") or patient_record.get("result") or "N/A"))
         add_field("Doctor Classification", str(patient_record.get("doctor_classification") or patient_record.get("result") or "N/A"))
         add_field("Final Diagnosis", "Based on ICDR Severity Scale")
         add_field("Decision Mode", str(patient_record.get("decision_mode") or "accepted").title())
-        findings_text = str(patient_record.get("doctor_findings") or "").strip()
-        if findings_text:
-            add_field("Doctor Findings", findings_text)
+        # Keep two separate comment channels (matches Screening Results UI):
+        # - Override justification (required only when overriding)
+        # - Additional doctor comments (free text)
         override_reason = str(patient_record.get("override_justification") or "").strip()
         if override_reason:
             add_field("Override Justification", override_reason)
+        doctor_comments = str(patient_record.get("doctor_findings") or "").strip()
+        if doctor_comments:
+            add_field("Doctor Comments", doctor_comments)
         add_field("Confidence", str(patient_record.get("confidence") or "N/A"))
         add_field("Screened By", str(patient_record.get("original_screener_name") or patient_record.get("original_screener_username") or "N/A"))
         add_field("Screened At", str(patient_record.get("screened_at") or "N/A"))
@@ -2001,6 +2025,9 @@ class ReportsPage(QWidget):
         self.rescreen_btn = QPushButton("New Follow-up Screening" if self.is_frontdesk else "Add Follow-Up Screening")
         self.rescreen_btn.setEnabled(False)
         self.rescreen_btn.clicked.connect(self.start_frontdesk_followup if self.is_frontdesk else self.rescreen_patient)
+        # Frontdesk: hide rescreen button from top bar (follow-up is accessible from patient overview)
+        if getattr(self, "is_frontdesk", False):
+            self.rescreen_btn.hide()
         self.fd_followup_btn = None
 
         # Front desk: doctors handle clinical outputs (reports/referrals).
@@ -2051,7 +2078,7 @@ class ReportsPage(QWidget):
         if not getattr(self, "is_frontdesk", False):
             cl.addWidget(self.report_btn)
             cl.addWidget(self.referral_btn)
-        if getattr(self, "is_frontdesk", False):
+        if getattr(self, "is_frontdesk", False) and not self.rescreen_btn.isHidden():
             cl.addWidget(self.rescreen_btn)
         root.addWidget(self._controls_group)
 
@@ -2193,7 +2220,7 @@ class ReportsPage(QWidget):
             self._set_button_icon(self.export_btn, "export.svg")
             self._set_button_icon(self.rescreen_btn, "rescreen.svg")
             self.export_btn.setText("Export")
-            self.rescreen_btn.setText("Rescreen")
+            self.rescreen_btn.setText("Follow-up Screening")
             self.export_btn.setToolTip("Export currently visible report rows to CSV")
             self.rescreen_btn.setToolTip("Add a follow-up screening for the selected patient")
         if self.archived_records_btn is not None:
@@ -2518,9 +2545,6 @@ class ReportsPage(QWidget):
             generate_action = menu.addAction("Generate Report")
             referral_action = menu.addAction("Generate Referral")
         rescreen_action = None
-        if getattr(self, "is_frontdesk", False):
-            rescreen_action = menu.addAction("New Follow-up Screening")
-            rescreen_action.setEnabled(bool(record))
         archive_action = None
         if self.archive_btn is not None:
             archive_action = menu.addAction("Archive Record")
@@ -2597,14 +2621,14 @@ class ReportsPage(QWidget):
             QMessageBox.information(self, "New Follow-up Screening", "Select a patient record first.")
             return
 
-        label = f"{record.get('name') or 'Unknown Patient'} ({record.get('patient_id') or 'No ID'})"
+        label = f"{record.get('name') or 'Unknown Patient'} ({record.get('patient_id') or record.get('patient_code') or 'No ID'})"
         if (
             QMessageBox.question(
                 self,
                 "New Follow-up Screening",
                 f"Start a new follow-up screening for {label}?\n\n"
                 "This will open the follow-up form with the patient's information prefilled.\n"
-                "After reviewing/editing, click “Save & Queue Patient” to queue them again.",
+                'After reviewing/editing, click "Save & Queue Patient" to queue them again.',
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.No,
             )
@@ -2612,7 +2636,109 @@ class ReportsPage(QWidget):
         ):
             return
 
-        record_id = int(record.get("primary_record_id") or record.get("id") or 0)
+        # Always create a legacy patient_records.db row from the overview record
+        # because the record comes from the EMR timeline and its "id" is an EMR ID
+        # that does not exist in patient_records.db.
+        try:
+            from .db import ensure_patient_records_db
+        except Exception:  # pragma: no cover
+            from db import ensure_patient_records_db
+        ok_db, err = ensure_patient_records_db()
+        if not ok_db:
+            QMessageBox.warning(self, "New Follow-up Screening", f"Unable to open patient records DB: {err}")
+            return
+        import traceback as _tb
+        record_id = 0
+        try:
+            import sqlite3
+            from datetime import datetime
+            conn = sqlite3.connect(DB_FILE)
+            cur = conn.cursor()
+            now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+            # Use patient_code if available, otherwise fall back to patient_id
+            pid_code = str(
+                record.get("patient_code")
+                or record.get("patient_id")
+                or ""
+            ).strip()
+
+            dob_iso = str(record.get("birthdate") or record.get("date_of_birth") or "")
+            age_str = str(record.get("age") or "")
+            if not age_str and dob_iso:
+                try:
+                    born = datetime.strptime(dob_iso[:10], "%Y-%m-%d").date()
+                    today = datetime.now().date()
+                    age_val = today.year - born.year - ((today.month, today.day) < (born.month, born.day))
+                    age_str = str(max(age_val, 0))
+                except Exception:
+                    pass
+
+            cur.execute(
+                '''
+                INSERT INTO patient_records (
+                    patient_id, name, birthdate, age, sex, contact, phone, email, address, eyes,
+                    diabetes_type, duration, treatment_regimen, prev_dr_stage,
+                    notes, result, confidence,
+                    screened_at, screening_type, follow_up, followup_date, followup_label,
+                    original_screener_username, original_screener_name, decision_mode,
+                    height, weight, bmi
+                ) VALUES (
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                    ?, ?, ?, ?,
+                    ?, ?, ?,
+                    ?, ?, ?, ?, ?,
+                    ?, ?, ?,
+                    ?, ?, ?
+                )
+                ''',
+                (
+                    pid_code,
+                    str(record.get("name") or ""),
+                    dob_iso,
+                    age_str,
+                    str(record.get("sex") or ""),
+                    str(record.get("contact") or record.get("contact_number") or record.get("phone") or ""),
+                    str(record.get("phone") or record.get("contact") or record.get("contact_number") or ""),
+                    str(record.get("email") or ""),
+                    str(record.get("address") or ""),
+                    str(record.get("eyes") or record.get("eye_summary") or ""),
+                    str(record.get("diabetes_type") or ""),
+                    str(record.get("duration") or record.get("dm_duration_years") or ""),
+                    str(record.get("treatment_regimen") or record.get("treatment") or record.get("current_medications") or ""),
+                    str(record.get("prev_dr_stage") or ""),
+                    str(record.get("notes") or record.get("doctor_findings") or ""),
+                    str(record.get("result") or record.get("final_diagnosis_icdr") or record.get("ai_classification") or "Pending"),
+                    str(record.get("confidence") or ""),
+                    now,
+                    "follow_up",
+                    "Yes",
+                    now,
+                    "Follow-up screening",
+                    str(record.get("original_screener_username") or ""),
+                    str(record.get("original_screener_name") or ""),
+                    "emr",
+                    str(record.get("height_cm") or record.get("height") or ""),
+                    str(record.get("weight_kg") or record.get("weight") or ""),
+                    str(record.get("bmi") or ""),
+                ),
+            )
+            conn.commit()
+            record_id = int(cur.lastrowid or 0)
+        except Exception as exc:
+            _tb.print_exc()
+            QMessageBox.warning(
+                self, "New Follow-up Screening",
+                f"Unable to prepare the follow-up screening form.\n\nDetail: {type(exc).__name__}: {exc}",
+            )
+            return
+        finally:
+            try:
+                if "conn" in locals() and conn is not None:
+                    conn.close()
+            except Exception:
+                pass
+
         if record_id <= 0:
             QMessageBox.warning(self, "New Follow-up Screening", "Unable to determine the source screening record.")
             return
@@ -2628,13 +2754,184 @@ class ReportsPage(QWidget):
             return
 
         if not screening_page.load_patient_for_followup(record_id):
-            QMessageBox.warning(self, "New Follow-up Screening", "Unable to prepare the follow-up screening form.")
+            _tb.print_exc()
+            QMessageBox.warning(
+                self, "New Follow-up Screening",
+                f"Unable to load follow-up form for record #{record_id}.",
+            )
             return
 
         main_window.pages.setCurrentIndex(1)
+        try:
+            from .auth import UserManager
+        except Exception:
+            from auth import UserManager
         UserManager.add_activity_log(
             self.username,
             f"FD_FOLLOW_UP_STARTED patient_id={record.get('patient_id')}; previous_record_id={record_id}",
+        )
+
+    def _frontdesk_followup_from_overview(self, record: dict) -> None:
+        """Called from the frontdesk-mode patient overview's follow-up button.
+
+        Directly prepares the follow-up screening form using the record data
+        from the patient overview, bypassing table row selection.
+        """
+        if not record:
+            return
+
+        label = f"{record.get('name') or 'Unknown Patient'} ({record.get('patient_id') or record.get('patient_code') or 'No ID'})"
+        if (
+            QMessageBox.question(
+                self,
+                "New Follow-up Screening",
+                f"Start a new follow-up screening for {label}?\n\n"
+                "This will open the follow-up form with the patient's information prefilled.\n"
+                'After reviewing/editing, click "Save & Queue Patient" to queue them again.',
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            != QMessageBox.StandardButton.Yes
+        ):
+            return
+
+        # Close the overview first
+        self._hide_patient_overview()
+
+        # Always create a legacy patient_records.db row from the overview record
+        # because the record comes from the EMR timeline and its "id" is an EMR ID
+        # that does not exist in patient_records.db.
+        try:
+            from .db import ensure_patient_records_db
+        except Exception:
+            from db import ensure_patient_records_db
+        ok_db, err = ensure_patient_records_db()
+        if not ok_db:
+            QMessageBox.warning(self, "New Follow-up Screening", f"Unable to open patient records DB: {err}")
+            return
+
+        import traceback as _tb
+        record_id = 0
+        try:
+            import sqlite3
+            from datetime import datetime
+            conn = sqlite3.connect(DB_FILE)
+            cur = conn.cursor()
+            now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+            # Use patient_code if available, otherwise fall back to patient_id
+            pid_code = str(
+                record.get("patient_code")
+                or record.get("patient_id")
+                or ""
+            ).strip()
+
+            dob_iso = str(record.get("birthdate") or record.get("date_of_birth") or "")
+            age_str = str(record.get("age") or "")
+            if not age_str and dob_iso:
+                try:
+                    born = datetime.strptime(dob_iso[:10], "%Y-%m-%d").date()
+                    today = datetime.now().date()
+                    age_val = today.year - born.year - ((today.month, today.day) < (born.month, born.day))
+                    age_str = str(max(age_val, 0))
+                except Exception:
+                    pass
+
+            cur.execute(
+                """
+                INSERT INTO patient_records (
+                    patient_id, name, birthdate, age, sex, contact, phone, email, address, eyes,
+                    diabetes_type, duration, treatment_regimen, prev_dr_stage,
+                    notes, result, confidence,
+                    screened_at, screening_type, follow_up, followup_date, followup_label,
+                    original_screener_username, original_screener_name, decision_mode,
+                    height, weight, bmi
+                ) VALUES (
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                    ?, ?, ?, ?,
+                    ?, ?, ?,
+                    ?, ?, ?, ?, ?,
+                    ?, ?, ?,
+                    ?, ?, ?
+                )
+                """,
+                (
+                    pid_code,
+                    str(record.get("name") or ""),
+                    dob_iso,
+                    age_str,
+                    str(record.get("sex") or ""),
+                    str(record.get("contact") or record.get("contact_number") or record.get("phone") or ""),
+                    str(record.get("phone") or record.get("contact") or record.get("contact_number") or ""),
+                    str(record.get("email") or ""),
+                    str(record.get("address") or ""),
+                    str(record.get("eyes") or record.get("eye_summary") or ""),
+                    str(record.get("diabetes_type") or ""),
+                    str(record.get("duration") or record.get("dm_duration_years") or ""),
+                    str(record.get("treatment_regimen") or record.get("treatment") or record.get("current_medications") or ""),
+                    str(record.get("prev_dr_stage") or ""),
+                    str(record.get("notes") or record.get("doctor_findings") or ""),
+                    str(record.get("result") or record.get("final_diagnosis_icdr") or record.get("ai_classification") or "Pending"),
+                    str(record.get("confidence") or ""),
+                    now,
+                    "follow_up",
+                    "Yes",
+                    now,
+                    "Follow-up screening",
+                    str(record.get("original_screener_username") or ""),
+                    str(record.get("original_screener_name") or ""),
+                    "emr",
+                    str(record.get("height_cm") or record.get("height") or ""),
+                    str(record.get("weight_kg") or record.get("weight") or ""),
+                    str(record.get("bmi") or ""),
+                ),
+            )
+            conn.commit()
+            record_id = int(cur.lastrowid or 0)
+        except Exception as exc:
+            _tb.print_exc()
+            QMessageBox.warning(
+                self, "New Follow-up Screening",
+                f"Unable to prepare the follow-up screening form.\n\nDetail: {type(exc).__name__}: {exc}",
+            )
+            return
+        finally:
+            try:
+                if "conn" in locals() and conn is not None:
+                    conn.close()
+            except Exception:
+                pass
+
+        if record_id <= 0:
+            QMessageBox.warning(self, "New Follow-up Screening", "Unable to determine the source screening record.")
+            return
+
+        main_window = self.window()
+        if not hasattr(main_window, "screening_page") or not hasattr(main_window, "pages"):
+            QMessageBox.warning(self, "New Follow-up Screening", "Unable to open the screening page.")
+            return
+
+        screening_page = main_window.screening_page
+        if not hasattr(screening_page, "load_patient_for_followup"):
+            QMessageBox.warning(self, "New Follow-up Screening", "Follow-up workflow is not available in this session.")
+            return
+
+        if not screening_page.load_patient_for_followup(record_id):
+            _tb.print_exc()
+            QMessageBox.warning(
+                self, "New Follow-up Screening",
+                f"Unable to load follow-up form for record #{record_id}.",
+            )
+            return
+
+        main_window.pages.setCurrentIndex(1)
+        try:
+            from .auth import UserManager
+        except Exception:
+            from auth import UserManager
+        UserManager.add_activity_log(
+            self.username,
+            f"FD_FOLLOW_UP_STARTED patient_id={record.get('patient_id')}; previous_record_id={record_id}; source=overview",
         )
 
     def start_referral_flow(self):
@@ -2657,13 +2954,15 @@ class ReportsPage(QWidget):
             self._main_stack.removeWidget(old)
             old.deleteLater()
 
+        is_fd = getattr(self, "is_frontdesk", False)
         overview = PatientTimelineDialog(
             record,
             timeline_records,
-            on_follow_up=self._start_follow_up_from_timeline,
+            on_follow_up=self._start_follow_up_from_timeline if not is_fd else self._frontdesk_followup_from_overview,
             on_view_report=self._generate_report_for_record,
             on_compare=self._compare_latest_two_screenings,
             on_export=self._export_patient_history,
+            frontdesk_mode=is_fd,
         )
         overview.back_requested.connect(self._hide_patient_overview)
         self._main_stack.addWidget(overview)
@@ -2728,7 +3027,8 @@ class ReportsPage(QWidget):
             QMessageBox.warning(self, "Follow-Up Screening", "Unable to open the screening page.")
             return
 
-        record_id = int(action_record.get("id") or 0)
+        # Prefer legacy record id when present (required by screening_form follow-up loader).
+        record_id = int(action_record.get("legacy_record_id") or action_record.get("id") or 0)
         if record_id <= 0:
             QMessageBox.warning(self, "Follow-Up Screening", "Unable to determine the source screening record.")
             return

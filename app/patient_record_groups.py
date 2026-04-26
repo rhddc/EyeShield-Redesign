@@ -166,6 +166,19 @@ def group_patient_record_rows(rows: list[dict]) -> list[dict]:
         primary_record_id = int(latest_row.get("id") or 0) or (record_ids[-1] if record_ids else 0)
 
         summary = dict(latest_row)
+        # Some clinical history fields are stored once per visit but may not be present on
+        # every per-eye row. Ensure the grouped/visit summary carries the latest non-empty
+        # value so overview UIs don't show blanks.
+        def _latest_non_empty(field: str) -> str:
+            for r in reversed(source_rows):
+                val = str(r.get(field) or "").strip()
+                if val and val.lower() not in {"select", "none", "n/a"}:
+                    return val
+            return ""
+
+        prev_dr_stage = _latest_non_empty("prev_dr_stage")
+        if prev_dr_stage:
+            summary["prev_dr_stage"] = prev_dr_stage
         summary.update(
             {
                 "id": primary_record_id,

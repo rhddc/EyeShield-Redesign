@@ -60,6 +60,7 @@ def ensure_patient_records_db_schema(conn: sqlite3.Connection) -> None:
 
     required_columns = {
         "phone": "TEXT",
+        "email": "TEXT",
         "address": "TEXT",
         "archived_at": "TEXT",
         "archived_by": "TEXT",

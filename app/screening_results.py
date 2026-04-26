@@ -244,12 +244,6 @@ class ResultsWindow(QWidget):
         self.btn_referral.setEnabled(False)
         self.btn_referral.clicked.connect(self._show_referral_options)
 
-        self.btn_screen_another = QPushButton("Screen Other Eye")
-        self.btn_screen_another.setObjectName("ghostAction")
-        self.btn_screen_another.setMinimumHeight(40)
-        self.btn_screen_another.setIconSize(QSize(18, 18))
-        self.btn_screen_another.clicked.connect(self._on_screen_another)
-
         self.btn_new = QPushButton("New Patient")
         self.btn_new.setObjectName("ghostAction")
         self.btn_new.setMinimumHeight(40)
@@ -382,11 +376,10 @@ class ResultsWindow(QWidget):
         actions_grid = QGridLayout()
         actions_grid.setHorizontalSpacing(0)
         actions_grid.setVerticalSpacing(10)
-        actions_grid.addWidget(self.btn_screen_another, 0, 0)
-        actions_grid.addWidget(self.btn_save, 1, 0)
-        actions_grid.addWidget(self.btn_report, 2, 0)
-        actions_grid.addWidget(self.btn_referral, 3, 0)
-        actions_grid.addWidget(self.btn_back, 4, 0)
+        actions_grid.addWidget(self.btn_save, 0, 0)
+        actions_grid.addWidget(self.btn_report, 1, 0)
+        actions_grid.addWidget(self.btn_referral, 2, 0)
+        actions_grid.addWidget(self.btn_back, 3, 0)
         actions_grid.setColumnStretch(0, 1)
         actions_layout.addLayout(actions_grid)
         actions_layout.addStretch(1)
@@ -1092,7 +1085,6 @@ class ResultsWindow(QWidget):
         self.btn_save.setIcon(self._build_action_icon("save_patient.svg", QStyle.StandardPixmap.SP_DialogSaveButton))
         self.btn_report.setIcon(self._build_action_icon("generate.svg", QStyle.StandardPixmap.SP_ArrowDown))
         self.btn_referral.setIcon(self._build_action_icon("refer.svg", QStyle.StandardPixmap.SP_CommandLink))
-        self.btn_screen_another.setIcon(self._build_action_icon("another_eye.svg", QStyle.StandardPixmap.SP_FileDialogStart))
         self.btn_back.setIcon(self._build_action_icon("back_to_screening.svg", QStyle.StandardPixmap.SP_ArrowBack))
         self.accept_ai_btn.setIcon(self._build_action_icon("accep_ai_result.svg", QStyle.StandardPixmap.SP_DialogApplyButton))
         self.override_ai_btn.setIcon(self._build_action_icon("override_ai result.svg", QStyle.StandardPixmap.SP_FileDialogDetailedView))
@@ -1386,8 +1378,6 @@ class ResultsWindow(QWidget):
         self.btn_save.setText("Save to Patient Record")
         self.btn_save.setObjectName("ghostAction")
         self.btn_save.setStyle(self.btn_save.style())
-        self.btn_screen_another.setEnabled(not is_busy)
-        self.btn_screen_another.setText("Screen Other Eye")
 
         # Bilateral comparison
         if first_eye_result:
@@ -1650,14 +1640,38 @@ class ResultsWindow(QWidget):
             # - `_is_second_eye_flow` is set when the user taps "Screen Other Eye"
             # - `_second_eye_result` is set by `save_screening()` when the other eye is saved
             if is_second_eye_flow or bool(getattr(pp, "_second_eye_result", None)):
-                QMessageBox.information(
-                    self,
-                    "Session Completed",
-                    "Both eyes have been successfully screened and saved.",
-                )
+                box = QMessageBox(self)
+                box.setWindowTitle("Session Completed")
+                box.setText("Both eyes have been successfully screened and saved.")
+                ok_btn = box.addButton("OK", QMessageBox.ButtonRole.AcceptRole)
+                refer_btn = box.addButton("Create a Referral Letter", QMessageBox.ButtonRole.ActionRole)
+                queue_btn = box.addButton("Back to Patient Queue List", QMessageBox.ButtonRole.ActionRole)
+                
+                box.exec()
+                choice = box.clickedButton()
+                
                 # Mark bilateral flow as completed for this session.
                 with contextlib.suppress(Exception):
                     pp._is_second_eye_flow = False
+                    
+                if choice == refer_btn:
+                    success = self.generate_referral()
+                    if success:
+                        q_box = QMessageBox.question(
+                            self,
+                            "Patient Queue",
+                            "Would you like to go back to patient queue list?",
+                            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                            QMessageBox.StandardButton.Yes,
+                        )
+                        if q_box == QMessageBox.StandardButton.Yes:
+                            main_win = self.window()
+                            if hasattr(main_win, "pages"):
+                                main_win.pages.setCurrentIndex(0)
+                elif choice == queue_btn:
+                    main_win = self.window()
+                    if hasattr(main_win, "pages"):
+                        main_win.pages.setCurrentIndex(0)
                 return
 
             # If user opted to screen the other eye, switch back to the upload/intake view
@@ -1748,9 +1762,7 @@ class ResultsWindow(QWidget):
         if hasattr(page, "reset_screening"):
             page.reset_screening()
 
-    def _on_screen_another(self):
-        if self.parent_page and hasattr(self.parent_page, "screen_other_eye"):
-            self.parent_page.screen_other_eye()
+
 
     # ── Report generation ──────────────────────────────────────────────────────
 
@@ -1768,14 +1780,10 @@ class ResultsWindow(QWidget):
             box = QMessageBox(self)
             box.setWindowTitle("Single-Eye Report")
             box.setIcon(QMessageBox.Icon.Warning)
-            box.setText("Only one eye has been screened. Generate a single-eye report, or screen the other eye first?")
+            box.setText("Only one eye has been screened. Generate a single-eye report?")
             generate_btn = box.addButton("Generate Anyway", QMessageBox.ButtonRole.AcceptRole)
-            other_eye_btn = box.addButton("Screen Other Eye First", QMessageBox.ButtonRole.ActionRole)
             box.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
             box.exec()
-            if box.clickedButton() == other_eye_btn:
-                self._on_screen_another()
-                return
             if box.clickedButton() != generate_btn:
                 return
 
@@ -2485,28 +2493,28 @@ img {{
             return
         self.generate_referral()
 
-    def generate_referral(self):
-        """Generate a referral letter PDF from screening results."""
+    def generate_referral(self) -> bool:
+        """Generate a referral letter PDF from screening results. Returns True if successful."""
         if self._current_result_class in ("Pending", "Analyzing…") or not self._current_image_path:
             QMessageBox.information(self, "Generate Referral", "No completed screening results to generate referral.")
-            return
+            return False
 
         if self.parent_page and not getattr(self.parent_page, "_current_eye_saved", False):
             QMessageBox.warning(self, "Generate Referral", "Please save the result before generating a referral")
-            return
+            return False
 
         destination = self._prompt_referral_destination()
         if not destination:
-            return
+            return False
         if destination.get("_action") == "back":
-            return
+            return False
 
         # Get patient data from parent page
         patient_name_raw = str(self._current_patient_name or "Patient").strip()
         default_name = f"EyeShield_Referral_{patient_name_raw}_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf"
         path, _ = QFileDialog.getSaveFileName(self, "Save Referral Letter", default_name, "PDF Files (*.pdf)")
         if not path:
-            return
+            return False
         if not path.lower().endswith(".pdf"):
             path = f"{path}.pdf"
 
@@ -2515,7 +2523,7 @@ img {{
             from PySide6.QtCore import QMarginsF
         except ImportError:
             QMessageBox.warning(self, "Generate Referral", "PDF generation requires PySide6 PDF support.")
-            return
+            return False
 
         def esc(v) -> str:
             s = str(v or "").strip()
@@ -2539,11 +2547,10 @@ img {{
                     continue
             return raw
 
-        # Get username from parent or default
         username = self._resolve_actor_username()
         if not username:
             QMessageBox.warning(self, "Generate Referral", "Current logged-in user could not be resolved. Please sign in again.")
-            return
+            return False
 
         # Fetch doctor's profile
         profile = UserManager.get_user_profile(username) or {}
@@ -2801,7 +2808,7 @@ body {{
                 "Generate Referral",
                 "Referral PDF was not created. Please choose a writable folder and try again.",
             )
-            return
+            return False
         write_activity("INFO", "REFERRAL_GENERATED", f"path={path}")
         referral_id = f"REF-{datetime.now().strftime('%Y%m%d%H%M%S')}-LETTER"
         UserManager.log_external_referral_letter(
@@ -2815,6 +2822,7 @@ body {{
             pdf_path=path,
         )
         QMessageBox.information(self, "Referral Saved", f"Referral letter saved to:\n{path}")
+        return True
 
     def _prompt_referral_destination(self) -> dict | None:
         hospitals = UserManager.list_referral_hospitals(active_only=True)

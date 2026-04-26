@@ -136,6 +136,23 @@ def _opt(v, suffix: str = "") -> str:
     return f"{t}{suffix}" if suffix else t
 
 
+def _doctor_prefix(name: str) -> str:
+    """
+    Display helper: prefix 'Dr.' for formality in history tables.
+    Leaves placeholders ('-', '—') unchanged and avoids double-prefixing.
+    """
+    raw = str(name or "").strip()
+    if not raw or raw in {"-", "—"}:
+        return raw or "-"
+    low = raw.lower()
+    if low.startswith("dr.") or low.startswith("dr "):
+        return raw
+    if low.startswith("doctor "):
+        # Normalize to the shorter prefix for consistent UI.
+        return f"Dr. {raw[7:].strip()}".strip()
+    return f"Dr. {raw}"
+
+
 # ── main dialog ───────────────────────────────────────────────────────────────
 
 class PatientTimelineDialog(QWidget):
@@ -155,11 +172,13 @@ class PatientTimelineDialog(QWidget):
         initial_record: dict | None = None,
         show_actions: bool = True,
         show_history_tab: bool = True,
+        frontdesk_mode: bool = False,
     ):
         super().__init__(parent)
 
         self._show_actions = bool(show_actions)
-        self._show_history_tab = bool(show_history_tab)
+        self._show_history_tab = bool(show_history_tab) and not bool(frontdesk_mode)
+        self._frontdesk_mode = bool(frontdesk_mode)
         self.patient_summary  = dict(patient_summary or {})
         self.timeline_records = self._sorted_records(list(timeline_records or []))
         self._selected_record = (
@@ -246,7 +265,10 @@ class PatientTimelineDialog(QWidget):
         # Summary chips — Latest Result lives in the center card, so omit it here
         self.risk_chip  = self._chip("RISK LEVEL",       "-", "",        "#16a34a")
         self.total_chip = self._chip("TOTAL SCREENINGS", "-", "All time", "#2563eb")
-        row.addWidget(self.risk_chip)
+        if not self._frontdesk_mode:
+            row.addWidget(self.risk_chip)
+        else:
+            self.risk_chip.hide()
         row.addWidget(self.total_chip)
         return card
 
@@ -332,12 +354,20 @@ class PatientTimelineDialog(QWidget):
 
         # IMPORTANT: a QWidget can only have one parent. Do not place the same card widget on two pages.
         # Overview: patient demographics + vitals + clinical history + latest screening/context + images/actions
-        overview_page = self._build_three_col_page(
-            # Vital Signs & Symptoms removed from Patient Overview per request.
-            left_widgets=[self._card_patient_info, self._card_history],
-            center_widgets=[self._card_screening, self._card_images],
-            right_widgets=[self._card_context] + ([self._card_actions] if self._show_actions else []),
-        )
+        if self._frontdesk_mode:
+            # Frontdesk simplified view: no images card, no context card (diagnosis is confidential)
+            overview_page = self._build_three_col_page(
+                left_widgets=[self._card_patient_info],
+                center_widgets=[self._card_history],
+                right_widgets=[self._card_screening] + ([self._card_actions] if self._show_actions else []),
+            )
+        else:
+            overview_page = self._build_three_col_page(
+                # Vital Signs & Symptoms removed from Patient Overview per request.
+                left_widgets=[self._card_patient_info, self._card_history],
+                center_widgets=[self._card_screening, self._card_images],
+                right_widgets=[self._card_context] + ([self._card_actions] if self._show_actions else []),
+            )
 
         self._tab_index = {"Overview": 0}
         self._tab_stack.addWidget(overview_page)
@@ -415,7 +445,8 @@ class PatientTimelineDialog(QWidget):
             name = str(rec.get("name") or self.patient_summary.get("name") or "-").strip() or "-"
             dt = str(rec.get("screened_at") or "").strip()
             dt_label = f"{_fmt_short(dt)}  {_fmt_time(dt)}" if dt else "-"
-            scr_by = str(rec.get("original_screener_name") or "").strip() or str(rec.get("original_screener_username") or "").strip() or "-"
+            scr_by_raw = str(rec.get("original_screener_name") or "").strip() or str(rec.get("original_screener_username") or "").strip() or "-"
+            scr_by = _doctor_prefix(scr_by_raw) if scr_by_raw not in {"-", "—"} else scr_by_raw
             severity = _display_severity(rec)
             risk_text, risk_color = _risk_for(severity)
 
@@ -592,12 +623,11 @@ class PatientTimelineDialog(QWidget):
             ("birthdate",  "Date of Birth"),
             ("age",        "Age"),
             ("sex",        "Sex"),
-            ("contact",    "Contact"),
             ("phone",      "Phone Number"),
+            ("email",      "Email"),
             ("address",    "Address"),
             ("eyes",       "Eye Screened"),
-            ("screened_by","Screened By"),
-            ("doctor",    "Doctor"),
+            ("screened_by", "Screened By"),
             ("height",     "Height"),
             ("weight",     "Weight"),
             ("bmi",        "BMI"),
@@ -626,11 +656,10 @@ class PatientTimelineDialog(QWidget):
         self.history_rows: dict[str, QLabel] = {}
         for key, label in [
             ("diabetes_type",      "Diabetes Type"),
-            ("history",            "DM Duration"),
-            ("hba1c",              "HbA1c"),
-            ("treatment_regimen",  "Treatment"),
-            ("prev_treatment",     "Prev. Treatment"),
-            ("prev_dr_stage",      "Prev. DR Stage"),
+            ("duration",           "Duration"),
+            ("diagnosed_date",     "Diagnosed Date"),
+            ("treatment_regimen",  "Treatment Regimen"),
+            ("prev_dr_stage",      "Prev DR"),
         ]:
             row_w, val_lbl = self._kv(label)
             self.history_rows[key] = val_lbl
@@ -649,18 +678,25 @@ class PatientTimelineDialog(QWidget):
         self.eye_lbl.hide()
         v.addWidget(date_row)
 
-        # ── Separator ────────────────────────────────────────────────────────
+        # ── Diagnosis (AI) — hidden in frontdesk_mode ─────────────────────
+        # Collect all diagnosis/AI widgets so they can be hidden in frontdesk_mode.
+        self._diag_widgets = []
+
         sep1 = QFrame()
         sep1.setFrameShape(QFrame.HLine)
         sep1.setStyleSheet("background:#f1f5f9;max-height:1px;border:none;")
         v.addWidget(sep1)
+        self._diag_widgets.append(sep1)
 
-        # ── Diagnosis (AI) ───────────────────────────────────────────────────
         diag_title = QLabel("Diagnosis (AI)")
         diag_title.setStyleSheet("font-size:10px;color:#9ca3af;font-weight:500;")
         v.addWidget(diag_title)
+        self._diag_widgets.append(diag_title)
 
-        diag_row = QHBoxLayout()
+        diag_row_w = QWidget()
+        diag_row_w.setStyleSheet("background:transparent;")
+        diag_row = QHBoxLayout(diag_row_w)
+        diag_row.setContentsMargins(0, 0, 0, 0)
         diag_row.setSpacing(8)
         self.diag_val = QLabel("No DR")
         self.diag_val.setStyleSheet("font-size:18px;font-weight:700;color:#16a34a;")
@@ -673,12 +709,14 @@ class PatientTimelineDialog(QWidget):
         diag_row.addWidget(self.diag_val)
         diag_row.addStretch(1)
         diag_row.addWidget(self.risk_badge)
-        v.addLayout(diag_row)
+        v.addWidget(diag_row_w)
+        self._diag_widgets.append(diag_row_w)
 
         self.diag_sub = QLabel("No Diabetic Retinopathy Detected")
         self.diag_sub.setStyleSheet("font-size:11px;color:#6b7280;font-weight:400;")
         self.diag_sub.setWordWrap(True)
         v.addWidget(self.diag_sub)
+        self._diag_widgets.append(self.diag_sub)
 
         self.diag_badge = QLabel("Clinician reviewed and accepted AI classification.")
         self.diag_badge.setWordWrap(True)
@@ -686,22 +724,43 @@ class PatientTimelineDialog(QWidget):
             "background:#f0fdf4;color:#166534;border-radius:7px;"
             "padding:5px 8px;font-size:10px;font-weight:400;")
         v.addWidget(self.diag_badge)
+        self._diag_widgets.append(self.diag_badge)
 
-        # ── Separator ────────────────────────────────────────────────────────
         sep2 = QFrame()
         sep2.setFrameShape(QFrame.HLine)
         sep2.setStyleSheet("background:#f1f5f9;max-height:1px;border:none;")
         v.addWidget(sep2)
+        self._diag_widgets.append(sep2)
 
-        # ── AI Metrics ───────────────────────────────────────────────────────
         ai_title = QLabel("AI Metrics")
         ai_title.setStyleSheet("font-size:10px;color:#9ca3af;font-weight:500;")
         v.addWidget(ai_title)
+        self._diag_widgets.append(ai_title)
 
         self.conf_row = self._metric_row("AI Confidence", "#16a34a")
         self.unc_row  = self._metric_row("Uncertainty",   "#f59e0b")
-        v.addLayout(self.conf_row[0])
-        v.addLayout(self.unc_row[0])
+        # Wrap metric layouts in widgets so they can be hidden
+        conf_w = QWidget()
+        conf_w.setStyleSheet("background:transparent;")
+        conf_l = QVBoxLayout(conf_w)
+        conf_l.setContentsMargins(0, 0, 0, 0)
+        conf_l.addLayout(self.conf_row[0])
+        v.addWidget(conf_w)
+        self._diag_widgets.append(conf_w)
+
+        unc_w = QWidget()
+        unc_w.setStyleSheet("background:transparent;")
+        unc_l = QVBoxLayout(unc_w)
+        unc_l.setContentsMargins(0, 0, 0, 0)
+        unc_l.addLayout(self.unc_row[0])
+        v.addWidget(unc_w)
+        self._diag_widgets.append(unc_w)
+
+        # Hide diagnosis/AI sections in frontdesk mode
+        if self._frontdesk_mode:
+            for w in self._diag_widgets:
+                w.hide()
+
         return card
 
     def _metric_row(self, label: str, color: str):
@@ -802,12 +861,18 @@ class PatientTimelineDialog(QWidget):
 
     def _build_actions_card(self) -> QWidget:
         card, v = self._card("Actions")
-        self.btn_follow = self._action_btn("+ New Follow-Up", primary=True, large=True)
-        self.btn_compare = self._action_btn("Compare Screenings", large=True)
-        self.btn_follow.clicked.connect(self._handle_follow_up)
-        self.btn_compare.clicked.connect(self._handle_compare)
-        for b in (self.btn_follow, self.btn_compare):
-            v.addWidget(b)
+        if self._frontdesk_mode:
+            # Frontdesk mode: show only the follow-up screening button
+            self.btn_followup = self._action_btn("+ Follow-up screening", primary=True, large=True)
+            self.btn_followup.clicked.connect(self._handle_follow_up)
+            v.addWidget(self.btn_followup)
+            # Create hidden compare button for compatibility
+            self.btn_compare = self._action_btn("Compare Screenings", large=True)
+            self.btn_compare.hide()
+        else:
+            self.btn_compare = self._action_btn("Compare Screenings", large=True)
+            self.btn_compare.clicked.connect(self._handle_compare)
+            v.addWidget(self.btn_compare)
         return card
 
     def _action_btn(self, text: str, primary: bool = False, large: bool = False) -> QPushButton:
@@ -965,42 +1030,31 @@ class PatientTimelineDialog(QWidget):
         )
         self._si("age",        f"{age} years" if age != "-" else "-")
         self._si("sex",        sex)
-        # Contact fields differ across data sources.
-        contact = (
-            record.get("contact_number")
-            or record.get("contact")
-            or ps.get("contact_number")
-            or ps.get("contact")
-        )
-        self._si("contact", _opt(contact))
         self._si(
             "phone",
             _opt(
                 record.get("phone")
                 or ps.get("phone")
-                or contact
+                or record.get("contact_number")
+                or record.get("contact")
+                or ps.get("contact_number")
+                or ps.get("contact")
             ),
         )
+        self._si("email", _opt(record.get("email") or ps.get("email")))
         self._si("address",    _opt(record.get("address") or ps.get("address")))
         self._si("eyes",       eye_summary_text)
 
         # Attribution (who captured vs who finalized). Best-effort: may be empty for older rows.
-        screened_by = str(
+        screened_by_raw = str(
             detail_record.get("original_screener_name")
             or detail_record.get("original_screener_username")
             or record.get("original_screener_name")
             or record.get("original_screener_username")
             or "-"
         ).strip() or "-"
-        doctor = str(
-            detail_record.get("decision_by_username")
-            or record.get("decision_by_username")
-            or "-"
-        ).strip() or "-"
-        if doctor.lower() in {"emr", "system", "auto"}:
-            doctor = "-"
+        screened_by = _doctor_prefix(screened_by_raw) if screened_by_raw not in {"-", "—"} else screened_by_raw
         self._si("screened_by", screened_by)
-        self._si("doctor", doctor)
 
         # Support both legacy keys (height/weight/bmi) and EMR keys (height_cm/weight_kg).
         h = record.get("height_cm")
@@ -1051,6 +1105,7 @@ class PatientTimelineDialog(QWidget):
         # Vitals & Symptoms removed from Patient Overview UI.
 
         # Clinical history
+        self._sh("diabetes_type",     _opt(record.get("diabetes_type") or ps.get("diabetes_type")))
         dur = str(
             record.get("duration")
             or record.get("dm_duration_years")
@@ -1058,18 +1113,20 @@ class PatientTimelineDialog(QWidget):
             or ps.get("dm_duration_years")
             or ""
         ).strip()
-        ddate = str(record.get("diabetes_diagnosis_date") or "").strip()
-        hist  = " | ".join(p for p in [
-            f"Duration: {dur}" if dur else "",
-            f"Diagnosed: {ddate}" if ddate else "",
-        ] if p) or "-"
-
-        self._sh("diabetes_type",     _opt(record.get("diabetes_type") or ps.get("diabetes_type")))
-        self._sh("history",           hist)
-        self._sh("hba1c",             _opt(record.get("hba1c") or ps.get("hba1c")))
-        self._sh("treatment_regimen", _opt(record.get("treatment_regimen") or ps.get("treatment_regimen") or record.get("current_medications") or ps.get("current_medications")))
-        self._sh("prev_treatment",    _opt(record.get("prev_treatment") or ps.get("prev_treatment") or record.get("previous_eye_treatment") or ps.get("previous_eye_treatment")))
-        self._sh("prev_dr_stage",     _opt(record.get("prev_dr_stage") or ps.get("prev_dr_stage")))
+        self._sh("duration", dur or "-")
+        self._sh("diagnosed_date", _opt(record.get("diabetes_diagnosis_date") or ps.get("diabetes_diagnosis_date")))
+        self._sh(
+            "treatment_regimen",
+            _opt(
+                record.get("treatment_regimen")
+                or ps.get("treatment_regimen")
+                or record.get("treatment")
+                or ps.get("treatment")
+                or record.get("current_medications")
+                or ps.get("current_medications")
+            ),
+        )
+        self._sh("prev_dr_stage", _opt(record.get("prev_dr_stage") or ps.get("prev_dr_stage")))
 
         # Images — defer so the widget has been laid out and has a real size
         QTimer.singleShot(50, lambda rec=dict(detail_record): self._load_images(rec))
