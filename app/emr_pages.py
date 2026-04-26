@@ -407,7 +407,7 @@ class PatientVisitDialog(QDialog):
             self.setWindowFlags(Qt.Widget)
         self.setWindowTitle("Patient visit")
         self.setMinimumSize(640, 520)
-        self.setStyleSheet("QDialog{background:#f0f4f8;}" + _input_style())
+        self.setStyleSheet("QDialog{background:#f0f4f8;} QTableWidget{background:#ffffff;color:#334155;} QTableWidget::item{color:#334155;}" + _input_style())
 
         self._patient = emr.get_patient(patient_id) or {}
         self._history_rows: list[dict] = []
@@ -1079,6 +1079,7 @@ class EmrVisitsPage(QWidget):
             + """
             QTableWidget#queueTable{
                 background:#ffffff;
+                color:#0f172a;
                 border:none;
                 border-radius:12px;
                 gridline-color:transparent;

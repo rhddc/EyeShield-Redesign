@@ -435,6 +435,11 @@ class PatientTimelineDialog(QWidget):
         table.setAlternatingRowColors(True)
         table.setShowGrid(False)
         table.setMinimumHeight(320)
+        table.setStyleSheet(
+            "QTableWidget{background:#ffffff;color:#111827;border:none;gridline-color:transparent;}"
+            "QTableWidget::item{color:#111827;}"
+            "QHeaderView::section{background:#f8fafc;color:#475569;font-weight:700;border:none;border-bottom:1px solid #e2e8f0;}"
+        )
 
         self._history_table = table
         v.addWidget(table)

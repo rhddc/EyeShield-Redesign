@@ -1586,9 +1586,10 @@ class EyeShieldApp(QMainWindow):
             queue_card.setObjectName("frontdeskQueueCard")
             queue_card.setStyleSheet(
                 "QWidget#frontdeskQueueCard{background:#ffffff;border:1px solid #e2e8f0;border-radius:16px;}"
-                "QTableWidget{background:#ffffff;border:1px solid #e2e8f0;border-radius:10px;}"
+                "QTableWidget{background:#ffffff;color:#334155;border:1px solid #e2e8f0;border-radius:10px;}"
                 "QHeaderView::section{background:#f8fbff;color:#334155;border:none;border-bottom:1px solid #e2e8f0;"
                 "padding:10px 8px;font-size:12px;font-weight:800;}"
+                "QTableWidget::item{color:#334155;}"
             )
             queue_v = QVBoxLayout(queue_card)
             queue_v.setContentsMargins(16, 14, 16, 16)
@@ -1629,9 +1630,10 @@ class EyeShieldApp(QMainWindow):
             pr_card.setObjectName("frontdeskPatientRecordsCard")
             pr_card.setStyleSheet(
                 "QWidget#frontdeskPatientRecordsCard{background:#ffffff;border:1px solid #e2e8f0;border-radius:16px;}"
-                "QTableWidget{background:#ffffff;border:1px solid #e2e8f0;border-radius:10px;}"
+                "QTableWidget{background:#ffffff;color:#334155;border:1px solid #e2e8f0;border-radius:10px;}"
                 "QHeaderView::section{background:#f8fbff;color:#334155;border:none;border-bottom:1px solid #e2e8f0;"
                 "padding:10px 8px;font-size:12px;font-weight:800;}"
+                "QTableWidget::item{color:#334155;}"
             )
             pr_v = QVBoxLayout(pr_card)
             pr_v.setContentsMargins(16, 14, 16, 16)
