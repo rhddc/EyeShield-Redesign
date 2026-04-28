@@ -38,6 +38,10 @@ except Exception:  # pragma: no cover
     from app_paths import PATIENT_RECORDS_DB_PATH
     from patient_record_groups import group_patient_record_rows
     import emr_service as emr
+try:
+    from .screening_widgets import ClickableImageLabel
+except Exception:
+    from screening_widgets import ClickableImageLabel
 
 DB_FILE = str(PATIENT_RECORDS_DB_PATH)
 
@@ -243,6 +247,9 @@ class ScreeningComparisonDialog(QDialog):
 
         self._btn_od = _seg_btn("Right (OD)")
         self._btn_os = _seg_btn("Left (OS)")
+        self._btn_od.clicked.connect(lambda: self._set_mode("od"))
+        self._btn_os.clicked.connect(lambda: self._set_mode("os"))
+
         for b in (self._btn_od, self._btn_os):
             toggle_row.addWidget(b)
         toggle_row.addStretch(1)
@@ -468,15 +475,12 @@ class ScreeningComparisonDialog(QDialog):
             return card
 
         result = _display_severity(record)
-        conf_label, unc_label, _, _ = _parse_confidence_metrics(record.get("confidence"))
         meta = QLabel(
             "<br>".join(
                 [
                     f"<b>Date:</b> {date_label}",
                     f"<b>Eye:</b> {escape(eye_label)}",
                     f"<b>Severity:</b> {escape(result)}",
-                    f"<b>{escape(conf_label)}</b>",
-                    f"<b>{escape(unc_label)}</b>",
                 ]
             )
         )
@@ -485,25 +489,35 @@ class ScreeningComparisonDialog(QDialog):
         card_layout.addWidget(meta)
 
         for label_text, path_key in (("Fundus Image", "source_image_path"), ("Grad-CAM", "heatmap_image_path")):
-            img = QLabel(label_text)
+            img_path = _resolve_media_path(record.get(path_key))
+            img = ClickableImageLabel(label_text, viewer_title=f"{heading} - {label_text}")
             img.setAlignment(Qt.AlignCenter)
             img.setMinimumHeight(170)
             img.setMaximumHeight(220)
             img.setStyleSheet("background:#f8fafc;color:#94a3b8;border:1px solid #e2e8f0;border-radius:10px;")
-            img_path = _resolve_media_path(record.get(path_key))
             if img_path:
                 pixmap = QPixmap(img_path)
                 if not pixmap.isNull():
                     img.setPixmap(pixmap.scaled(360, 220, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+                    img.full_pixmap = pixmap # Required for zoom dialog
             card_layout.addWidget(img)
+
+        final_result = (
+            str(record.get("final_diagnosis_icdr") or "").strip()
+            or str(record.get("doctor_classification") or "").strip()
+            or str(record.get("result") or "").strip()
+            or str(result or "").strip()
+            or "—"
+        )
+        override_comments = str(record.get("override_justification") or "").strip() or "—"
+        additional_comments = str(record.get("doctor_findings") or "").strip() or "—"
 
         details = QLabel(
             "<br>".join(
                 [
-                    f"<b>AI:</b> {escape(str(record.get('ai_classification') or record.get('result') or '—'))}",
-                    f"<b>Doctor:</b> {escape(str(record.get('doctor_classification') or record.get('result') or '—'))}",
-                    f"<b>Final:</b> {escape(str(record.get('final_diagnosis_icdr') or result or '—'))}",
-                    f"<b>Findings:</b> {escape(str(record.get('doctor_findings') or record.get('notes') or '—'))}",
+                    f"<b>Final Findings of the Doctor:</b> {escape(final_result)}",
+                    f"<b>Override Comments:</b> {escape(override_comments)}",
+                    f"<b>Additional Comments:</b> {escape(additional_comments)}",
                 ]
             )
         )
@@ -1797,12 +1811,64 @@ class ArchivedRecordsDialog(QDialog):
         self.reload_rows()
 
     def reload_rows(self):
-        # Archived view is visit-level (group) — not per-eye rows.
+        # Archived view is patient-level (one row per patient), aggregating all archived visits.
         archived_eye_rows = [r for r in self.reports_page._all_result_rows if r.get("archived_at")]
-        grouped = group_patient_record_rows(archived_eye_rows) if archived_eye_rows else []
-        self._rows = list(grouped or [])
-        # Key by visit group id so restore/delete affects whole visit.
-        self._record_lookup = {str(r.get("screening_group_id") or ""): r for r in self._rows}
+        visit_rows = group_patient_record_rows(archived_eye_rows) if archived_eye_rows else []
+
+        patients: dict[str, dict] = {}
+        for visit in visit_rows or []:
+            pid = str(visit.get("patient_id") or "").strip()
+            if not pid:
+                continue
+
+            existing = patients.get(pid)
+            if existing is None:
+                existing = {
+                    "patient_id": pid,
+                    "name": str(visit.get("name") or "").strip(),
+                    "result": str(visit.get("result") or "").strip(),
+                    "archived_at": str(visit.get("archived_at") or "").strip(),
+                    "archived_by": str(visit.get("archived_by") or "").strip(),
+                    "source_rows": [],
+                    "visit_rows": [],
+                }
+                patients[pid] = existing
+
+            # Keep aggregated rows so downstream actions can access screening history if needed.
+            existing["visit_rows"].append(visit)
+            existing["source_rows"].extend(list(visit.get("source_rows") or []))
+
+            # Prefer latest non-empty name.
+            if not existing.get("name") and str(visit.get("name") or "").strip():
+                existing["name"] = str(visit.get("name") or "").strip()
+
+            # Pick worst severity across visits.
+            try:
+                current_rank = _severity_rank_for(str(existing.get("result") or ""))
+            except Exception:
+                current_rank = -1
+            try:
+                visit_rank = _severity_rank_for(str(visit.get("result") or ""))
+            except Exception:
+                visit_rank = -1
+            if visit_rank > current_rank:
+                existing["result"] = str(visit.get("result") or "").strip()
+
+            # Pick most recent archive stamp (and its 'archived_by').
+            current_at = _parse_datetime_value(str(existing.get("archived_at") or ""))
+            visit_at = _parse_datetime_value(str(visit.get("archived_at") or ""))
+            if current_at is None or (visit_at is not None and visit_at > current_at):
+                existing["archived_at"] = str(visit.get("archived_at") or "").strip()
+                existing["archived_by"] = str(visit.get("archived_by") or "").strip()
+
+        # Stable ordering: most recently archived first.
+        self._rows = list(patients.values())
+        self._rows.sort(
+            key=lambda r: (_parse_datetime_value(str(r.get("archived_at") or "")) or datetime.min, str(r.get("patient_id") or "")),
+            reverse=True,
+        )
+        # Key by patient id so restore/delete affects whole patient.
+        self._record_lookup = {str(r.get("patient_id") or ""): r for r in self._rows}
         self.apply_filters()
 
     def apply_filters(self):
@@ -1822,7 +1888,7 @@ class ArchivedRecordsDialog(QDialog):
             i = self.table.rowCount()
             self.table.insertRow(i)
             item = QTableWidgetItem(str(row["patient_id"] or ""))
-            item.setData(Qt.UserRole, str(row.get("screening_group_id") or ""))
+            item.setData(Qt.UserRole, str(row.get("patient_id") or ""))
             item.setTextAlignment(Qt.AlignCenter)
             self.table.setItem(i, 0, item)
             name_item = QTableWidgetItem(str(row["name"] or ""))
@@ -3206,16 +3272,22 @@ class ReportsPage(QWidget):
             QMessageBox.information(self, "Archive Record", "The selected patient record is already archived.")
             return
         label = f"{record['name'] or 'Unknown Patient'} ({record['patient_id'] or 'No ID'})"
-        if QMessageBox.question(self, "Archive Record", f"Archive {label}?",
+        if QMessageBox.question(
+            self,
+            "Archive Patient Record",
+            (
+                "Archiving this patient will archive the entire record, including the complete screening history.\n\n"
+                "Are you sure you want to proceed?"
+            ),
                                 QMessageBox.StandardButton.Yes|QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
             return
-        group_id = str(record.get("screening_group_id") or "").strip()
-        qid = _queue_id_from_screening_group_id(group_id)
-        if qid <= 0:
-            QMessageBox.warning(self, "Archive Record", "Unable to determine visit ID for this record.")
+        patient_code = str(record.get("patient_id") or record.get("patient_code") or "").strip()
+        patient = emr.get_patient_by_code(patient_code) if patient_code else None
+        if not patient:
+            QMessageBox.warning(self, "Archive Record", "Unable to resolve patient in EMR.")
             return
         actor_user_id = emr.get_user_id(self.username or "")
-        if not emr.archive_visit(qid, True, actor_user_id, reason=None):
+        if not emr.archive_patient(int(patient.get("patient_id") or 0), True, actor_user_id, reason=None):
             QMessageBox.warning(self, "Archive Record", "Unable to archive the selected patient record.")
             return
         self.refresh_report()
@@ -3303,13 +3375,13 @@ class ReportsPage(QWidget):
         if QMessageBox.question(self, "Restore Record", f"Restore {label}?",
                                 QMessageBox.StandardButton.Yes|QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
             return False
-        group_id = str(record.get("screening_group_id") or "").strip()
-        qid = _queue_id_from_screening_group_id(group_id)
-        if qid <= 0:
-            QMessageBox.warning(self, "Restore Record", "Unable to determine visit ID for this record.")
+        patient_code = str(record.get("patient_id") or record.get("patient_code") or "").strip()
+        patient = emr.get_patient_by_code(patient_code) if patient_code else None
+        if not patient:
+            QMessageBox.warning(self, "Restore Record", "Unable to resolve patient in EMR.")
             return False
         actor_user_id = emr.get_user_id(self.username or "")
-        if not emr.archive_visit(qid, False, actor_user_id, reason=None):
+        if not emr.archive_patient(int(patient.get("patient_id") or 0), False, actor_user_id, reason=None):
             QMessageBox.warning(self, "Restore Record", "Unable to restore the selected patient record.")
             return False
         return True
@@ -3319,12 +3391,19 @@ class ReportsPage(QWidget):
             return False
         if not self._can_archive_record(record):
             return False
-        group_id = str(record.get("screening_group_id") or "").strip()
-        qid = _queue_id_from_screening_group_id(group_id)
-        if qid <= 0:
-            return False
         actor_user_id = emr.get_user_id(self.username or "")
-        success = bool(emr.delete_visit(qid, actor_user_id))
+        patient_code = str(record.get("patient_id") or record.get("patient_code") or "").strip()
+        patient = emr.get_patient_by_code(patient_code) if patient_code else None
+        if not patient:
+            return False
+        pid_pk = int(patient.get("patient_id") or 0)
+        if pid_pk <= 0:
+            return False
+        queue_ids = emr.list_visit_queue_ids_for_patient(pid_pk, archived=True)
+        success = True
+        for qid in queue_ids:
+            if not emr.delete_visit(int(qid), actor_user_id):
+                success = False
         if success and callable(self.records_changed_callback):
             self.records_changed_callback()
         return success
@@ -3562,6 +3641,7 @@ class ReportsPage(QWidget):
             hospital_name = str(selected.get("hospital_name") or "").strip()
             department = str(selected.get("department") or "").strip()
             contact = str(selected.get("contact_person") or selected.get("phone") or "").strip()
+            address = str(selected.get("address") or "").strip()
             display = hospital_name
             if department:
                 display = f"{display} ({department})"
@@ -3569,6 +3649,7 @@ class ReportsPage(QWidget):
                 "hospital_name": hospital_name,
                 "department": department,
                 "contact_person": contact,
+                "address": address,
                 "display": display,
             }
 
@@ -4355,7 +4436,6 @@ class ReportsPage(QWidget):
             .image-container { text-align: center; margin-top: 15px; margin-bottom: 30px; }
             .image-container img { border: 1px solid #e2e8f0; border-radius: 4px; max-width: 600px; max-height: 400px; object-fit: contain; }
             .eye-label { font-size: 16pt; font-weight: bold; color: #1e40af; margin-top: 5px; }
-            .diag-label { font-size: 14pt; margin-top: 3px; color: #1e293b; }
             p { margin: 0 0 10px 0; }
         </style>
         """
@@ -4366,7 +4446,8 @@ class ReportsPage(QWidget):
         html += "<div class='header'><h1>Medical Referral Letter</h1></div>"
         html += f"<div class='meta-row'><strong>Date:</strong> {report_date}</div>"
         html += f"<div class='meta-row'><strong>To:</strong> Dr. {doctor_label}</div>"
-        html += f"<div class='meta-row'><strong>Address:</strong> {destination_addr} ({destination_name})</div>"
+        html += f"<div class='meta-row'><strong>Hospital:</strong> {destination_name}</div>"
+        html += f"<div class='meta-row'><strong>Address:</strong> {destination_addr}</div>"
         html += f"<div class='subject'>Subject: Clinical Referral for Patient: {patient_name}</div>"
         
         html += f"<p>Dear Dr. {esc(surname)},</p>"
@@ -4399,11 +4480,6 @@ class ReportsPage(QWidget):
             html += f"<li><strong>{eye['label']}:</strong> {eye['diagnosis']}</li>"
         html += "</ul>"
         
-        html += "<div class='section-title'>Patient Background:</div>"
-        # Summary background from notes
-        bg_summary = patient_notes if patient_notes and patient_notes != "&#8212;" else "No significant prior history recorded."
-        html += f"<p>{bg_summary}</p>"
-        
         html += "<p>I would appreciate your expert consultation and any necessary intervention or specialized care that the patient may require. "
         html += "Screening reports and fundus images have been provided to the patient for your reference.</p>"
         
@@ -4424,7 +4500,6 @@ class ReportsPage(QWidget):
             html += "<div class='image-container'>"
             html += f"<div class='eye-label'>{eye['label']}</div>"
             html += f"<img src='{img_url}' width='600'>"
-            html += f"<div class='diag-label'><strong>Diagnosis:</strong> {eye['diagnosis']}</div>"
             html += "</div>"
             
         html += "</body></html>"

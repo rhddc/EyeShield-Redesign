@@ -177,12 +177,14 @@ class PatientTimelineDialog(QWidget):
         *,
         initial_record: dict | None = None,
         show_actions: bool = True,
+        show_inline_compare: bool = False,
         show_history_tab: bool = True,
         frontdesk_mode: bool = False,
     ):
         super().__init__(parent)
 
         self._show_actions = bool(show_actions)
+        self._show_inline_compare = bool(show_inline_compare)
         self._show_history_tab = bool(show_history_tab) and not bool(frontdesk_mode)
         self._frontdesk_mode = bool(frontdesk_mode)
         self._on_start_diagnosis = on_start_diagnosis
@@ -381,9 +383,26 @@ class PatientTimelineDialog(QWidget):
                 )
                 btn_start.clicked.connect(self._on_start_diagnosis)
                 right_widgets.append(btn_start)
+
+            # Inline compare button (blue). Only show when explicitly enabled (follow-up review flow).
+            if self._on_compare and self._show_inline_compare:
+                self._inline_compare_btn = QPushButton("Compare screenings")
+                self._inline_compare_btn.setCursor(Qt.PointingHandCursor)
+                self._inline_compare_btn.setFixedHeight(40)
+                self._inline_compare_btn.setStyleSheet(
+                    "QPushButton{background:#f8fafc;color:#2563eb;border:1.5px solid #dbeafe;"
+                    "border-radius:9px;font-size:13px;font-weight:700;margin-top:6px;}"
+                    "QPushButton:hover{background:#f1f5f9;border-color:#bfdbfe;}"
+                )
+                # Match Patient Records compare behavior: always pass the full timeline list.
+                self._inline_compare_btn.clicked.connect(self._handle_compare)
+                self._apply_compare_enabled_state()
+                right_widgets.append(self._inline_compare_btn)
             
             if self._show_actions:
-                right_widgets.append(self._card_actions)
+                # Only show the actions card when it contains any buttons.
+                if bool(getattr(self, "_actions_has_buttons", False)):
+                    right_widgets.append(self._card_actions)
 
             overview_page = self._build_three_col_page(
                 # Vital Signs & Symptoms removed from Patient Overview per request.
@@ -400,6 +419,23 @@ class PatientTimelineDialog(QWidget):
             self._tab_stack.addWidget(screening_page)
         self._tab_stack.setCurrentIndex(0)
         return self._tab_stack
+
+    def _apply_compare_enabled_state(self) -> None:
+        """Enable compare only when there are at least 2 screenings to compare."""
+        can_compare = len(list(self.timeline_records or [])) >= 2
+        hint = (
+            "Compare requires at least two screening records."
+            if not can_compare
+            else "Compare screening history across visits."
+        )
+        for btn_name in ("_inline_compare_btn", "btn_compare"):
+            btn = getattr(self, btn_name, None)
+            if btn is None:
+                continue
+            with contextlib.suppress(Exception):
+                btn.setEnabled(bool(can_compare))
+            with contextlib.suppress(Exception):
+                btn.setToolTip(hint)
 
     def _build_screening_history_page(self) -> QWidget:
         page = QWidget()
@@ -898,18 +934,24 @@ class PatientTimelineDialog(QWidget):
 
     def _build_actions_card(self) -> QWidget:
         card, v = self._card("Actions")
+        self._actions_has_buttons = False
         if self._frontdesk_mode:
             # Frontdesk mode: show only the follow-up screening button
             self.btn_followup = self._action_btn("+ Follow-up screening", primary=True, large=True)
             self.btn_followup.clicked.connect(self._handle_follow_up)
             v.addWidget(self.btn_followup)
+            self._actions_has_buttons = True
             # Create hidden compare button for compatibility
             self.btn_compare = self._action_btn("Compare Screenings", large=True)
             self.btn_compare.hide()
         else:
             self.btn_compare = self._action_btn("Compare Screenings", large=True)
-            self.btn_compare.clicked.connect(self._handle_compare)
-            v.addWidget(self.btn_compare)
+            if callable(self._on_compare):
+                self.btn_compare.clicked.connect(self._handle_compare)
+                v.addWidget(self.btn_compare)
+                self._actions_has_buttons = True
+            else:
+                self.btn_compare.hide()
         return card
 
     def _action_btn(self, text: str, primary: bool = False, large: bool = False) -> QPushButton:
@@ -1369,7 +1411,12 @@ class PatientTimelineDialog(QWidget):
     def _handle_view_report(self):
         if callable(self._on_view_report): self._on_view_report(self._selected_record)
     def _handle_compare(self):
-        if callable(self._on_compare): self._on_compare(self.timeline_records)
+        if len(list(self.timeline_records or [])) < 2:
+            # Keep behavior consistent even if the button is triggered programmatically.
+            QMessageBox.information(self, "Compare Screenings", "At least two screenings are required for comparison.")
+            return
+        if callable(self._on_compare):
+            self._on_compare(self.timeline_records)
     def _handle_export(self):
         if callable(self._on_export): self._on_export(self.timeline_records)
 

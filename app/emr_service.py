@@ -1715,6 +1715,116 @@ def archive_visit(
         conn.close()
 
 
+def list_visit_queue_ids_for_patient(patient_id: int, *, archived: Optional[bool] = None) -> list[int]:
+    """
+    Return queue_id values for a patient across all visits.
+
+    If `archived` is:
+    - None: return all visits
+    - True: return only archived visits
+    - False: return only active (not archived) visits
+    """
+    pid = int(patient_id)
+    conn = _open_conn()
+    try:
+        cur = conn.cursor()
+        if archived is None:
+            cur.execute(
+                "SELECT queue_id FROM emr_queue_entries WHERE patient_id = ? ORDER BY queue_id ASC",
+                (pid,),
+            )
+        elif archived:
+            cur.execute(
+                """
+                SELECT queue_id
+                FROM emr_queue_entries
+                WHERE patient_id = ? AND archived_at IS NOT NULL AND trim(archived_at) <> ''
+                ORDER BY queue_id ASC
+                """,
+                (pid,),
+            )
+        else:
+            cur.execute(
+                """
+                SELECT queue_id
+                FROM emr_queue_entries
+                WHERE patient_id = ? AND (archived_at IS NULL OR trim(archived_at) = '')
+                ORDER BY queue_id ASC
+                """,
+                (pid,),
+            )
+        return [int(r[0]) for r in (cur.fetchall() or []) if r and r[0] is not None]
+    except sqlite3.Error:
+        return []
+    finally:
+        conn.close()
+
+
+def archive_patient(
+    patient_id: int,
+    archived: bool,
+    actor_user_id: Optional[int],
+    reason: Optional[str] = None,
+) -> bool:
+    """
+    Archive/unarchive *all* visits for a patient.
+
+    This matches the doctor-facing requirement: archive is patient-level, not visit-level.
+    """
+    pid = int(patient_id)
+    conn = _open_conn()
+    try:
+        cur = conn.cursor()
+        # Ensure schema/migrations are applied for older DBs.
+        try:
+            UserManager._ensure_emr_schema(conn)
+        except Exception:
+            pass
+
+        cur.execute("BEGIN IMMEDIATE")
+        if archived:
+            cur.execute(
+                """
+                UPDATE emr_queue_entries
+                SET archived_at = datetime('now'),
+                    archived_by = ?,
+                    archive_reason = ?,
+                    updated_at = datetime('now')
+                WHERE patient_id = ?
+                """,
+                (int(actor_user_id) if actor_user_id is not None else None, (reason or "").strip() or None, pid),
+            )
+        else:
+            cur.execute(
+                """
+                UPDATE emr_queue_entries
+                SET archived_at = NULL,
+                    archived_by = NULL,
+                    archive_reason = NULL,
+                    updated_at = datetime('now')
+                WHERE patient_id = ?
+                """,
+                (pid,),
+            )
+        updated = int(cur.rowcount or 0)
+        conn.commit()
+        if updated > 0:
+            log_emr_action(
+                actor_user_id,
+                "ARCHIVE_PATIENT" if archived else "RESTORE_PATIENT",
+                "patient",
+                pid,
+                json.dumps({"reason": (reason or "").strip() or None, "visits_updated": updated}),
+            )
+        return updated > 0
+    except sqlite3.Error:
+        with contextlib.suppress(Exception):
+            conn.rollback()
+        return False
+    finally:
+        conn.close()
+
+
 def is_visit_archived(queue_id: int) -> bool:
     qid = int(queue_id)
     conn = _open_conn()

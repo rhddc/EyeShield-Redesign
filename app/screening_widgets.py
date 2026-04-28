@@ -4,7 +4,7 @@ Custom widgets for the screening module.
 
 from PySide6.QtWidgets import (
     QLabel, QPushButton, QVBoxLayout, QHBoxLayout, QGridLayout, QDialog, QScrollArea, QStyle,
-    QDateEdit, QCalendarWidget, QAbstractSpinBox, QSpinBox, QComboBox, QWidget
+    QDateEdit, QCalendarWidget, QAbstractSpinBox, QSpinBox, QComboBox, QWidget, QFrame
 )
 from PySide6.QtGui import QPixmap, QPainter, QPen, QColor, QTextCharFormat
 from PySide6.QtCore import Qt, QSize, QEvent, QDate, QTimer

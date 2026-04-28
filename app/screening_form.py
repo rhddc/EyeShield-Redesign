@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QFileDialog, QFormLayout, QGroupBox, QComboBox, QDateEdit, QMessageBox,
     QDoubleSpinBox, QSpinBox, QCheckBox, QTextEdit, QCalendarWidget, QStackedWidget,
     QGridLayout, QFrame, QSizePolicy, QScrollArea, QSplitter, QAbstractSpinBox,
+    QApplication,
 )
 from PySide6.QtGui import (
     QPixmap,
@@ -2606,6 +2607,8 @@ class ScreeningPage(QWidget):
             self.results_page.override_reason_input.clear()
             self.results_page.findings_input.clear()
             self.results_page._refresh_decision_ui_state()
+        if hasattr(self, "p_eye"):
+            self.p_eye.setEnabled(True)
 
     def _handle_flow_blocked(self, message: str) -> bool:
         """Offer quick recovery when both eyes are already completed in this session."""
@@ -3584,13 +3587,30 @@ class ScreeningPage(QWidget):
 
 
     def clear_image(self):
+        """Reset the image state and clear both the UI and session attributes."""
         self.current_image = None
-        if hasattr(self.image_label, "clear_image"):
-            self.image_label.clear_image()
-        else:
-            self._apply_upload_placeholder_style()
-        self.btn_analyze.setEnabled(False)
+        self._last_saved_source_path = ""
+        
+        # Thoroughly reset the image label/dropzone
+        if hasattr(self, "image_label"):
+            if hasattr(self.image_label, "clear_image"):
+                self.image_label.clear_image()
+            else:
+                self.image_label.setPixmap(QPixmap())
+                self._apply_upload_placeholder_style()
+        
+        # Disable action buttons until a new image is loaded
+        if hasattr(self, "btn_analyze"):
+            self.btn_analyze.setEnabled(False)
         self._set_upload_error("")
+        
+        # Synchronize with Results window if present
+        if hasattr(self, "results_page"):
+            with contextlib.suppress(Exception):
+                self.results_page.set_results(
+                    self.p_name.text(), "", "Pending", "—",
+                    eye_label=self.p_eye.currentText()
+                )
 
     def _persist_screening_assets(self, patient_id: str, eye_label: str) -> tuple[str, str, str, str]:
         """Copy source/heatmap images into app-managed storage and return DB-ready metadata."""
@@ -4402,8 +4422,10 @@ class ScreeningPage(QWidget):
 
         # Switch eye.
         self._set_eye_selection(opposite_eye)
+        if hasattr(self, "p_eye"):
+            self.p_eye.setEnabled(False)
 
-        # Clear only per-eye analysis state.
+        # Clear per-eye state aggressively.
         self._current_eye_saved = False
         self.last_result_class = "—"
         self.last_result_conf = "—"
@@ -4413,13 +4435,15 @@ class ScreeningPage(QWidget):
         self.last_override_justification = ""
         self.last_doctor_findings = ""
 
-        # Reset result UI controls if present.
-        with contextlib.suppress(Exception):
-            self.r_class.setText("—")
-        with contextlib.suppress(Exception):
-            self.r_conf.setText("—")
+        # Clear Results page state to prevent flickering of old results
         if hasattr(self, "results_page"):
             with contextlib.suppress(Exception):
+                # Using public set_results with empty data is safest
+                self.results_page.set_results(
+                    self.p_name.text(), "", "Pending", "—",
+                    eye_label=opposite_eye,
+                    heatmap_path=""
+                )
                 self.results_page._doctor_classification = "Pending"
                 self.results_page._decision_mode = "pending"
                 self.results_page._override_justification = ""
@@ -4434,6 +4458,15 @@ class ScreeningPage(QWidget):
             self.btn_analyze.setEnabled(False)
         if hasattr(self, "btn_save"):
             self.btn_save.setEnabled(False)
+
+        # Force UI update for cleared area
+        QApplication.processEvents()
+
+        # Reset result UI controls if present.
+        with contextlib.suppress(Exception):
+            self.r_class.setText("—")
+        with contextlib.suppress(Exception):
+            self.r_conf.setText("—")
 
         # Return to the intake form (image upload step).
         self.stacked_widget.setCurrentIndex(0)

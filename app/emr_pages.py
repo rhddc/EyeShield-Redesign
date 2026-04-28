@@ -59,6 +59,11 @@ except Exception:
     from patient_timeline_dialog import PatientTimelineDialog
 
 try:
+    from .reports import ScreeningComparisonDialog
+except Exception:
+    from reports import ScreeningComparisonDialog
+
+try:
     from .app_paths import PATIENT_RECORDS_DB_PATH
 except Exception:
     from app_paths import PATIENT_RECORDS_DB_PATH
@@ -1674,11 +1679,12 @@ class EmrVisitsPage(QWidget):
             parent=self,
             on_follow_up=None,
             on_view_report=None,
-            on_compare=None,
+            on_compare=self._on_compare_from_review,
             on_export=None,
             on_start_diagnosis=self._start_diagnosis_from_review,
             initial_record=initial_record,
             show_actions=False,
+            show_inline_compare=True,
             show_history_tab=True,
         )
         panel.back_requested.connect(lambda: self._show_review_list())
@@ -1784,6 +1790,18 @@ class EmrVisitsPage(QWidget):
                 }
             )
         return group_patient_record_rows(timeline)
+
+    def _on_compare_from_review(self, timeline: list[dict]) -> None:
+        if not timeline:
+            show_warning(self, "Compare Screenings", "No screening history found to compare.")
+            return
+        if len(timeline) < 2:
+            show_warning(self, "Compare Screenings", "At least two screenings are required for comparison.")
+            return
+        
+        dialog = ScreeningComparisonDialog(timeline, self)
+        apply_dialog_style(dialog)
+        dialog.exec()
 
     def _start_diagnosis_from_review(self) -> None:
         ctx = getattr(self, "_review_ctx", {}) or {}

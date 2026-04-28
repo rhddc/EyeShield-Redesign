@@ -24,11 +24,13 @@ try:
     from .screening_widgets import ClickableImageLabel
     from .safety_runtime import can_write_directory, get_free_space_mb, write_activity
     from .auth import UserManager
+    from .ui_feedback import apply_dialog_style
 except Exception:  # pragma: no cover
     from screening_styles import DR_COLORS, DR_RECOMMENDATIONS, PROGRESSBAR_STYLE
     from screening_widgets import ClickableImageLabel
     from safety_runtime import can_write_directory, get_free_space_mb, write_activity
     from auth import UserManager
+    from ui_feedback import apply_dialog_style
 
 ICDR_OPTIONS = ["No DR", "Mild DR", "Moderate DR", "Severe DR", "Proliferative DR"]
 
@@ -1598,6 +1600,14 @@ class ResultsWindow(QWidget):
 
         is_second_eye_flow = bool(getattr(pp, "_is_second_eye_flow", False))
 
+        # Robust session check: if both eyes have been analyzed in this session, 
+        # then we are definitely saving the second eye.
+        analyzed_count = 0
+        with contextlib.suppress(Exception):
+            analyzed_count = len(getattr(pp, "_analyzed_eyes", set()))
+        if analyzed_count >= 2:
+            is_second_eye_flow = True
+
         go_screen_other_after_save = False
         if not is_second_eye_flow:
             box = QMessageBox(self)
@@ -1641,37 +1651,33 @@ class ResultsWindow(QWidget):
             # - `_second_eye_result` is set by `save_screening()` when the other eye is saved
             if is_second_eye_flow or bool(getattr(pp, "_second_eye_result", None)):
                 box = QMessageBox(self)
+                apply_dialog_style(box)
                 box.setWindowTitle("Session Completed")
-                box.setText("Both eyes have been successfully screened and saved.")
+                box.setIcon(QMessageBox.Icon.Information)
+                box.setText("<b>Both eyes have been successfully screened and saved.</b><br><br>The screening session for this patient is now complete.")
+
                 ok_btn = box.addButton("OK", QMessageBox.ButtonRole.AcceptRole)
-                refer_btn = box.addButton("Create a Referral Letter", QMessageBox.ButtonRole.ActionRole)
-                queue_btn = box.addButton("Back to Patient Queue List", QMessageBox.ButtonRole.ActionRole)
-                
+                refer_btn = box.addButton("Create Referral", QMessageBox.ButtonRole.ActionRole)
+                queue_btn = box.addButton("Back to Patient Queue", QMessageBox.ButtonRole.ActionRole)
+                box.setDefaultButton(ok_btn)
+
                 box.exec()
                 choice = box.clickedButton()
-                
-                # Mark bilateral flow as completed for this session.
+
+                # Reset state.
                 with contextlib.suppress(Exception):
                     pp._is_second_eye_flow = False
-                    
+                    if hasattr(pp, "p_eye"):
+                        pp.p_eye.setEnabled(True)
+
                 if choice == refer_btn:
-                    success = self.generate_referral()
-                    if success:
-                        q_box = QMessageBox.question(
-                            self,
-                            "Patient Queue",
-                            "Would you like to go back to patient queue list?",
-                            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                            QMessageBox.StandardButton.Yes,
-                        )
-                        if q_box == QMessageBox.StandardButton.Yes:
-                            main_win = self.window()
-                            if hasattr(main_win, "pages"):
-                                main_win.pages.setCurrentIndex(0)
+                    self.generate_referral()
                 elif choice == queue_btn:
                     main_win = self.window()
-                    if hasattr(main_win, "pages"):
-                        main_win.pages.setCurrentIndex(0)
+                    if hasattr(main_win, "_navigate_to"):
+                        main_win._navigate_to(10, nav_key="Patient Queue")
+                    elif hasattr(main_win, "pages"):
+                        main_win.pages.setCurrentIndex(10)
                 return
 
             # If user opted to screen the other eye, switch back to the upload/intake view
@@ -2735,7 +2741,6 @@ img {{
             .image-container { text-align: center; margin-top: 15px; margin-bottom: 30px; }
             .image-container img { border: 1px solid #e2e8f0; border-radius: 4px; max-width: 600px; max-height: 400px; object-fit: contain; }
             .eye-label { font-size: 16pt; font-weight: bold; color: #1e40af; margin-top: 5px; }
-            .diag-label { font-size: 14pt; margin-top: 3px; color: #1e293b; }
             p { margin: 0 0 10px 0; }
         </style>
         """
@@ -2746,7 +2751,8 @@ img {{
         html += "<div class='header'><h1>Medical Referral Letter</h1></div>"
         html += f"<div class='meta-row'><strong>Date:</strong> {report_date}</div>"
         html += f"<div class='meta-row'><strong>To:</strong> Dr. {doctor_label}</div>"
-        html += f"<div class='meta-row'><strong>Address:</strong> {destination_addr} ({destination_name})</div>"
+        html += f"<div class='meta-row'><strong>Hospital:</strong> {destination_name}</div>"
+        html += f"<div class='meta-row'><strong>Address:</strong> {destination_addr}</div>"
         html += f"<div class='subject'>Subject: Clinical Referral for Patient: {esc(patient_name_raw)}</div>"
         
         html += f"<p>Dear Dr. {esc(surname)},</p>"
@@ -2775,11 +2781,6 @@ img {{
             html += f"<li><strong>{eye['label']}:</strong> {eye['diagnosis']}</li>"
         html += "</ul>"
         
-        html += "<div class='section-title'>Patient Background:</div>"
-        # Summary background from notes
-        bg_summary = patient_notes if patient_notes and patient_notes != "&#8212;" else "No significant prior history recorded."
-        html += f"<p>{bg_summary}</p>"
-        
         html += "<p>I would appreciate your expert consultation and any necessary intervention or specialized care that the patient may require. "
         html += "Screening reports and fundus images have been provided to the patient for your reference.</p>"
         
@@ -2800,7 +2801,6 @@ img {{
             html += "<div class='image-container'>"
             html += f"<div class='eye-label'>{eye['label']}</div>"
             html += f"<img src='{img_url}' width='600'>"
-            html += f"<div class='diag-label'><strong>Diagnosis:</strong> {eye['diagnosis']}</div>"
             html += "</div>"
             
         html += "</body></html>"
@@ -2954,10 +2954,12 @@ img {{
             hospital_name = str(selected.get("hospital_name") or "").strip()
             department = str(selected.get("department") or "").strip()
             contact = str(selected.get("contact_person") or selected.get("phone") or "").strip()
+            address = str(selected.get("address") or "").strip()
             display = hospital_name if not department else f"{hospital_name} ({department})"
             return {
                 "hospital_name": hospital_name,
                 "department": department,
                 "contact_person": contact,
+                "address": address,
                 "display": display,
             }
