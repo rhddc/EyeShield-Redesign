@@ -2679,15 +2679,17 @@ class EyeShieldApp(QMainWindow):
             for pid_pk in emr.list_patient_ids_with_screenings():
                 timeline = emr.list_emr_timeline_records(int(pid_pk)) or []
                 for rec in timeline:
-                    # rec['id'] is sid * 10 + side. Use integer division to get the screening_id.
-                    sid = rec.get("id", 0) // 10
+                    # Use screening_group_id as the unique visit identifier (handles bilateral eyes)
+                    # Fallback to id // 10 for legacy/unlinked records
+                    group_key = rec.get("screening_group_id") or str(rec.get("id", 0) // 10)
+                    
                     res_label = self._normalize_severity_label(rec.get("result", ""))
                     # Rank severity to keep the worst eye result for the session summary
                     ranks = {"Proliferative DR": 4, "Severe DR": 3, "Moderate DR": 2, "Mild DR": 1, "No DR": 0}
                     res_rank = ranks.get(res_label, -1)
                     
-                    if sid not in all_sessions:
-                        all_sessions[sid] = {
+                    if group_key not in all_sessions:
+                        all_sessions[group_key] = {
                             "patient_id": str(rec.get("patient_id") or "").strip(),
                             "name": str(rec.get("name") or "Unknown"),
                             "contact": str(rec.get("contact") or rec.get("phone") or "—"),
@@ -2696,9 +2698,9 @@ class EyeShieldApp(QMainWindow):
                             "_rank": res_rank
                         }
                     else:
-                        if res_rank > all_sessions[sid]["_rank"]:
-                            all_sessions[sid]["result"] = rec.get("result") or ""
-                            all_sessions[sid]["_rank"] = res_rank
+                        if res_rank > all_sessions[group_key]["_rank"]:
+                            all_sessions[group_key]["result"] = rec.get("result") or ""
+                            all_sessions[group_key]["_rank"] = res_rank
             
             all_screenings = list(all_sessions.values())
         except Exception as err:
@@ -2783,15 +2785,48 @@ class EyeShieldApp(QMainWindow):
                 item = self.recent_list_layout.takeAt(0)
                 if w := item.widget(): w.deleteLater()
 
-            recent_subset = all_screenings[:4]
+            # Filter for unique patients to avoid duplicate names in the recent list
+            seen_pids = set()
+            unique_recent = []
+            for s in all_screenings:
+                pid = s.get("patient_id")
+                if pid not in seen_pids:
+                    seen_pids.add(pid)
+                    unique_recent.append(s)
+                if len(unique_recent) >= 4:
+                    break
+            
+            recent_subset = unique_recent
+
             if not recent_subset:
                 empty = QLabel("No screenings yet.")
                 empty.setStyleSheet(f"font-size:12px;color:{text_muted};font-weight:600;padding:8px 0;")
                 self.recent_list_layout.addWidget(empty)
             else:
+                # Add Header Row
+                header_w = QWidget()
+                header_w.setStyleSheet("background: transparent; border-bottom: 1px solid #e2e8f0; margin-bottom: 4px;")
+                header_l = QHBoxLayout(header_w)
+                header_l.setContentsMargins(16, 4, 16, 8)
+                header_l.setSpacing(12)
+                
+                h_name = QLabel("Name")
+                h_phone = QLabel("Phone number")
+                h_date = QLabel("Screening date")
+                for h in (h_name, h_phone, h_date):
+                    h.setStyleSheet(f"color:{text_muted};font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:0.8px;")
+                
+                header_l.addWidget(h_name, 2)
+                header_l.addWidget(h_phone, 1)
+                header_l.addWidget(h_date, 1)
+                self.recent_list_layout.addWidget(header_w)
+
                 for s in recent_subset:
                     item_w = QWidget()
-                    item_w.setStyleSheet(f"QWidget{{background:{'#13273a' if dark else '#f8fbff'};border-radius:12px;}}")
+                    item_w.setStyleSheet(
+                        f"QWidget{{background:{'#13273a' if dark else '#f8fbff'};border-radius:12px;}}"
+                        f"QWidget:hover{{background:{'#1a3550' if dark else '#eff6ff'};}}"
+                    )
                     item_l = QHBoxLayout(item_w)
                     item_l.setContentsMargins(16, 12, 16, 12)
                     item_l.setSpacing(12)
@@ -2802,7 +2837,18 @@ class EyeShieldApp(QMainWindow):
                     contact_lbl = QLabel(s["contact"])
                     contact_lbl.setStyleSheet(f"font-size:13px;font-weight:600;color:{text_secondary};background:transparent;")
                     
-                    date_val = s["screened_at"][:10] if len(s["screened_at"]) >= 10 else "—"
+                    # Format date: April 26, 2026
+                    raw_date = s["screened_at"]
+                    date_val = "—"
+                    if raw_date and len(raw_date) >= 10:
+                        try:
+                            # Try to parse ISO date or just YYYY-MM-DD
+                            dt_str = raw_date[:10]
+                            dt = datetime.strptime(dt_str, "%Y-%m-%d")
+                            date_val = dt.strftime("%B %d, %Y")
+                        except Exception:
+                            date_val = raw_date[:10]
+
                     date_lbl = QLabel(date_val)
                     date_lbl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
                     date_lbl.setStyleSheet(f"font-size:12px;font-weight:700;color:{text_muted};background:transparent;")

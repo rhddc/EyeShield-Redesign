@@ -132,6 +132,7 @@ class HelpSupportPage(QWidget):
         topics = [
             ("hlp_quick_start", "hlp_quick_start_body"),
             ("hlp_howto", "hlp_howto_body"),
+            ("hlp_clinical", "hlp_clinical_body"),
             ("hlp_faq", "hlp_faq_body"),
             ("hlp_troubleshoot", "hlp_troubleshoot_body"),
             ("hlp_privacy", "hlp_privacy_body"),

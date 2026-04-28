@@ -11,29 +11,32 @@ TRANSLATIONS = {
         "settings_auto_logout": "Enable auto-logout after inactivity",
         "settings_confirm": "Ask confirmation before destructive actions",
         "settings_compact": "Use compact table rows",
-        "settings_about": "About",
+        "settings_about": "About EyeShield EMR",
         "settings_terms": "Terms of Use",
-        "settings_privacy": "Privacy Policy",
+        "settings_privacy": "Privacy & Security Policy",
         "settings_about_text": (
-            "EyeShield EMR is an offline clinical screening system for diabetic retinopathy. "
-            "It supports patient intake, AI-assisted image analysis, report generation, and "
-            "external referral documentation. AI output is decision support only and must be "
-            "reviewed by a qualified clinician before final diagnosis and treatment planning."
+            "EyeShield EMR is a state-of-the-art Electronic Medical Record system specifically designed for "
+            "Diabetic Retinopathy (DR) screening and management. It combines a premium, high-performance "
+            "interface with advanced AI diagnostics, bilateral screening workflows, and longitudinal "
+            "patient tracking. Our local-first architecture ensures that sensitive clinical data remains "
+            "private and accessible even without internet connectivity. AI output serves as a powerful "
+            "decision support tool and must be reviewed by a qualified clinician."
         ),
         "settings_terms_text": (
-            "By using EyeShield EMR, you agree to use the system only for authorized clinical "
-            "screening, documentation, and referral workflows. Users must follow role-based "
-            "permissions, maintain accurate records, and avoid unauthorized copying, sharing, "
-            "or modification of patient data. The software is provided as a clinical support "
-            "tool and does not replace professional medical judgment."
+            "EyeShield EMR is provided as a professional clinical support tool. By using this system, you "
+            "agree to utilize it only for authorized clinical screening, documentation, and referral workflows. "
+            "All AI-generated assessments are for decision support only and must be verified by a qualified "
+            "healthcare professional. You agree to maintain strict confidentiality of patient records, use "
+            "the system within your assigned role permissions, and ensure data integrity at all times. "
+            "The software does not replace professional medical judgment."
         ),
         "settings_privacy_text": (
-            "EyeShield EMR stores patient and user data locally on this device/database and "
-            "does not require internet transfer for core operation. Access must be restricted "
-            "to authorized users, with workstation lock/logout on shared devices. Exports and "
-            "printed reports should be handled only through approved clinical channels and "
-            "according to retention policy. Administrators are responsible for backup, access "
-            "control, and secure lifecycle management of local records."
+            "Your data remains under your control. EyeShield EMR utilizes a local-first architecture, storing "
+            "all patient records and clinical data securely on this device or local network. We implement "
+            "rigorous role-based access control and provide tools for secure data management, including "
+            "workstation auto-lock and detailed activity logging. Users are responsible for complying with "
+            "local healthcare privacy regulations (such as HIPAA/GDPR where applicable) and internal data "
+            "handling policies. Exports and printed reports must be handled via approved clinical channels."
         ),
         "settings_reset": "Reset Defaults",
         "settings_save": "Save Settings",
@@ -117,64 +120,65 @@ TRANSLATIONS = {
         # Help & Support
         "hlp_title": "Help & Support",
         "hlp_subtitle": "Complete guidance for screening workflow, result safety checks, reports, and support contacts.",
-        "hlp_quick_start": "Quick Start",
+        "hlp_quick_start": "Quick Start Guide",
         "hlp_quick_start_body": """
             <ul>
-                <li>Log in with your assigned role and open <b>Screening</b>.</li>
-                <li>Complete all required patient fields, then upload one fundus image (JPG/PNG/JPEG).</li>
-                <li>Click <b>Analyze Image</b>, review the AI result, confidence, and recommendations.</li>
-                <li><b>Save</b> the eye result; the results window stays open so you can review, export PDF, and continue safely.</li>
-                <li>For bilateral workflow, screen and save one eye first, then use <b>Screen Other Eye</b>.</li>
-                <li>Use <b>Refer Patient</b> for Moderate, Severe, or Proliferative DR when specialist follow-up is needed.</li>
-                <li>Use <b>Reports</b> for filtering, exports, and archived-record management.</li>
+                <li><b>Login:</b> Use your credentials and check the <b>Patient Queue</b> for pending screenings.</li>
+                <li><b>New Patient:</b> Complete intake in the <b>Screening</b> tab or pull a patient from the queue.</li>
+                <li><b>Bilateral Screening:</b> Capture both Left and Right eyes in a single session using the eye toggles.</li>
+                <li><b>AI Analysis:</b> Click <b>Analyze Image</b> to see DR grading, confidence, and heatmaps.</li>
+                <li><b>Comparison:</b> Use the <b>Compare Screenings</b> tool to review historical trends side-by-side.</li>
+                <li><b>Referral:</b> If DR is detected, use <b>Refer Patient</b> to send documentation to a specialist.</li>
+                <li><b>Reports:</b> Access the <b>Reports</b> tab for comprehensive filtering and PDF exports.</li>
             </ul>
             """,
         "hlp_howto": "How-to Guides",
         "hlp_howto_body": """
             <ul>
-                <li><b>New screening:</b> Fill patient details, diabetic history, and eye side, then upload image and analyze.</li>
-                <li><b>Image quality:</b> If image is marked not gradable, capture a clearer, well-lit fundus image and retry.</li>
-                <li><b>Duplicate eye record:</b> If the same patient eye already exists, choose <b>Replace Existing</b> or <b>Save as New Session</b>.</li>
-                <li><b>Generate PDF report:</b> Save first; if only one eye is screened, you can generate single-eye report or screen the other eye first.</li>
-                <li><b>Clinical decision fields:</b> Doctor classification, decision mode, findings, and override justification are included in final records and PDF.</li>
-                <li><b>Refer patient:</b> Open referral from screening results, select a receiving facility, and include referral notes.</li>
-                <li><b>Trusted hospitals:</b> Maintain referral facilities by adding hospital name, department, and optional contact details.</li>
-                <li><b>Reports page:</b> Search, filter, refresh, export, and archive selected records.</li>
-                <li><b>Archived records:</b> Restore archived items when needed, or permanently delete only if allowed by policy.</li>
+                <li><b>Bilateral Workflow:</b> Toggle between eyes during screening. Data for each eye is saved independently but linked to the same visit.</li>
+                <li><b>Using Comparison:</b> In the Patient Record view, click <b>Compare Screenings</b> to select and analyze historical screenings side-by-side.</li>
+                <li><b>Patient Timeline:</b> View a visual history of all screenings and visits in the <b>Timeline</b> view for better patient management.</li>
+                <li><b>Quality Check:</b> Ensure images are clear and well-lit. The system will flag non-gradable images for recapture.</li>
+                <li><b>Generating Reports:</b> After saving a screening, click <b>Generate Report</b> for a professional PDF summary.</li>
+                <li><b>Managing Queue:</b> Frontdesk users can add patients to the queue, which updates live for clinicians and doctors.</li>
             </ul>
             """,
-        "hlp_faq": "FAQ",
+        "hlp_clinical": "Advanced Clinical Features",
+        "hlp_clinical_body": """
+            <ul>
+                <li><b>Trend Analysis:</b> The comparison tool helps in tracking DR progression over time using standardized grading.</li>
+                <li><b>Decision Support:</b> AI findings (ICDR grades) are designed to augment clinical review, not replace it.</li>
+                <li><b>Referral Network:</b> Manage trusted hospitals and departments in the <b>Trusted Hospitals</b> page for efficient referrals.</li>
+                <li><b>Role-Based Access:</b> Doctors have full clinical authority, while Clinicians focus on screening and Frontdesk on administration.</li>
+            </ul>
+            """,
+        "hlp_faq": "Frequently Asked Questions",
         "hlp_faq_body": """
             <ul>
-                <li><b>Why can I not continue to analyze?</b> One or more required patient fields or image input is missing.</li>
-                <li><b>Can I upload multiple images at once?</b> No. Current workflow supports one image per analysis.</li>
-                <li><b>Why can I not generate a report?</b> You must complete analysis and save the current eye result first.</li>
-                <li><b>Why did my confidence/result not appear?</b> The model may still be analyzing, or the image failed quality checks.</li>
-                <li><b>Cannot find a patient in Reports:</b> Use search/filter, refresh records, and verify if the record was archived.</li>
-                <li><b>Why can I not submit a referral?</b> Ensure the result is saved, a target facility is selected, and required referral fields are complete.</li>
-                <li><b>Can unsaved work be recovered?</b> Draft autosave is used for in-progress screening, but you should still save explicitly.</li>
+                <li><b>Why can't I see the comparison button?</b> Comparison requires at least two historical screenings for the same patient.</li>
+                <li><b>How do I switch eyes during screening?</b> Use the 'Left Eye' and 'Right Eye' buttons in the screening form header.</li>
+                <li><b>Can I use this without internet?</b> Yes, EyeShield EMR is fully functional offline; all data is stored locally.</li>
+                <li><b>What does 'High Uncertainty' mean?</b> The AI model suggests the image quality or features are ambiguous; manual clinical review is critical.</li>
+                <li><b>How do I update patient info?</b> Patient demographics can be updated in the <b>Reports > View Patient</b> dialog.</li>
             </ul>
             """,
         "hlp_troubleshoot": "Troubleshooting",
         "hlp_troubleshoot_body": """
             <ul>
-                <li><b>Validation warnings:</b> Correct missing fields, invalid name format, age range, and abnormal glucose values before proceeding.</li>
-                <li><b>Invalid image message:</b> Confirm file type and choose a valid fundus image path with read permissions.</li>
-                <li><b>Unsaved result dialogs:</b> Choose <b>Save First</b> before starting a new patient, going back, or closing the app.</li>
-                <li><b>Save failed:</b> Retry save, or select a different save location when prompted.</li>
-                <li><b>Export issues:</b> Retry from Reports and verify destination folder permissions and available disk space.</li>
-                <li><b>Facility list missing:</b> Add or update entries in trusted hospitals before creating a new referral.</li>
-                <li><b>Camera page:</b> Temporary webcam utility only; use screening upload for final DR analysis workflow.</li>
+                <li><b>Screening won't save:</b> Ensure all required fields (Name, DOB, etc.) are filled and at least one eye is analyzed.</li>
+                <li><b>Comparison layout issues:</b> Ensure your screen resolution is sufficient; use scrollbars if content overflows.</li>
+                <li><b>Printer/PDF Error:</b> Check if the destination folder is writable and you have a PDF viewer installed.</li>
+                <li><b>Queue not updating:</b> Click the <b>Refresh</b> button or ensure you have an active network connection for local sync.</li>
+                <li><b>Forgot Password:</b> Contact your system Administrator to reset your credentials via the Users page.</li>
             </ul>
             """,
-        "hlp_privacy": "Privacy & Compliance",
+        "hlp_privacy": "Privacy & Compliance Guide",
         "hlp_privacy_body": """
             <ul>
-                <li>Access only patient records required for clinical care and documentation.</li>
-                <li>Do not share screenshots, exports, or reports outside approved clinical channels.</li>
-                <li>Use local settings such as auto-logout and confirmation prompts for safer operation.</li>
-                <li>Always log out or lock the workstation when leaving a shared device.</li>
-                <li>Archive records for workflow management, and permanently delete only per retention policy.</li>
+                <li><b>Local Storage:</b> Patient data never leaves your device unless you explicitly export it.</li>
+                <li><b>Activity Audit:</b> All clinical actions (analysis, saves, exports) are logged for accountability.</li>
+                <li><b>Session Security:</b> Enable auto-logout in Settings to protect data when away from the workstation.</li>
+                <li><b>Data Retention:</b> Use the Archive feature to manage old records according to your facility's policy.</li>
             </ul>
             """,
         "hlp_contact": "Contact Support",

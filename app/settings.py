@@ -849,60 +849,6 @@ class SettingsPage(QWidget):
         account_btn_row.addWidget(self.account_save_btn)
         account_layout.addLayout(account_btn_row)
 
-        self.schedule_group = QGroupBox("My Schedule", panel)
-        schedule_layout = QVBoxLayout(self.schedule_group)
-        schedule_layout.setSpacing(6)
-
-        self.schedule_hint_label = QLabel("Set your weekly clinic availability shown on your dashboard.")
-        self.schedule_hint_label.setObjectName("metaLabel")
-        self.schedule_hint_label.setWordWrap(True)
-        schedule_layout.addWidget(self.schedule_hint_label)
-
-        schedule_time_row = QHBoxLayout()
-        schedule_time_row.setSpacing(6)
-        self.schedule_start_label = QLabel("From:")
-        self.schedule_start_label.setObjectName("fieldLabel")
-        self.schedule_start_time = QTimeEdit()
-        self.schedule_start_time.setDisplayFormat("hh:mm AP")
-        self.schedule_start_time.setTime(QTime(9, 0))
-        self.schedule_end_label = QLabel("To:")
-        self.schedule_end_label.setObjectName("fieldLabel")
-        self.schedule_end_time = QTimeEdit()
-        self.schedule_end_time.setDisplayFormat("hh:mm AP")
-        self.schedule_end_time.setTime(QTime(17, 0))
-        for control in (
-            self.display_name_input,
-            self.username_input,
-            self.new_password_input,
-            self.schedule_start_time,
-            self.schedule_end_time,
-        ):
-            control.setMaximumWidth(460)
-        schedule_time_row.addWidget(self.schedule_start_label)
-        schedule_time_row.addWidget(self.schedule_start_time)
-        schedule_time_row.addSpacing(12)
-        schedule_time_row.addWidget(self.schedule_end_label)
-        schedule_time_row.addWidget(self.schedule_end_time)
-        schedule_time_row.addStretch(1)
-        schedule_layout.addLayout(schedule_time_row)
-
-        self.schedule_days_label = QLabel("Available Days:")
-        self.schedule_days_label.setObjectName("fieldLabel")
-        schedule_layout.addWidget(self.schedule_days_label)
-
-        days_grid = QGridLayout()
-        days_grid.setHorizontalSpacing(8)
-        days_grid.setVerticalSpacing(4)
-        self.schedule_day_checks = []
-        for idx, (day_key, day_label) in enumerate(_WEEKDAY_OPTIONS):
-            checkbox = QCheckBox(day_label)
-            checkbox.setChecked(idx < 5)
-            self.schedule_day_checks.append((day_key, checkbox))
-            row = idx // 4
-            col = idx % 4
-            days_grid.addWidget(checkbox, row, col)
-        schedule_layout.addLayout(days_grid)
-
         # Panel sizing: keep a single centered column like Patient Records.
         for card in (
             pref_group,
@@ -910,20 +856,11 @@ class SettingsPage(QWidget):
             self.support_group,
             self.admin_contact_group,
             self.account_group,
-            self.schedule_group,
             self.referral_hospitals_group,
         ):
             if card is not None:
                 card.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
                 card.setMaximumWidth(1320)
-
-        schedule_btn_row = QHBoxLayout()
-        schedule_btn_row.addStretch(1)
-        self.schedule_save_btn = QPushButton("Update Schedule")
-        self.schedule_save_btn.setObjectName("primaryAction")
-        self.schedule_save_btn.clicked.connect(self.update_schedule)
-        schedule_btn_row.addWidget(self.schedule_save_btn)
-        schedule_layout.addLayout(schedule_btn_row)
 
         # Section layout (requested):
         # Preferences → Session Settings → (admin-only) Support/Admin Details → My Account → Buttons
@@ -969,13 +906,14 @@ class SettingsPage(QWidget):
         self.about_group = about_group
         about_layout = QVBoxLayout(about_group)
         about_layout.setSpacing(4)
-        self.about_version_label = QLabel("EyeShield EMR v1.0.0")
+        self.about_version_label = QLabel("EyeShield EMR v1.2.0")
         self.about_copyright_label = QLabel("© 2026 EyeShield Team")
         self.about_contact_label = QLabel(
-            "EyeShield EMR is an offline clinical screening system for diabetic retinopathy. "
-            "It supports patient intake, AI-assisted image analysis, report generation, and "
-            "referral letter generation. AI output is decision support only and must be "
-            "reviewed by a qualified clinician before final diagnosis and treatment planning."
+            "EyeShield EMR is a state-of-the-art Electronic Medical Record system specifically designed for "
+            "Diabetic Retinopathy (DR) screening and management. It combines a premium, high-performance "
+            "interface with advanced AI diagnostics, bilateral screening workflows, and longitudinal "
+            "patient tracking. AI output serves as a powerful decision support tool and must be reviewed "
+            "by a qualified clinician."
         )
         self.about_contact_label.setWordWrap(True)
         for lbl in (self.about_version_label, self.about_copyright_label, self.about_contact_label):
@@ -993,12 +931,11 @@ class SettingsPage(QWidget):
         self.terms_group = terms_group
         terms_layout = QVBoxLayout(terms_group)
         self.terms_label = QLabel(
-            "By using EyeShield EMR, you agree to use the system only for authorized clinical "
-            "screening, documentation, and referral workflows. Users must follow role-based "
-            "permissions, maintain accurate records, and avoid unauthorized copying, sharing, "
-            "or modification of patient data. Referral letters and associated records must "
-            "be used for continuity of care. The software is provided as a clinical support "
-            "tool and does not replace professional medical judgment."
+            "EyeShield EMR is provided as a professional clinical support tool. By using this system, you "
+            "agree to utilize it only for authorized clinical screening, documentation, and referral workflows. "
+            "All AI-generated assessments are for decision support only and must be verified by a qualified "
+            "healthcare professional. You agree to maintain strict confidentiality of patient records, use "
+            "the system within your assigned role permissions, and ensure data integrity at all times."
         )
         self.terms_label.setWordWrap(True)
         self.terms_label.setStyleSheet("color:#495057; font-size:12px; line-height:1.5;")
@@ -1010,12 +947,11 @@ class SettingsPage(QWidget):
         self.privacy_group = privacy_group
         privacy_layout = QVBoxLayout(privacy_group)
         self.privacy_label = QLabel(
-            "EyeShield EMR stores patient and user data locally on this device/database and "
-            "does not require internet transfer for core operation. Access must be restricted "
-            "to authorized users, with workstation lock/logout on shared devices. Exports and "
-            "printed reports should be handled only through approved clinical channels and "
-            "according to retention policy. Administrators are responsible for backup, access "
-            "control, and secure lifecycle management of local records."
+            "Your data remains under your control. EyeShield EMR utilizes a local-first architecture, storing "
+            "all patient records and clinical data securely on this device or local network. We implement "
+            "rigorous role-based access control and provide tools for secure data management, including "
+            "workstation auto-lock and detailed activity logging. Users are responsible for complying with "
+            "local healthcare privacy regulations and internal data handling policies."
         )
         self.privacy_label.setWordWrap(True)
         self.privacy_label.setStyleSheet("color:#495057; font-size:12px; line-height:1.5;")
@@ -1037,7 +973,6 @@ class SettingsPage(QWidget):
         self.lang_combo.currentTextChanged.connect(self.apply_live_preview)
         self.auto_logout_check.toggled.connect(self._sync_timeout_enabled_state)
         self._configure_account_section()
-        self._configure_schedule_section()
         self._configure_session_support_section()
         self._configure_admin_contact_section()
         self._configure_info_sections()
@@ -1049,8 +984,7 @@ class SettingsPage(QWidget):
             for w in (
                 getattr(self, "support_group", None),
                 getattr(self, "admin_contact_group", None),
-                getattr(self, "referral_hospitals_group", None),
-                getattr(self, "schedule_group", None),
+                getattr(self, "referral_hospitals_group", None)
             ):
                 if w is not None:
                     w.setVisible(False)
@@ -1096,12 +1030,6 @@ class SettingsPage(QWidget):
         self.username_input.setText(str(profile.get("username") or username))
         self.new_password_input.clear()
 
-    def _configure_schedule_section(self):
-        show_schedule = self._active_role() == "clinician"
-        self.schedule_group.setVisible(show_schedule)
-        if not show_schedule:
-            return
-        self._load_schedule_fields()
 
     def _configure_admin_contact_section(self):
         show_admin_contact = self._active_role() == "admin"
@@ -1601,14 +1529,6 @@ class SettingsPage(QWidget):
             "location": self.admin_contact_location_input.text().strip(),
         }
 
-    @staticmethod
-    def _default_schedule_payload() -> dict:
-        return {
-            "mode": "weekly-template",
-            "start_time": "09:00 AM",
-            "end_time": "05:00 PM",
-            "days": ["mon", "tue", "wed", "thu", "fri"],
-        }
 
     @staticmethod
     def _parse_time_value(value: str) -> QTime:
@@ -1621,41 +1541,6 @@ class SettingsPage(QWidget):
                 return parsed
         return QTime()
 
-    def _load_schedule_fields(self):
-        payload = self._default_schedule_payload()
-        profile = get_user_profile(self._active_username()) or {}
-        raw_availability = profile.get("availability_json")
-        try:
-            loaded = json.loads(raw_availability) if isinstance(raw_availability, str) and raw_availability else raw_availability
-        except Exception:
-            loaded = None
-        if isinstance(loaded, dict):
-            payload.update({
-                "start_time": str(loaded.get("start_time") or payload["start_time"]),
-                "end_time": str(loaded.get("end_time") or payload["end_time"]),
-                "days": loaded.get("days") or payload["days"],
-            })
-
-        start_time = self._parse_time_value(payload.get("start_time"))
-        end_time = self._parse_time_value(payload.get("end_time"))
-        if start_time.isValid():
-            self.schedule_start_time.setTime(start_time)
-        if end_time.isValid():
-            self.schedule_end_time.setTime(end_time)
-
-        selected_days = payload.get("days") or []
-        selected_set = {str(day).strip().lower() for day in selected_days} if isinstance(selected_days, list) else set()
-        for day_key, checkbox in self.schedule_day_checks:
-            checkbox.setChecked(day_key in selected_set)
-
-    def _current_schedule_payload(self) -> dict:
-        return {
-            "mode": "weekly-template",
-            "start_time": self.schedule_start_time.time().toString("hh:mm AP"),
-            "end_time": self.schedule_end_time.time().toString("hh:mm AP"),
-            "days": [day for day, checkbox in self.schedule_day_checks if checkbox.isChecked()],
-            "updated_at": datetime.now().isoformat(timespec="seconds"),
-        }
 
     def _prompt_current_password(self):
         dialog = QDialog(self)
@@ -1751,8 +1636,6 @@ class SettingsPage(QWidget):
         if self._active_role() == "admin":
             self._load_admin_contact_into_fields()
             self._load_support_contact_into_fields()
-        if self._active_role() == "clinician":
-            self._load_schedule_fields()
         self.apply_live_preview()
         self.status_label.setText("")
 
@@ -1950,41 +1833,6 @@ class SettingsPage(QWidget):
                 f"{message}\n\nDisplay name changes are applied immediately.",
             )
 
-    def update_schedule(self):
-        if self._active_role() != "clinician":
-            QMessageBox.warning(self, "Schedule", "Only clinicians can update this section.")
-            return
-
-        selected_days = [day for day, checkbox in self.schedule_day_checks if checkbox.isChecked()]
-        if not selected_days:
-            QMessageBox.warning(self, "Schedule", "Select at least one available weekday.")
-            return
-        if self.schedule_end_time.time() <= self.schedule_start_time.time():
-            QMessageBox.warning(self, "Schedule", "End time must be later than start time.")
-            return
-
-        availability_json = json.dumps(
-            self._current_schedule_payload(),
-            ensure_ascii=True,
-            separators=(",", ":"),
-        )
-        ok, message = user_store.update_own_availability(
-            current_username=self._active_username(),
-            availability_json=availability_json,
-        )
-        if not ok:
-            QMessageBox.warning(self, "Schedule", message)
-            return
-
-        self.status_label.setText("Schedule updated")
-        main_window = self.window()
-        if main_window is not self and hasattr(main_window, "refresh_dashboard"):
-            main_window.refresh_dashboard()
-        QMessageBox.information(
-            self,
-            "Schedule Updated",
-            message,
-        )
 
     def reset_defaults(self):
         defaults = self._default_settings()
@@ -2009,15 +1857,4 @@ class SettingsPage(QWidget):
             self.admin_contact_email_input.setText(admin_defaults["email"])
             self.admin_contact_phone_input.setText(admin_defaults["phone"])
             self.admin_contact_location_input.setText(admin_defaults["location"])
-        if self._active_role() == "clinician":
-            default_schedule = self._default_schedule_payload()
-            start_time = self._parse_time_value(default_schedule["start_time"])
-            end_time = self._parse_time_value(default_schedule["end_time"])
-            if start_time.isValid():
-                self.schedule_start_time.setTime(start_time)
-            if end_time.isValid():
-                self.schedule_end_time.setTime(end_time)
-            selected_days = set(default_schedule["days"])
-            for day_key, checkbox in self.schedule_day_checks:
-                checkbox.setChecked(day_key in selected_days)
         self.status_label.setText("Defaults restored (not yet saved)")
