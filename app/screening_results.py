@@ -767,17 +767,17 @@ class ResultsWindow(QWidget):
                 font-weight: 700;
             }
             QLabel#sourceImageSurface {
-                background: #000000;
-                border: 1px solid #e5e7eb;
+                background: #f8fafc;
+                border: 1px solid #e2e8f0;
                 border-radius: 8px;
-                color: #9ca3af;
+                color: #94a3b8;
                 font-size: 13px;
             }
             QLabel#heatmapImageSurface {
-                background: #0b0f19;
-                border: 1px solid #e5e7eb;
+                background: #f8fafc;
+                border: 1px solid #e2e8f0;
                 border-radius: 8px;
-                color: #9ca3af;
+                color: #94a3b8;
                 font-size: 14px;
             }
             QFrame#resultStatCard {

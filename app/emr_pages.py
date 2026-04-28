@@ -1300,10 +1300,14 @@ class EmrVisitsPage(QWidget):
         self._queue_stack.addWidget(queue_list_page)  # 0
 
         review_page = QWidget()
+        review_page.setObjectName("EMRReviewPage")
+        review_page.setStyleSheet("QWidget#EMRReviewPage { background-color: #f1f5f9; }")
         rlp = QVBoxLayout(review_page)
         rlp.setContentsMargins(0, 0, 0, 0)
         rlp.setSpacing(0)
         self._review_host = QWidget()
+        self._review_host.setObjectName("EMRReviewHost")
+        self._review_host.setStyleSheet("QWidget#EMRReviewHost { background-color: #f1f5f9; }")
         self._review_host_layout = QVBoxLayout(self._review_host)
         self._review_host_layout.setContentsMargins(0, 0, 0, 0)
         rlp.addWidget(self._review_host, 1)

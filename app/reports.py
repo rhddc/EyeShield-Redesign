@@ -173,12 +173,15 @@ def _timeline_sort_key(record: dict) -> tuple[datetime, int]:
 
 
 class ScreeningComparisonDialog(QDialog):
-    def __init__(self, previous_record: dict, latest_record: dict, parent=None):
+    def __init__(self, all_records: list[dict], parent=None):
         super().__init__(parent)
-        self.previous_record = previous_record
-        self.latest_record = latest_record
+        self.all_records = list(all_records or [])
+        # We always compare against the LATEST screening.
+        self.latest_record = self.all_records[-1]
+        # Initially, we compare against the one immediately before it.
+        self.previous_record = self.all_records[-2] if len(self.all_records) >= 2 else self.latest_record
+        
         self.setWindowTitle("Compare Screenings")
-        # Wider + taller so 2×2 mode doesn't feel cramped.
         self.resize(1240, 820)
         self.setMinimumSize(980, 680)
 
@@ -186,16 +189,38 @@ class ScreeningComparisonDialog(QDialog):
         self._root.setContentsMargins(18, 16, 18, 16)
         self._root.setSpacing(10)
 
+        header = QHBoxLayout()
         title = QLabel("Screening Comparison")
         title.setStyleSheet("font-size:20px;font-weight:700;color:#0f172a;")
-        self._root.addWidget(title)
+        header.addWidget(title)
+        header.addStretch(1)
+        
+        header.addWidget(QLabel("Compare latest with:"), 0, Qt.AlignVCenter)
+        self._prev_selector = QComboBox()
+        self._prev_selector.setFixedWidth(240)
+        self._prev_selector.setStyleSheet(
+            "QComboBox{background:#ffffff;border:1px solid #cbd5e1;border-radius:10px;padding:4px 12px;font-weight:600;}"
+            "QComboBox::drop-down{border:none;}"
+            "QComboBox QAbstractItemView{background:#ffffff;border:1px solid #cbd5e1;selection-background-color:#dbeafe;}"
+        )
+        
+        # Populate selector with historical dates (excluding the latest one)
+        history = self.all_records[:-1]
+        history.reverse() # Newest first
+        for rec in history:
+            dt = _format_screening_datetime_label(rec.get("screened_at"))
+            self._prev_selector.addItem(f"Screening on {dt}", rec)
+        
+        self._prev_selector.currentIndexChanged.connect(self._on_previous_changed)
+        header.addWidget(self._prev_selector)
+        self._root.addLayout(header)
 
         self._summary = QLabel("")
         self._summary.setWordWrap(True)
         self._summary.setStyleSheet("background:#f8fafc;border:1px solid #dbeafe;border-radius:10px;padding:10px;")
         self._root.addWidget(self._summary)
 
-        # Eye toggle (OD/OS) — only meaningful when grouped eye_details exist.
+        # Eye toggle (OD/OS)
         toggle_row = QHBoxLayout()
         toggle_row.setSpacing(8)
         self._toggle_row_wrap = QWidget()
@@ -221,11 +246,10 @@ class ScreeningComparisonDialog(QDialog):
         for b in (self._btn_od, self._btn_os):
             toggle_row.addWidget(b)
         toggle_row.addStretch(1)
-        # Wrap toggle row so we can hide it for legacy single-eye records.
         self._toggle_row_wrap.setLayout(toggle_row)
         self._root.addWidget(self._toggle_row_wrap)
 
-        # Scrollable body so nothing is ever cut off (especially in 2×2 Both mode).
+        # Scrollable body
         self._content = QWidget()
         self._content_layout = QVBoxLayout(self._content)
         self._content_layout.setContentsMargins(0, 0, 0, 0)
@@ -234,13 +258,6 @@ class ScreeningComparisonDialog(QDialog):
         self._scroll = QScrollArea()
         self._scroll.setWidgetResizable(True)
         self._scroll.setFrameShape(QFrame.NoFrame)
-        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self._scroll.setStyleSheet(
-            "QScrollArea{background:transparent;border:none;}"
-            "QScrollBar:vertical{background:transparent;width:8px;border-radius:4px;margin:2px;}"
-            "QScrollBar::handle:vertical{background:#d1d5db;border-radius:4px;min-height:20px;}"
-            "QScrollBar::add-line:vertical,QScrollBar::sub-line:vertical{height:0;}"
-        )
         self._scroll.setWidget(self._content)
         self._root.addWidget(self._scroll, 1)
 
@@ -248,32 +265,24 @@ class ScreeningComparisonDialog(QDialog):
         close_btn.clicked.connect(self.accept)
         self._root.addWidget(close_btn, 0, Qt.AlignRight)
 
-        # Resolve per-eye details and default view mode.
-        self._eye_map_prev = self._build_eye_map(self.previous_record)
+        # Resolve maps and default
         self._eye_map_latest = self._build_eye_map(self.latest_record)
-        has_any_eye_details = bool(self._eye_map_prev or self._eye_map_latest)
+        self._eye_map_prev = self._build_eye_map(self.previous_record)
 
-        if not has_any_eye_details:
-            # Legacy single-eye records — keep previous behavior (2 columns).
-            self._toggle_row_wrap.hide()
-            self._render_single(self.previous_record, self.latest_record, eye_label_override=None)
-            return
-
-        # Enable/disable toggle based on what eyes exist in the LATEST compared visit.
-        # Per user request: if previous had 2 eyes but latest has only 1, the other eye should be locked.
+        # Setup toggle enabling
         has_od = "od" in self._eye_map_latest
         has_os = "os" in self._eye_map_latest
         self._btn_od.setEnabled(has_od)
         self._btn_os.setEnabled(has_os)
+        
+        self._active_side = "od" if has_od else ("os" if has_os else "od")
+        self._set_mode(self._active_side)
 
-        # If only one eye exists across both records, keep the UI honest:
-        # show the toggle row but disable the missing eye, and default to the one that exists.
-        # (If somehow neither is detected, fall back to OD.)
-        default_mode = "od" if has_od else ("os" if has_os else "od")
-
-        self._btn_od.clicked.connect(lambda: self._set_mode("od"))
-        self._btn_os.clicked.connect(lambda: self._set_mode("os"))
-        self._set_mode(default_mode)
+    def _on_previous_changed(self, index: int):
+        if index < 0: return
+        self.previous_record = self._prev_selector.itemData(index)
+        self._eye_map_prev = self._build_eye_map(self.previous_record)
+        self._set_mode(self._active_side)
 
     @staticmethod
     def _guess_side(detail: dict) -> str:
@@ -366,6 +375,7 @@ class ScreeningComparisonDialog(QDialog):
                 w.setParent(None)
 
     def _render_mode(self, mode: str) -> None:
+        self._active_side = mode
         self._clear_content()
         side = mode
         prev_eye = self._eye_map_prev.get(side) or {}
@@ -479,7 +489,7 @@ class ScreeningComparisonDialog(QDialog):
             img.setAlignment(Qt.AlignCenter)
             img.setMinimumHeight(170)
             img.setMaximumHeight(220)
-            img.setStyleSheet("background:#0f172a;color:#e2e8f0;border:1px solid #cbd5e1;border-radius:10px;")
+            img.setStyleSheet("background:#f8fafc;color:#94a3b8;border:1px solid #e2e8f0;border-radius:10px;")
             img_path = _resolve_media_path(record.get(path_key))
             if img_path:
                 pixmap = QPixmap(img_path)
@@ -3100,7 +3110,7 @@ class ReportsPage(QWidget):
             QMessageBox.information(self, "Compare Screenings", "At least two screenings are required for comparison.")
             return
 
-        dialog = ScreeningComparisonDialog(ordered[-2], ordered[-1], self)
+        dialog = ScreeningComparisonDialog(ordered, self)
         dialog.exec()
 
     def _export_patient_history(self, timeline_records: list[dict]):

@@ -203,9 +203,8 @@ class PatientTimelineDialog(QWidget):
         # Vital Signs UI was removed; keep an empty mapping so refresh paths stay safe.
         self.vital_rows: dict[str, QLabel] = {}
 
-        self.setStyleSheet("QWidget#PatientOverviewPanel{background:#f1f5f9;}")
         self.setObjectName("PatientOverviewPanel")
-        self.setAutoFillBackground(True)
+        self.setStyleSheet("background-color: #f1f5f9;")
 
         root = QVBoxLayout(self)
         root.setContentsMargins(20, 16, 20, 16)
@@ -518,13 +517,23 @@ class PatientTimelineDialog(QWidget):
             show_history_tab=False,
         )
         shell = QDialog(self)
+        shell.setObjectName("ScreeningPreviewShell")
         shell.setWindowTitle("Screening Preview")
         shell.setModal(True)
+        shell.setStyleSheet("QDialog#ScreeningPreviewShell{background:#f1f5f9;}")
+        
+        # Apply standard dialog styling if available
+        if "apply_dialog_style" in globals() or "apply_dialog_style" in locals():
+            try:
+                apply_dialog_style(shell)
+            except Exception:
+                pass
+
         lay = QVBoxLayout(shell)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.addWidget(dlg)
         dlg.back_requested.connect(shell.accept)
-        shell.resize(860, 760)
+        shell.resize(1000, 800) # Slightly larger for better readability
         shell.exec()
 
     def _build_three_col_page(
@@ -840,21 +849,21 @@ class PatientTimelineDialog(QWidget):
         hdr = QHBoxLayout()
         hdr.setSpacing(6)
         t = QLabel(title)
-        t.setStyleSheet("font-size:10px;color:#9ca3af;font-weight:500;")
+        t.setStyleSheet("font-size:10px;color:#64748b;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;")
         hint = QLabel("Scroll to zoom  ·  Click to expand")
-        hint.setStyleSheet("font-size:9px;color:#d1d5db;font-weight:400;")
+        hint.setStyleSheet("font-size:9px;color:#94a3b8;font-weight:400;")
         hdr.addWidget(t)
         hdr.addStretch(1)
         hdr.addWidget(hint)
         wl.addLayout(hdr)
 
         img = QLabel("No image")
-        img.setFixedHeight(95)
+        img.setFixedHeight(110)
         img.setCursor(Qt.PointingHandCursor)
         img.setAlignment(Qt.AlignCenter)
         img.setStyleSheet(
-            "background:#0d1421;color:#6b7280;border:none;"
-            "border-radius:8px;font-size:11px;font-weight:400;")
+            "background:#f8fafc;color:#94a3b8;border:1px solid #e2e8f0;"
+            "border-radius:10px;font-size:11px;font-weight:400;")
         img.setProperty("_path",  "")
         img.setProperty("_pix",   QPixmap())
         img.setProperty("_zoom",  1.0)
@@ -1374,61 +1383,72 @@ class _ImageViewerDialog(QDialog):
         self._zoom   = 1.0
 
         self.setWindowTitle("Image Viewer")
-        self.resize(900, 640)
-        self.setMinimumSize(600, 440)
-        self.setStyleSheet("QDialog{background:#0b1220;}")
+        self.resize(1000, 750)
+        self.setMinimumSize(700, 500)
+        self.setStyleSheet("QDialog{background:#ffffff;}")
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(14, 14, 14, 14)
-        root.setSpacing(10)
+        root.setContentsMargins(20, 20, 20, 16)
+        root.setSpacing(12)
 
         bar = QHBoxLayout()
-        bar.setSpacing(8)
-        title = QLabel("Image Preview")
-        title.setStyleSheet("color:#e2e8f0;font-size:12px;font-weight:600;")
+        bar.setSpacing(10)
+        title = QLabel("IMAGE INSPECTION")
+        title.setStyleSheet("color:#64748b;font-size:11px;font-weight:800;letter-spacing:1px;")
         bar.addWidget(title)
         bar.addStretch(1)
+        
         self._zoom_lbl = QLabel("100 %")
-        self._zoom_lbl.setStyleSheet("color:#94a3b8;font-size:11px;font-weight:400;")
+        self._zoom_lbl.setStyleSheet("color:#475569;font-size:13px;font-weight:700;margin-right:10px;")
         bar.addWidget(self._zoom_lbl)
 
-        def _btn(t):
+        def _btn(t, primary=False):
             b = QPushButton(t)
             b.setCursor(Qt.PointingHandCursor)
-            b.setFixedHeight(32)
-            b.setStyleSheet(
-                "QPushButton{background:rgba(255,255,255,0.08);border:none;"
-                "border-radius:8px;color:#d1d5db;padding:0 12px;font-size:12px;font-weight:500;}"
-                "QPushButton:hover{background:rgba(255,255,255,0.13);}")
+            b.setFixedHeight(36)
+            if primary:
+                b.setStyleSheet(
+                    "QPushButton{background:#2563eb;border:none;border-radius:10px;color:#ffffff;"
+                    "padding:0 20px;font-size:13px;font-weight:700;}"
+                    "QPushButton:hover{background:#1d4ed8;}")
+            else:
+                b.setStyleSheet(
+                    "QPushButton{background:#f1f5f9;border:1px solid #e2e8f0;border-radius:10px;"
+                    "color:#334155;padding:0 16px;font-size:13px;font-weight:600;}"
+                    "QPushButton:hover{background:#e2e8f0;border-color:#cbd5e1;}")
             return b
 
         self._btn_out   = _btn("−")
         self._btn_in    = _btn("+")
         self._btn_reset = _btn("Reset")
-        self._btn_close = _btn("Close")
+        self._btn_close = _btn("Close", primary=True)
+        
         for b in (self._btn_out, self._btn_in, self._btn_reset, self._btn_close):
             bar.addWidget(b)
         root.addLayout(bar)
 
         self._scroll = QScrollArea()
         self._scroll.setWidgetResizable(False)
+        self._scroll.setAlignment(Qt.AlignCenter)
         self._scroll.setStyleSheet(
-            "QScrollArea{background:transparent;border:none;}"
-            "QScrollBar:vertical{background:rgba(255,255,255,0.05);width:8px;border-radius:4px;}"
-            "QScrollBar::handle:vertical{background:rgba(255,255,255,0.18);border-radius:4px;min-height:20px;}"
-            "QScrollBar:horizontal{background:rgba(255,255,255,0.05);height:8px;border-radius:4px;}"
-            "QScrollBar::handle:horizontal{background:rgba(255,255,255,0.18);border-radius:4px;min-width:20px;}"
+            "QScrollArea{background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;}"
+            "QScrollBar:vertical{background:#f1f5f9;width:10px;border-radius:5px;margin:2px;}"
+            "QScrollBar::handle:vertical{background:#cbd5e1;border-radius:5px;min-height:30px;}"
+            "QScrollBar::handle:vertical:hover{background:#94a3b8;}"
+            "QScrollBar:horizontal{background:#f1f5f9;height:10px;border-radius:5px;margin:2px;}"
+            "QScrollBar::handle:horizontal{background:#cbd5e1;border-radius:5px;min-width:30px;}"
+            "QScrollBar::handle:horizontal:hover{background:#94a3b8;}"
             "QScrollBar::add-line,QScrollBar::sub-line{width:0;height:0;}")
+        
         self._img_lbl = QLabel()
         self._img_lbl.setAlignment(Qt.AlignCenter)
         self._img_lbl.setStyleSheet("background:transparent;")
         self._scroll.setWidget(self._img_lbl)
-        # Mouse-wheel zoom inside the viewer
         self._scroll.wheelEvent = self._on_viewer_wheel
         root.addWidget(self._scroll, 1)
 
-        self._btn_in.clicked.connect(lambda:    self._set_zoom(self._zoom * 1.2))
-        self._btn_out.clicked.connect(lambda:   self._set_zoom(self._zoom / 1.2))
+        self._btn_in.clicked.connect(lambda:    self._set_zoom(self._zoom * 1.25))
+        self._btn_out.clicked.connect(lambda:   self._set_zoom(self._zoom / 1.25))
         self._btn_reset.clicked.connect(lambda: self._set_zoom(1.0))
         self._btn_close.clicked.connect(self.accept)
         self._render()
@@ -1440,16 +1460,47 @@ class _ImageViewerDialog(QDialog):
         event.accept()
 
     def _set_zoom(self, z: float):
-        self._zoom = max(0.10, min(10.0, z))
-        self._render()
+        old_zoom = self._zoom
+        new_zoom = max(0.10, min(10.0, z))
+        if abs(old_zoom - new_zoom) < 1e-5:
+            return
+
+        h_bar = self._scroll.horizontalScrollBar()
+        v_bar = self._scroll.verticalScrollBar()
+
+        view_w = self._scroll.viewport().width()
+        view_h = self._scroll.viewport().height()
+        img_w = self._img_lbl.width() or 1
+        img_h = self._img_lbl.height() or 1
+
+        if h_bar.maximum() > 0:
+            center_x = h_bar.value() + view_w / 2
+        else:
+            center_x = img_w / 2
+
+        if v_bar.maximum() > 0:
+            center_y = v_bar.value() + view_h / 2
+        else:
+            center_y = img_h / 2
+
+        rel_x = center_x / img_w
+        rel_y = center_y / img_h
+
+        self._zoom = new_zoom
+        new_size = self._render()
+        
+        if new_size:
+            new_img_w, new_img_h = new_size.width(), new_size.height()
+            h_bar.setValue(int(rel_x * new_img_w - view_w / 2))
+            v_bar.setValue(int(rel_y * new_img_h - view_h / 2))
 
     def _render(self):
         if self._pixmap.isNull():
-            return
+            return None
         w = max(1, int(self._pixmap.width()  * self._zoom))
         h = max(1, int(self._pixmap.height() * self._zoom))
         scaled = self._pixmap.scaled(w, h, Qt.KeepAspectRatio, Qt.SmoothTransformation)
         self._img_lbl.setPixmap(scaled)
-        # Resize label to the pixmap so scroll bars appear when image is larger than viewport
         self._img_lbl.resize(scaled.width(), scaled.height())
         self._zoom_lbl.setText(f"{int(self._zoom * 100)} %")
+        return scaled.size()

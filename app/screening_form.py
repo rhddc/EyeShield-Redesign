@@ -46,7 +46,7 @@ try:
         CALENDAR_STYLE,
     )
     from .screening_worker import _InferenceWorker
-    from .screening_widgets import ClickableImageLabel
+    from .screening_widgets import ClickableImageLabel, ModernCalendarDateEdit
     from .screening_results import ResultsWindow
     from .logic_improvements import (
         ScreeningFlowGuard,
@@ -69,7 +69,7 @@ except ImportError:
         CALENDAR_STYLE,
     )
     from screening_worker import _InferenceWorker
-    from screening_widgets import ClickableImageLabel
+    from screening_widgets import ClickableImageLabel, ModernCalendarDateEdit
     from screening_results import ResultsWindow
     from logic_improvements import (
         ScreeningFlowGuard,
@@ -249,341 +249,7 @@ class DropZoneLabel(QLabel):
         self.setStyleSheet(self._LOADED if self.has_image() else self._IDLE)
 
 
-class ModernCalendarDateEdit(QDateEdit):
-    """Clean date picker — dropdown arrow only, no separate button panel."""
 
-    def __init__(self, min_date: QDate, max_date: QDate, arrow_icon_path: str, default_date: QDate = None, parent=None):
-        super().__init__(parent)
-        self._min_date = min_date
-        self._max_date = max_date
-        self._default_date = default_date or QDate(2000, 1, 1)
-        self._arrow_icon_path = str(arrow_icon_path or "").replace("\\", "/")
-
-        self.setDisplayFormat("dd/MM/yyyy")
-        self.setCalendarPopup(True)
-        self.setMinimumDate(min_date)
-        self.setMaximumDate(max_date)
-        self.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
-        self.setSpecialValueText(" ")
-        self.setDate(self._min_date)
-
-        cal = QCalendarWidget(self)
-        cal.setGridVisible(False)
-        cal.setVerticalHeaderFormat(QCalendarWidget.VerticalHeaderFormat.NoVerticalHeader)
-        cal.setMinimumSize(410, 320)
-        cal.currentPageChanged.connect(self._sync_year_dropdown)
-        self.setCalendarWidget(cal)
-
-        # Ensure that if the date is blank (min_date), the calendar starts at the default year (e.g. 2000)
-        def _on_cal_show(e):
-            # Let the standard showEvent run first
-            QCalendarWidget.showEvent(cal, e)
-            if self.date() == self.minimumDate():
-                # Use singleShot to jump after the internal QDateEdit sync logic runs
-                QTimer.singleShot(0, lambda: self._sync_to_default_year())
-
-        cal.showEvent = _on_cal_show
-
-        # Build the custom year dropdown once the calendar nav is initialized.
-        QTimer.singleShot(0, self._setup_year_dropdown)
-
-    def _setup_year_dropdown(self):
-        cal = self.calendarWidget()
-        if not cal:
-            return
-
-        nav = cal.findChild(QWidget, "qt_calendar_navigationbar")
-        if not nav:
-            QTimer.singleShot(0, self._setup_year_dropdown)
-            return
-
-        year_spin = nav.findChild(QSpinBox, "qt_calendar_yearedit")
-        if not year_spin:
-            return
-
-        year_combo = nav.findChild(QComboBox, "qt_calendar_yearcombo")
-        if year_combo is None:
-            year_combo = QComboBox(nav)
-            year_combo.setObjectName("qt_calendar_yearcombo")
-            year_combo.setMinimumWidth(92)
-            year_combo.setMaxVisibleItems(12)
-            year_combo.setEditable(False)
-            year_combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
-
-            for year in range(self._min_date.year(), self._max_date.year() + 1):
-                year_combo.addItem(str(year), year)
-
-            year_combo.currentIndexChanged.connect(self._on_year_dropdown_changed)
-
-            nav_layout = nav.layout()
-            if nav_layout is not None:
-                idx = nav_layout.indexOf(year_spin)
-                if idx >= 0:
-                    nav_layout.insertWidget(idx, year_combo)
-                else:
-                    nav_layout.addWidget(year_combo)
-
-        # Hide spinbox so year changes are done from dropdown.
-        year_spin.hide()
-        year_spin.setEnabled(False)
-
-        # Hide the default year text button so only the dropdown is visible.
-        year_button = nav.findChild(QWidget, "qt_calendar_yearbutton")
-        if year_button is not None:
-            year_button.hide()
-            year_button.setEnabled(False)
-        self._sync_year_dropdown()
-
-    def _sync_to_default_year(self):
-        cal = self.calendarWidget()
-        if not cal:
-            return
-        cal.blockSignals(True)
-        cal.setCurrentPage(self._default_date.year(), self._default_date.month())
-        cal.blockSignals(False)
-        self._sync_year_dropdown()
-
-    def _sync_year_dropdown(self, year: int | None = None, _month: int | None = None):
-        cal = self.calendarWidget()
-        if not cal:
-            return
-
-        if year is None:
-            year = cal.yearShown()
-
-        nav = cal.findChild(QWidget, "qt_calendar_navigationbar")
-        if not nav:
-            return
-
-        year_combo = nav.findChild(QComboBox, "qt_calendar_yearcombo")
-        if not year_combo:
-            return
-
-        idx = year_combo.findData(int(year))
-        if idx >= 0 and year_combo.currentIndex() != idx:
-            prev_state = year_combo.blockSignals(True)
-            year_combo.setCurrentIndex(idx)
-            year_combo.blockSignals(prev_state)
-
-    def _on_year_dropdown_changed(self, index: int):
-        cal = self.calendarWidget()
-        if not cal or index < 0:
-            return
-
-        nav = cal.findChild(QWidget, "qt_calendar_navigationbar")
-        if not nav:
-            return
-
-        year_combo = nav.findChild(QComboBox, "qt_calendar_yearcombo")
-        if not year_combo:
-            return
-
-        year = year_combo.itemData(index)
-        if year is None:
-            return
-
-        cal.setCurrentPage(int(year), cal.monthShown())
-
-    def apply_theme(self, dark: bool):
-        if dark:
-            f_bg, f_text, border, focus = "#2b3038", "#d8dee8", "#495160", "#7b92ad"
-            d_bg, d_border = "#343c48", "#596577"
-            c_bg, c_text, c_border = "#262c34", "#d8dee8", "#495160"
-            nav_bg = "#2d3440"
-            sel_bg, sel_fg = "#4f5f75", "#eaf0f7"
-            today, menu_bg = "#8ea3bb", "#2a3038"
-            weekend = "#a6b3c3"
-        else:
-            f_bg, f_text, border, focus = "#ffffff", "#1f2933", "#d7dde6", "#6f8aa6"
-            d_bg, d_border = "#f3f6fa", "#c1ccd9"
-            c_bg, c_text, c_border = "#ffffff", "#1f2933", "#dde4ed"
-            nav_bg = "#f7f9fc"
-            sel_bg, sel_fg = "#dbe5f0", "#1f2933"
-            today, menu_bg = "#8ea6bf", "#ffffff"
-            weekend = "#6b7787"
-
-        arrow = self._arrow_icon_path
-
-        self.setStyleSheet(f"""
-            QDateEdit {{
-                background: {f_bg};
-                color: {f_text};
-                border: 1.5px solid {border};
-                border-radius: 6px;
-                padding: 6px 36px 6px 10px;
-                min-height: 28px;
-                selection-background-color: {focus};
-            }}
-            QDateEdit:focus {{
-                border: 1.5px solid {focus};
-            }}
-            QDateEdit::drop-down {{
-                subcontrol-origin: padding;
-                subcontrol-position: top right;
-                width: 24px;
-                border-left: 1px solid {border};
-                background: {d_bg};
-                border-top-right-radius: 6px;
-                border-bottom-right-radius: 6px;
-            }}
-            QDateEdit::down-arrow {{
-                image: url("{arrow}");
-                width: 10px;
-                height: 10px;
-            }}
-        """)
-
-        cal = self.calendarWidget()
-        if not cal:
-            return
-
-        cal.setStyleSheet(f"""
-            QCalendarWidget {{
-                background: {c_bg};
-                border: 1px solid {c_border};
-                border-radius: 10px;
-            }}
-
-            /* ── Navigation bar ── */
-            QCalendarWidget QWidget#qt_calendar_navigationbar {{
-                background: {nav_bg};
-                border-bottom: 1px solid {c_border};
-                border-top-left-radius: 10px;
-                border-top-right-radius: 10px;
-                padding: 4px 6px;
-            }}
-            QCalendarWidget QToolButton {{
-                color: {c_text};
-                background: transparent;
-                border: none;
-                border-radius: 5px;
-                font-size: 13px;
-                font-weight: 600;
-                padding: 4px 10px;
-            }}
-            QCalendarWidget QToolButton:hover {{
-                background: {d_bg};
-            }}
-
-            /* Hide the forward/back arrow buttons — navigation via month/year dropdowns only */
-            QCalendarWidget QToolButton#qt_calendar_prevmonth,
-            QCalendarWidget QToolButton#qt_calendar_nextmonth {{
-                qproperty-icon: none;
-                font-size: 16px;
-                font-weight: 700;
-                padding: 2px 8px;
-                color: {focus};
-            }}
-            QCalendarWidget QToolButton#qt_calendar_prevmonth::menu-indicator,
-            QCalendarWidget QToolButton#qt_calendar_nextmonth::menu-indicator {{
-                width: 0;
-                height: 0;
-            }}
-
-            /* Month / year dropdowns */
-            QCalendarWidget QToolButton::menu-indicator {{
-                image: url("{arrow}");
-                width: 10px;
-                height: 7px;
-                subcontrol-position: right center;
-                subcontrol-origin: padding;
-                right: 4px;
-            }}
-            QCalendarWidget QMenu {{
-                background: {menu_bg};
-                color: {c_text};
-                border: 1px solid {c_border};
-                border-radius: 6px;
-                padding: 4px;
-            }}
-            QCalendarWidget QMenu::item {{
-                padding: 5px 18px;
-                border-radius: 4px;
-            }}
-            QCalendarWidget QMenu::item:selected {{
-                background: {sel_bg};
-                color: {sel_fg};
-            }}
-            QCalendarWidget QSpinBox {{
-                background: {c_bg};
-                color: {c_text};
-                border: 1px solid {c_border};
-                border-radius: 5px;
-                padding: 2px 6px;
-            }}
-            QCalendarWidget QComboBox#qt_calendar_yearcombo {{
-                background: {c_bg};
-                color: {c_text};
-                border: 1px solid {c_border};
-                border-radius: 5px;
-                padding: 2px 20px 2px 8px;
-                min-width: 76px;
-            }}
-            QCalendarWidget QComboBox#qt_calendar_yearcombo::drop-down {{
-                border: none;
-                width: 18px;
-            }}
-            QCalendarWidget QComboBox#qt_calendar_yearcombo::down-arrow {{
-                image: url("{arrow}");
-                width: 9px;
-                height: 6px;
-            }}
-            QCalendarWidget QComboBox#qt_calendar_yearcombo QAbstractItemView {{
-                background: {menu_bg};
-                color: {c_text};
-                border: 1px solid {c_border};
-                selection-background-color: {sel_bg};
-                selection-color: {sel_fg};
-            }}
-
-            /* ── Day grid ── */
-            QCalendarWidget QAbstractItemView {{
-                background: {c_bg};
-                color: {c_text};
-                selection-background-color: {sel_bg};
-                selection-color: {sel_fg};
-                outline: none;
-                gridline-color: transparent;
-            }}
-            QCalendarWidget QAbstractItemView:disabled {{
-                color: #9ca3af;
-            }}
-            QCalendarWidget QTableView {{
-                alternate-background-color: {c_bg};
-                border: none;
-            }}
-            QCalendarWidget QTableView::item {{
-                border: none;
-                border-radius: 5px;
-                padding: 3px;
-                margin: 1px;
-            }}
-            QCalendarWidget QTableView::item:hover {{
-                background: {d_bg};
-                color: {c_text};
-            }}
-            QCalendarWidget QTableView::item:selected {{
-                background: {sel_bg};
-                color: {sel_fg};
-            }}
-            QCalendarWidget QTableView::item:disabled {{
-                color: #9aa5b1;
-            }}
-            QCalendarWidget QTableView::item:today {{
-                border: none;
-                background: {d_bg};
-                color: {c_text};
-                font-weight: 600;
-                border-radius: 5px;
-            }}
-
-            /* Day-of-week header row */
-            QCalendarWidget QWidget {{
-                alternate-background-color: {c_bg};
-            }}
-        """)
-
-        self._setup_year_dropdown()
 
 
 _REDESIGN_STYLESHEET = """
@@ -666,6 +332,9 @@ class ScreeningPage(QWidget):
         self.min_dob_date = QDate(1900, 1, 1)
         self.max_dob_date = QDate.currentDate()
         self.default_dob_date = QDate(2000, 1, 1)  # Default calendar view year
+        self.min_diagnosis_date = QDate(1900, 1, 1)
+        self.max_diagnosis_date = QDate.currentDate()
+        self.default_diagnosis_date = QDate.currentDate() # Default to today for diagnosis
         self._dob_user_selected = False
         self._dob_programmatic_update = False
         self.last_result_class = "Pending"
@@ -951,15 +620,18 @@ class ScreeningPage(QWidget):
         main_window = self.window()
         return bool(getattr(main_window, "_dark_mode", False)) if main_window is not self else False
 
-    def _apply_dob_theme_style(self):
-        if not hasattr(self, "p_dob"):
-            return
+    def _apply_calendar_themes(self):
         dark = self._is_dark_theme_active()
-        if hasattr(self.p_dob, "apply_theme"):
+        
+        # Apply theme to DOB
+        if hasattr(self, "p_dob") and hasattr(self.p_dob, "apply_theme"):
             self.p_dob.apply_theme(dark)
             self._dob_default_style = self.p_dob.styleSheet()
             self._dob_invalid_style = self._dob_default_style + "QDateEdit{border:1.5px solid #ef4444;}"
-            return
+
+        # Apply theme to Diagnosis Date
+        if hasattr(self, "diabetes_diagnosis_date") and hasattr(self.diabetes_diagnosis_date, "apply_theme"):
+            self.diabetes_diagnosis_date.apply_theme(dark)
 
         # Fallback for non-modern date widgets.
         self._dob_default_style = "QDateEdit{border:1.5px solid #d3dae3;border-radius:6px;}"
@@ -1157,7 +829,7 @@ class ScreeningPage(QWidget):
         if cal is not None:
             cal.clicked.connect(self._on_dob_calendar_selected)
             cal.activated.connect(self._on_dob_calendar_selected)
-        self._apply_dob_theme_style()
+        self._apply_calendar_themes()
         c1.addLayout(
             row3(
                 field("First Name", self.p_first_name, "scr_label_name"),
@@ -1347,10 +1019,13 @@ class ScreeningPage(QWidget):
         self.p_sex.currentTextChanged.connect(self._update_diabetes_options)
         # Trigger initial update in case sex is already selected (e.g. from EMR)
         self._update_diabetes_options(self.p_sex.currentText())
-        self.diabetes_diagnosis_date = QLineEdit()
-        self.diabetes_diagnosis_date.setPlaceholderText("dd/mm/yyyy")
-        self.diabetes_diagnosis_date.setMaxLength(10)
-        self.diabetes_diagnosis_date.textChanged.connect(self._on_diagnosis_date_changed)
+        self.diabetes_diagnosis_date = ModernCalendarDateEdit(
+            self.min_diagnosis_date,
+            self.max_diagnosis_date,
+            dob_arrow_icon,
+            self.default_diagnosis_date
+        )
+        self.diabetes_diagnosis_date.dateChanged.connect(self._on_diagnosis_date_changed)
         c2.addLayout(row2(field("Diabetes Type", self.diabetes_type, "scr_label_diabetes"), field("Diagnosis Date", self.diabetes_diagnosis_date)))
 
         self.diabetes_duration = DurationSpinBox()
@@ -1652,8 +1327,9 @@ class ScreeningPage(QWidget):
             missing.append("Address")
             
         # Clinical variables are no longer strictly mandatory for patients without diabetes.
-        if hasattr(self, "diabetes_diagnosis_date") and self.diabetes_diagnosis_date.isEnabled():
-            if self.diabetes_diagnosis_date.text().strip() and not self._get_diagnosis_date().isValid():
+        if self.diabetes_diagnosis_date.isEnabled():
+            d = self._get_diagnosis_date()
+            if d.isValid() and d > QDate.currentDate():
                 missing.append("Valid Diabetes Diagnosis Date")
             
         if missing:
@@ -1734,7 +1410,7 @@ class ScreeningPage(QWidget):
             "diabetes_type": dm_type or None,
             "dm_duration_years": dm_duration,
             "hba1c": hba1c_val,
-            "diabetes_diagnosis_date": (self.diabetes_diagnosis_date.text().strip() if hasattr(self, "diabetes_diagnosis_date") else "") or None,
+            "diabetes_diagnosis_date": self._get_diagnosis_date().toString("dd/MM/yyyy") if self._get_diagnosis_date().isValid() else None,
             "treatment_regimen": (self.treatment_regimen.currentText().strip() if hasattr(self, "treatment_regimen") else "") or None,
             "prev_dr_stage": (self.prev_dr_stage.currentText().strip() if hasattr(self, "prev_dr_stage") else "") or None,
             "prev_treatment": "Yes" if bool(getattr(getattr(self, "prev_treatment", None), "isChecked", lambda: False)()) else "No",
@@ -2127,25 +1803,13 @@ class ScreeningPage(QWidget):
         self._dob_user_selected = bool(date.isValid() and date != self.min_dob_date)
         self.update_age_from_dob(self.p_dob.date())
 
-    def _on_diagnosis_date_changed(self, text):
-        """Format diagnosis date input and auto-calculate duration."""
-        digits = "".join(ch for ch in text if ch.isdigit())[:8]
+    def _on_diagnosis_date_changed(self, date: QDate):
+        """Auto-calculate duration from diagnosis date."""
+        self._update_duration_from_diagnosis_date()
 
-        if len(digits) <= 2:
-            formatted = digits
-        elif len(digits) <= 4:
-            formatted = f"{digits[:2]}/{digits[2:]}"
-        else:
-            formatted = f"{digits[:2]}/{digits[2:4]}/{digits[4:]}"
-
-        if formatted != text:
-            self.diabetes_diagnosis_date.blockSignals(True)
-            self.diabetes_diagnosis_date.setText(formatted)
-            self.diabetes_diagnosis_date.blockSignals(False)
-            self.diabetes_diagnosis_date.setCursorPosition(len(formatted))
-
-        # Validate and style
-        self._update_diagnosis_date_style(digits)
+    def _update_diagnosis_date_style(self, digits):
+        """No longer needed for QDateEdit."""
+        pass
 
         # Auto-calculate duration
         self._update_duration_from_diagnosis_date()
@@ -2197,19 +1861,10 @@ class ScreeningPage(QWidget):
 
     def _get_diagnosis_date(self):
         """Parse and validate diagnosis date from text field."""
-        date = QDate.fromString(self.diabetes_diagnosis_date.text().strip(), "dd/MM/yyyy")
-
-        if not date.isValid():
+        d = self.diabetes_diagnosis_date.date()
+        if d == self.min_diagnosis_date:
             return QDate()
-        if date < QDate(1900, 1, 1) or date > QDate.currentDate():
-            return QDate()
-
-        # Check if diagnosis date is after birth date
-        dob_date = self._get_dob_date()
-        if dob_date.isValid() and date < dob_date:
-            return QDate()
-
-        return date
+        return d
 
     def _update_duration_from_diagnosis_date(self):
         """Auto-calculate diabetes duration from diagnosis date."""
@@ -2568,7 +2223,11 @@ class ScreeningPage(QWidget):
 
         diag_date = str(emr_patient.get("diabetes_diagnosis_date") or "").strip()
         if diag_date and hasattr(self, "diabetes_diagnosis_date"):
-            self.diabetes_diagnosis_date.setText(diag_date)
+            qd = QDate.fromString(str(diag_date or ""), "dd/MM/yyyy")
+            if qd.isValid():
+                self.diabetes_diagnosis_date.setDate(qd)
+            else:
+                self.diabetes_diagnosis_date.setDate(self.min_diagnosis_date)
 
         regimen = str(emr_patient.get("treatment_regimen") or "").strip()
         if regimen and hasattr(self, "treatment_regimen"):
@@ -3163,7 +2822,11 @@ class ScreeningPage(QWidget):
                     self.prev_dr_stage.setCurrentIndex(0)
                 
                 # Diagnosis Date
-                self.diabetes_diagnosis_date.setText(str(diag_date or ""))
+                qd = QDate.fromString(str(diag_date or ""), "dd/MM/yyyy")
+                if qd.isValid():
+                    self.diabetes_diagnosis_date.setDate(qd)
+                else:
+                    self.diabetes_diagnosis_date.setDate(self.min_diagnosis_date)
 
             except Exception as e:
                 write_activity("WARNING", "LOAD_RESCREEN_MAPPING_PARTIAL", f"Error mapping clinical fields: {str(e)}")
@@ -3761,7 +3424,7 @@ class ScreeningPage(QWidget):
             "address": self.p_address.text().strip() if hasattr(self, "p_address") else "",
             "eye": self.p_eye.currentText(),
             "diabetes_type": self.diabetes_type.currentText(),
-            "diagnosis_date": self.diabetes_diagnosis_date.text().strip() if hasattr(self, "diabetes_diagnosis_date") else "",
+            "diagnosis_date": self._get_diagnosis_date().toString("dd/MM/yyyy") if self._get_diagnosis_date().isValid() else "",
             "duration": self.diabetes_duration.value(),
             "hba1c": 0.0,
             "prev_treatment": prev_treatment_checked,
@@ -3853,7 +3516,11 @@ class ScreeningPage(QWidget):
         self.p_eye.setCurrentText(str(data.get("eye") or ""))
         self.diabetes_type.setCurrentText(str(data.get("diabetes_type") or "Select"))
         if hasattr(self, "diabetes_diagnosis_date"):
-            self.diabetes_diagnosis_date.setText(str(data.get("diagnosis_date") or ""))
+            qd = QDate.fromString(str(data.get("diagnosis_date") or ""), "dd/MM/yyyy")
+            if qd.isValid():
+                self.diabetes_diagnosis_date.setDate(qd)
+            else:
+                self.diabetes_diagnosis_date.setDate(self.min_diagnosis_date)
         self.diabetes_duration.setValue(int(data.get("duration") or 0))
         # HbA1c removed from UI.
         if hasattr(self, "prev_treatment"):
@@ -4185,7 +3852,7 @@ class ScreeningPage(QWidget):
                 "diabetes_type": (self.diabetes_type.currentText().strip() if hasattr(self, "diabetes_type") else "") or None,
                 "dm_duration_years": float(self.diabetes_duration.value()) if hasattr(self, "diabetes_duration") and self.diabetes_duration.value() > 0 else None,
                 "hba1c": None,
-                "diabetes_diagnosis_date": (self.diabetes_diagnosis_date.text().strip() if hasattr(self, "diabetes_diagnosis_date") else "") or None,
+            "diabetes_diagnosis_date": self._get_diagnosis_date().toString("dd/MM/yyyy") if self._get_diagnosis_date().isValid() else None,
                 "treatment_regimen": (self.treatment_regimen.currentText().strip() if hasattr(self, "treatment_regimen") else "") or None,
             "prev_dr_stage": (self.clinical_prev_dr_stage.currentText().strip() if hasattr(self, "clinical_prev_dr_stage") else "") or None,
 
@@ -4810,10 +4477,10 @@ class ScreeningPage(QWidget):
 
     def showEvent(self, event):
         super().showEvent(event)
-        self._apply_dob_theme_style()
+        self._apply_calendar_themes()
 
     def apply_theme(self, _theme: str):
-        self._apply_dob_theme_style()
+        self._apply_calendar_themes()
 
     def apply_language(self, language: str):
         from translations import get_pack

@@ -32,12 +32,14 @@ from PySide6.QtGui import QPixmap, QTextCursor
 
 try:
     from .screening_form import ScreeningPage
+    from .screening_widgets import ModernCalendarDateEdit
     from .ui_feedback import show_warning, apply_dialog_style
     from . import emr_service as emr
     from .auth import UserManager
     from .trusted_hospitals import ReferralHospitalDialog
 except (ImportError, ValueError):
     from screening_form import ScreeningPage
+    from screening_widgets import ModernCalendarDateEdit
     from ui_feedback import show_warning, apply_dialog_style
     import emr_service as emr
     from auth import UserManager
@@ -791,11 +793,28 @@ class DoctorDiagnosisForm(QWidget):
 
         form.addRow("DM duration (years)", in_dm_dur)
 
-        in_diagnosis_date = QLineEdit(
-            str(getattr(getattr(self.screening, "diabetes_diagnosis_date", None), "text", lambda: "")() or "")
+        arrow_path = os.path.join(os.path.dirname(__file__), "icons", "dropdown_arrow.svg")
+        in_diagnosis_date = ModernCalendarDateEdit(
+            QDate(1900, 1, 1),
+            QDate.currentDate(),
+            arrow_path,
+            QDate.currentDate()
         )
-        in_diagnosis_date.setPlaceholderText("dd/mm/yyyy")
-        in_diagnosis_date.textChanged.connect(
+        
+        # Initialize with current value
+        init_diag = QDate()
+        if hasattr(self.screening, "_get_diagnosis_date"):
+            init_diag = self.screening._get_diagnosis_date()
+        
+        if init_diag.isValid():
+            in_diagnosis_date.setDate(init_diag)
+        else:
+            in_diagnosis_date.setDate(QDate.currentDate())
+        
+        # Ensure it's light themed
+        in_diagnosis_date.apply_theme(False)
+
+        in_diagnosis_date.dateChanged.connect(
             lambda: self._update_duration_from_diagnosis_date_in_dialog(in_diagnosis_date, in_dm_dur)
         )
 
@@ -881,7 +900,7 @@ class DoctorDiagnosisForm(QWidget):
                                                 if in_dm_type.currentText().strip() != "Select" else None),
                     "dm_duration_years":        float(in_dm_dur.value()) if in_dm_dur.value() > 0 else None,
                     "hba1c":                    None,
-                    "diabetes_diagnosis_date":  in_diagnosis_date.text().strip() or None,
+                    "diabetes_diagnosis_date":  in_diagnosis_date.date().toString("dd/MM/yyyy") if in_diagnosis_date.date() != QDate(1900, 1, 1) else None,
                     "treatment_regimen":        in_treatment_regimen.currentText().strip() or None,
                     "prev_dr_stage":            in_prev_dr_stage.currentText().strip() or None,
                     "prev_treatment":           "Yes" if in_prev_treatment.isChecked() else "No",
@@ -897,7 +916,7 @@ class DoctorDiagnosisForm(QWidget):
                 {
                     "diabetes_type":    in_dm_type.currentText().strip(),
                     "dm_duration_years":in_dm_dur.value(),
-                    "diagnosis_date":   in_diagnosis_date.text().strip(),
+                    "diagnosis_date":   in_diagnosis_date.date().toString("dd/MM/yyyy") if in_diagnosis_date.date() != QDate(1900, 1, 1) else "",
                     "treatment_regimen":in_treatment_regimen.currentText().strip(),
                     "prev_dr_stage":    in_prev_dr_stage.currentText().strip(),
                     "prev_treatment":   in_prev_treatment.isChecked(),
@@ -912,10 +931,10 @@ class DoctorDiagnosisForm(QWidget):
 
     @staticmethod
     def _update_duration_from_diagnosis_date_in_dialog(
-        diag_date_edit: QLineEdit, duration_spin: QSpinBox
+        diag_date_edit: QDateEdit, duration_spin: QSpinBox
     ) -> None:
         """Auto-calculate and set duration from diagnosis date in edit dialog."""
-        diag_date = QDate.fromString(str(diag_date_edit.text().strip()), "dd/MM/yyyy")
+        diag_date = diag_date_edit.date()
         if not diag_date.isValid():
             return
         today = QDate.currentDate()

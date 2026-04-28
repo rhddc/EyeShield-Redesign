@@ -3,10 +3,282 @@ Custom widgets for the screening module.
 """
 
 from PySide6.QtWidgets import (
-    QLabel, QPushButton, QVBoxLayout, QHBoxLayout, QGridLayout, QDialog, QScrollArea, QStyle
+    QLabel, QPushButton, QVBoxLayout, QHBoxLayout, QGridLayout, QDialog, QScrollArea, QStyle,
+    QDateEdit, QCalendarWidget, QAbstractSpinBox, QSpinBox, QComboBox, QWidget
 )
-from PySide6.QtGui import QPixmap, QPainter, QPen, QColor
-from PySide6.QtCore import Qt, QSize, QEvent
+from PySide6.QtGui import QPixmap, QPainter, QPen, QColor, QTextCharFormat
+from PySide6.QtCore import Qt, QSize, QEvent, QDate, QTimer
+
+
+class ModernCalendarDateEdit(QDateEdit):
+    """Clean date picker — dropdown arrow only, no separate button panel."""
+
+    def __init__(self, min_date: QDate, max_date: QDate, arrow_icon_path: str, default_date: QDate = None, parent=None):
+        super().__init__(parent)
+        self._min_date = min_date
+        self._max_date = max_date
+        self._default_date = default_date or QDate(2000, 1, 1)
+        self._arrow_icon_path = str(arrow_icon_path or "").replace("\\", "/")
+
+        self.setDisplayFormat("dd/MM/yyyy")
+        self.setCalendarPopup(True)
+        self.setMinimumDate(min_date)
+        self.setMaximumDate(max_date)
+        self.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
+        self.setSpecialValueText(" ")
+        self.setDate(self._min_date)
+
+        cal = QCalendarWidget(self)
+        cal.setGridVisible(False)
+        cal.setVerticalHeaderFormat(QCalendarWidget.VerticalHeaderFormat.NoVerticalHeader)
+        cal.setMinimumSize(410, 320)
+        cal.currentPageChanged.connect(self._sync_year_dropdown)
+        self.setCalendarWidget(cal)
+
+        def _on_cal_show(e):
+            QCalendarWidget.showEvent(cal, e)
+            if self.date() == self.minimumDate():
+                QTimer.singleShot(0, lambda: self._sync_to_default_year())
+
+        cal.showEvent = _on_cal_show
+        QTimer.singleShot(0, self._setup_year_dropdown)
+        self.apply_theme(False)
+
+    def _setup_year_dropdown(self):
+        cal = self.calendarWidget()
+        if not cal:
+            return
+
+        nav = cal.findChild(QWidget, "qt_calendar_navigationbar")
+        if not nav:
+            QTimer.singleShot(0, self._setup_year_dropdown)
+            return
+
+        year_spin = nav.findChild(QSpinBox, "qt_calendar_yearedit")
+        if not year_spin:
+            return
+
+        year_combo = nav.findChild(QComboBox, "qt_calendar_yearcombo")
+        if year_combo is None:
+            year_combo = QComboBox(nav)
+            year_combo.setObjectName("qt_calendar_yearcombo")
+            year_combo.setMinimumWidth(92)
+            year_combo.setMaxVisibleItems(12)
+            year_combo.setEditable(False)
+            year_combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+
+            for year in range(self._min_date.year(), self._max_date.year() + 1):
+                year_combo.addItem(str(year), year)
+
+            year_combo.currentIndexChanged.connect(self._on_year_dropdown_changed)
+
+            nav_layout = nav.layout()
+            if nav_layout is not None:
+                idx = nav_layout.indexOf(year_spin)
+                if idx >= 0:
+                    nav_layout.insertWidget(idx, year_combo)
+                else:
+                    nav_layout.addWidget(year_combo)
+
+        year_spin.hide()
+        year_spin.setEnabled(False)
+        year_button = nav.findChild(QWidget, "qt_calendar_yearbutton")
+        if year_button is not None:
+            year_button.hide()
+            year_button.setEnabled(False)
+        self._sync_year_dropdown()
+
+    def _sync_to_default_year(self):
+        cal = self.calendarWidget()
+        if not cal:
+            return
+        cal.blockSignals(True)
+        cal.setCurrentPage(self._default_date.year(), self._default_date.month())
+        cal.blockSignals(False)
+        self._sync_year_dropdown()
+
+    def _sync_year_dropdown(self, year: int | None = None, _month: int | None = None):
+        cal = self.calendarWidget()
+        if not cal:
+            return
+        if year is None:
+            year = cal.yearShown()
+
+        nav = cal.findChild(QWidget, "qt_calendar_navigationbar")
+        if not nav:
+            return
+
+        year_combo = nav.findChild(QComboBox, "qt_calendar_yearcombo")
+        if not year_combo:
+            return
+
+        idx = year_combo.findData(int(year))
+        if idx >= 0 and year_combo.currentIndex() != idx:
+            prev_state = year_combo.blockSignals(True)
+            year_combo.setCurrentIndex(idx)
+            year_combo.blockSignals(prev_state)
+
+    def _on_year_dropdown_changed(self, index: int):
+        cal = self.calendarWidget()
+        if not cal or index < 0:
+            return
+        nav = cal.findChild(QWidget, "qt_calendar_navigationbar")
+        if not nav:
+            return
+        year_combo = nav.findChild(QComboBox, "qt_calendar_yearcombo")
+        if not year_combo:
+            return
+        year = year_combo.itemData(index)
+        if year is None:
+            return
+        cal.setCurrentPage(int(year), cal.monthShown())
+
+    def apply_theme(self, dark: bool):
+        if dark:
+            f_bg, f_text, border, focus = "#2b3038", "#d8dee8", "#495160", "#7b92ad"
+            d_bg, d_border = "#343c48", "#596577"
+            c_bg, c_text, c_border = "#262c34", "#d8dee8", "#495160"
+            nav_bg = "#2d3440"
+            sel_bg, sel_fg = "#4f5f75", "#eaf0f7"
+            today, menu_bg = "#8ea3bb", "#2a3038"
+            weekend_col = "#a6b3c3"
+        else:
+            f_bg, f_text, border, focus = "#ffffff", "#1f2933", "#d7dde6", "#6f8aa6"
+            d_bg, d_border = "#f3f6fa", "#c1ccd9"
+            c_bg, c_text, c_border = "#ffffff", "#1f2933", "#dde4ed"
+            nav_bg = "#f7f9fc"
+            sel_bg, sel_fg = "#dbe5f0", "#1f2933"
+            today, menu_bg = "#8ea6bf", "#ffffff"
+            weekend_col = "#6b7787"
+
+        arrow = self._arrow_icon_path
+
+        self.setStyleSheet(f"""
+            QDateEdit {{
+                background: {f_bg};
+                color: {f_text};
+                border: 1.5px solid {border};
+                border-radius: 6px;
+                padding: 6px 36px 6px 10px;
+                min-height: 28px;
+                selection-background-color: {focus};
+            }}
+            QDateEdit:focus {{
+                border: 1.5px solid {focus};
+            }}
+            QDateEdit::drop-down {{
+                subcontrol-origin: padding;
+                subcontrol-position: top right;
+                width: 24px;
+                border-left: 1px solid {border};
+                background: {d_bg};
+                border-top-right-radius: 6px;
+                border-bottom-right-radius: 6px;
+            }}
+            QDateEdit::down-arrow {{
+                image: url("{arrow}");
+                width: 10px;
+                height: 10px;
+            }}
+        """)
+
+        cal = self.calendarWidget()
+        if not cal:
+            return
+
+        weekend_fmt = QTextCharFormat()
+        weekend_fmt.setForeground(QColor(weekend_col))
+        cal.setWeekdayTextFormat(Qt.DayOfWeek.Saturday, weekend_fmt)
+        cal.setWeekdayTextFormat(Qt.DayOfWeek.Sunday, weekend_fmt)
+
+        cal.setStyleSheet(f"""
+            QCalendarWidget {{
+                background: {c_bg};
+                border: 1px solid {c_border};
+                border-radius: 10px;
+            }}
+            QCalendarWidget QWidget#qt_calendar_navigationbar {{
+                background: {nav_bg};
+                border-bottom: 1px solid {c_border};
+                border-top-left-radius: 10px;
+                border-top-right-radius: 10px;
+                padding: 4px 6px;
+            }}
+            QCalendarWidget QToolButton {{
+                color: {c_text};
+                background: transparent;
+                border: none;
+                border-radius: 5px;
+                font-size: 13px;
+                font-weight: 600;
+                padding: 4px 10px;
+            }}
+            QCalendarWidget QToolButton:hover {{
+                background: {d_bg};
+            }}
+            QCalendarWidget QToolButton#qt_calendar_prevmonth,
+            QCalendarWidget QToolButton#qt_calendar_nextmonth {{
+                qproperty-icon: none;
+                font-size: 16px;
+                font-weight: 700;
+                padding: 2px 8px;
+                color: {focus};
+            }}
+            QCalendarWidget QMenu {{
+                background: {menu_bg};
+                color: {c_text};
+                border: 1px solid {c_border};
+                border-radius: 6px;
+                padding: 4px;
+            }}
+            QCalendarWidget QMenu::item:selected {{
+                background: {sel_bg};
+                color: {sel_fg};
+            }}
+            QCalendarWidget QSpinBox {{
+                background: {c_bg};
+                color: {c_text};
+                border: 1px solid {c_border};
+                border-radius: 5px;
+                padding: 2px 6px;
+            }}
+            QCalendarWidget QComboBox#qt_calendar_yearcombo {{
+                background: {c_bg};
+                color: {c_text};
+                border: 1px solid {c_border};
+                border-radius: 5px;
+                padding: 2px 20px 2px 8px;
+                min-width: 76px;
+            }}
+            QCalendarWidget QComboBox#qt_calendar_yearcombo::drop-down {{
+                border: none;
+                width: 18px;
+            }}
+            QCalendarWidget QComboBox#qt_calendar_yearcombo::down-arrow {{
+                image: url("{arrow}");
+                width: 9px;
+                height: 6px;
+            }}
+            QCalendarWidget QComboBox#qt_calendar_yearcombo QAbstractItemView {{
+                background: {menu_bg};
+                color: {c_text};
+                border: 1px solid {c_border};
+                selection-background-color: {sel_bg};
+                selection-color: {sel_fg};
+            }}
+            QCalendarWidget QAbstractItemView {{
+                background: {c_bg};
+                color: {c_text};
+                selection-background-color: {sel_bg};
+                selection-color: {sel_fg};
+                outline: none;
+                gridline-color: transparent;
+            }}
+            QCalendarWidget QAbstractItemView:disabled {{
+                color: #9ca3af;
+            }}
+        """)
+
 
 
 # ── Pen annotation colour palette ─────────────────────────────────────────────
@@ -117,7 +389,7 @@ class DrawableZoomLabel(QLabel):
 
 
 class ImageZoomDialog(QDialog):
-    ZOOM_STEP = 1.2
+    ZOOM_STEP = 1.25
 
     def __init__(self, pixmap, title, parent=None):
         super().__init__(parent)
@@ -125,82 +397,98 @@ class ImageZoomDialog(QDialog):
         self.zoom_factor = 1.0
 
         self.setWindowTitle(title)
-        self.resize(1100, 800)
+        self.resize(1100, 850)
+        self.setStyleSheet("QDialog{background:#ffffff;}")
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(14, 14, 14, 14)
-        layout.setSpacing(10)
+        layout.setContentsMargins(20, 20, 20, 16)
+        layout.setSpacing(12)
 
-        toolbar_grid = QGridLayout()
-        toolbar_grid.setHorizontalSpacing(12)
-        toolbar_grid.setVerticalSpacing(6)
+        toolbar_container = QFrame()
+        toolbar_container.setStyleSheet("QFrame{background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;}")
+        toolbar_layout = QVBoxLayout(toolbar_container)
+        toolbar_layout.setContentsMargins(16, 12, 16, 12)
+        toolbar_layout.setSpacing(10)
 
-        tools_label = QLabel("Tools")
-        tools_label.setStyleSheet("font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;")
-        toolbar_grid.addWidget(tools_label, 0, 0)
+        top_bar = QHBoxLayout()
+        tools_label = QLabel("DIAGNOSTIC TOOLS")
+        tools_label.setStyleSheet("font-size:11px;font-weight:800;color:#64748b;letter-spacing:1px;")
+        top_bar.addWidget(tools_label)
+        top_bar.addStretch(1)
+        
+        self.zoom_label = QLabel("100%")
+        self.zoom_label.setStyleSheet("font-size:13px;font-weight:700;color:#1e293b;")
+        top_bar.addWidget(self.zoom_label)
+        toolbar_layout.addLayout(top_bar)
 
-        colors_label = QLabel("Colors")
-        colors_label.setStyleSheet("font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;")
-        toolbar_grid.addWidget(colors_label, 0, 1)
+        controls_row = QHBoxLayout()
+        controls_row.setSpacing(10)
 
-        tools_row = QHBoxLayout()
-        tools_row.setSpacing(8)
-        magnify_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogContentsView)
+        def _tool_btn(text, icon_pix=None, primary=False):
+            btn = QPushButton(text)
+            btn.setCursor(Qt.PointingHandCursor)
+            btn.setFixedHeight(36)
+            if primary:
+                btn.setStyleSheet(
+                    "QPushButton{background:#2563eb;border:none;border-radius:10px;color:#ffffff;"
+                    "padding:0 20px;font-size:13px;font-weight:700;}"
+                    "QPushButton:hover{background:#1d4ed8;}")
+            else:
+                btn.setStyleSheet(
+                    "QPushButton{background:#ffffff;border:1px solid #e2e8f0;border-radius:10px;"
+                    "color:#334155;padding:0 16px;font-size:13px;font-weight:600;}"
+                    "QPushButton:hover{background:#f1f5f9;border-color:#cbd5e1;}")
+            if icon_pix:
+                btn.setIcon(self.style().standardIcon(icon_pix))
+            return btn
 
-        zoom_in_btn = QPushButton("Zoom +")
-        zoom_in_btn.setIcon(magnify_icon)
-        zoom_in_btn.setIconSize(QSize(16, 16))
-        zoom_in_btn.setToolTip("Magnifying zoom in")
-        zoom_in_btn.setMinimumHeight(34)
-        zoom_in_btn.clicked.connect(self.zoom_in)
-        tools_row.addWidget(zoom_in_btn)
+        self.btn_in = _tool_btn("Zoom +", QStyle.StandardPixmap.SP_FileDialogContentsView)
+        self.btn_out = _tool_btn("Zoom -", QStyle.StandardPixmap.SP_FileDialogContentsView)
+        self.btn_reset = _tool_btn("Reset")
+        
+        controls_row.addWidget(self.btn_in)
+        controls_row.addWidget(self.btn_out)
+        controls_row.addWidget(self.btn_reset)
+        controls_row.addSpacing(10)
 
-        zoom_out_btn = QPushButton("Zoom -")
-        zoom_out_btn.setIcon(magnify_icon)
-        zoom_out_btn.setIconSize(QSize(16, 16))
-        zoom_out_btn.setToolTip("Magnifying zoom out")
-        zoom_out_btn.setMinimumHeight(34)
-        zoom_out_btn.clicked.connect(self.zoom_out)
-        tools_row.addWidget(zoom_out_btn)
-        tools_row.addStretch(1)
-        toolbar_grid.addLayout(tools_row, 1, 0)
-
-        colors_row = QHBoxLayout()
-        colors_row.setSpacing(8)
+        # Color swatches for annotation
+        swatch_layout = QHBoxLayout()
+        swatch_layout.setSpacing(8)
         self._swatches = []
         for _hex, _name in _PEN_COLORS:
-            _sw = QPushButton()
-            _sw.setFixedSize(24, 24)
-            _sw.setToolTip(_name)
-            _border = "3px solid #0d6efd" if _hex == _PEN_COLORS[0][0] else "2px solid #adb5bd"
-            _sw.setStyleSheet(f"background:{_hex};border-radius:12px;border:{_border};")
-            _sw.clicked.connect(lambda checked=False, h=_hex: self._set_pen_color(h))
-            colors_row.addWidget(_sw)
-            self._swatches.append((_sw, _hex))
-        clear_draw_btn = QPushButton("Clear")
-        clear_draw_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogDiscardButton))
-        clear_draw_btn.setIconSize(QSize(16, 16))
-        clear_draw_btn.setToolTip("Clear drawings")
-        clear_draw_btn.setMinimumHeight(34)
-        clear_draw_btn.clicked.connect(self.clear_drawings)
-        colors_row.addWidget(clear_draw_btn)
-        colors_row.addStretch(1)
-        toolbar_grid.addLayout(colors_row, 1, 1)
-
-        close_btn = QPushButton("Close")
-        close_btn.setMinimumHeight(34)
-        close_btn.clicked.connect(self.accept)
-        toolbar_grid.addWidget(close_btn, 1, 2)
-
-        toolbar_grid.setColumnStretch(0, 3)
-        toolbar_grid.setColumnStretch(1, 3)
-        toolbar_grid.setColumnStretch(2, 1)
-
-        layout.addLayout(toolbar_grid)
+            sw = QPushButton()
+            sw.setFixedSize(28, 28)
+            sw.setCursor(Qt.PointingHandCursor)
+            sw.setToolTip(f"Annotate in {_name}")
+            border = "3px solid #2563eb" if _hex == _PEN_COLORS[0][0] else "2px solid #cbd5e1"
+            sw.setStyleSheet(f"background:{_hex};border-radius:14px;border:{border};")
+            sw.clicked.connect(lambda checked=False, h=_hex: self._set_pen_color(h))
+            swatch_layout.addWidget(sw)
+            self._swatches.append((sw, _hex))
+        
+        controls_row.addLayout(swatch_layout)
+        
+        self.btn_clear = _tool_btn("Clear", QStyle.StandardPixmap.SP_DialogDiscardButton)
+        controls_row.addWidget(self.btn_clear)
+        
+        controls_row.addStretch(1)
+        
+        self.btn_close = _tool_btn("Close", primary=True)
+        controls_row.addWidget(self.btn_close)
+        
+        toolbar_layout.addLayout(controls_row)
+        layout.addWidget(toolbar_container)
 
         self.scroll_area = QScrollArea()
         self.scroll_area.setWidgetResizable(False)
-        self.scroll_area.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.scroll_area.setAlignment(Qt.AlignCenter)
+        self.scroll_area.setStyleSheet(
+            "QScrollArea{background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;}"
+            "QScrollBar:vertical{background:#f1f5f9;width:10px;border-radius:5px;margin:2px;}"
+            "QScrollBar::handle:vertical{background:#cbd5e1;border-radius:5px;min-height:30px;}"
+            "QScrollBar:horizontal{background:#f1f5f9;height:10px;border-radius:5px;margin:2px;}"
+            "QScrollBar::handle:horizontal{background:#cbd5e1;border-radius:5px;min-width:30px;}"
+            "QScrollBar::add-line,QScrollBar::sub-line{width:0;height:0;}")
         layout.addWidget(self.scroll_area, 1)
 
         self.image_label = DrawableZoomLabel()
@@ -208,6 +496,13 @@ class ImageZoomDialog(QDialog):
         self.scroll_area.viewport().installEventFilter(self)
         self.image_label.installEventFilter(self)
         self.image_label.set_base_pixmap(self.original_pixmap)
+
+        # Connections
+        self.btn_in.clicked.connect(self.zoom_in)
+        self.btn_out.clicked.connect(self.zoom_out)
+        self.btn_reset.clicked.connect(self.reset_zoom)
+        self.btn_clear.clicked.connect(self.clear_drawings)
+        self.btn_close.clicked.connect(self.accept)
 
         self._update_preview()
 
@@ -223,20 +518,55 @@ class ImageZoomDialog(QDialog):
     def _update_preview(self):
         if self.original_pixmap.isNull():
             self.image_label.setPixmap(QPixmap())
-            return
+            return None
         self.image_label.set_zoom_factor(self.zoom_factor)
+        self.zoom_label.setText(f"{int(self.zoom_factor * 100)}%")
+        return self.image_label.pixmap().size()
+
+    def _set_zoom_centered(self, new_factor):
+        old_factor = self.zoom_factor
+        if abs(old_factor - new_factor) < 1e-5:
+            return
+            
+        h_bar = self.scroll_area.horizontalScrollBar()
+        v_bar = self.scroll_area.verticalScrollBar()
+        
+        view_w = self.scroll_area.viewport().width()
+        view_h = self.scroll_area.viewport().height()
+        img_w = self.image_label.width() or 1
+        img_h = self.image_label.height() or 1
+        
+        # Point in image coordinates that is currently at the center of the viewport
+        if h_bar.maximum() > 0:
+            center_x = h_bar.value() + view_w / 2
+        else:
+            center_x = img_w / 2
+
+        if v_bar.maximum() > 0:
+            center_y = v_bar.value() + view_h / 2
+        else:
+            center_y = img_h / 2
+
+        rel_x = center_x / img_w
+        rel_y = center_y / img_h
+        
+        self.zoom_factor = new_factor
+        new_size = self._update_preview()
+        
+        # Adjust scrollbars
+        if new_size:
+            new_img_w, new_img_h = new_size.width(), new_size.height()
+            h_bar.setValue(int(rel_x * new_img_w - view_w / 2))
+            v_bar.setValue(int(rel_y * new_img_h - view_h / 2))
 
     def zoom_in(self):
-        self.zoom_factor = min(5.0, self.zoom_factor * self.ZOOM_STEP)
-        self._update_preview()
+        self._set_zoom_centered(min(10.0, self.zoom_factor * self.ZOOM_STEP))
 
     def zoom_out(self):
-        self.zoom_factor = max(0.2, self.zoom_factor / self.ZOOM_STEP)
-        self._update_preview()
+        self._set_zoom_centered(max(0.1, self.zoom_factor / self.ZOOM_STEP))
 
     def reset_zoom(self):
-        self.zoom_factor = 1.0
-        self._update_preview()
+        self._set_zoom_centered(1.0)
 
     def toggle_draw_mode(self, enabled):
         self.image_label.set_draw_enabled(enabled)
@@ -247,8 +577,8 @@ class ImageZoomDialog(QDialog):
     def _set_pen_color(self, hex_color: str):
         self.image_label.set_pen_color(QColor(hex_color))
         for sw, h in self._swatches:
-            border = "3px solid #0d6efd" if h == hex_color else "2px solid #adb5bd"
-            sw.setStyleSheet(f"background:{h};border-radius:12px;border:{border};")
+            border = "3px solid #2563eb" if h == hex_color else "2px solid #cbd5e1"
+            sw.setStyleSheet(f"background:{h};border-radius:14px;border:{border};")
         # Clicking a color automatically activates draw mode.
         self.image_label.set_draw_enabled(True)
 

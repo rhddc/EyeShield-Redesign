@@ -59,8 +59,10 @@ except Exception:  # pragma: no cover
 
 try:
     from . import emr_service as emr
+    from .ui_feedback import apply_dialog_style
 except Exception:  # pragma: no cover
     import emr_service as emr
+    from ui_feedback import apply_dialog_style
 
 try:
     from .user_auth import get_user_profile
@@ -586,6 +588,36 @@ class EyeShieldApp(QMainWindow):
 
         self._setup_inactivity_timeout()
         self._setup_dashboard_clock()
+        QTimer.singleShot(500, self._check_queue_on_signin)
+
+    def _check_queue_on_signin(self):
+        """Show a notification if there are patients in the queue (Doctors only)."""
+        if self.role not in ("doctor", "clinician"):
+            return
+
+        try:
+            today = date.today().isoformat()
+            rows = emr.list_queue_rows(today)
+            waiting_count = sum(1 for r in rows if str(r.get("status") or "").strip().lower() == "waiting")
+
+            if waiting_count > 0:
+                msg = QMessageBox(self)
+                apply_dialog_style(msg)
+                msg.setWindowTitle("Patient Queue Notification")
+                msg.setIcon(QMessageBox.Icon.Information)
+                msg.setText(f"Welcome, {self.display_name}!\n\nThere are {waiting_count} new patient(s) waiting in the queue.")
+
+                view_list_btn = msg.addButton("View Patient Queue", QMessageBox.ActionRole)
+                ok_btn = msg.addButton("Stay on Dashboard", QMessageBox.RejectRole)
+                msg.setDefaultButton(view_list_btn)
+
+                msg.exec()
+
+                if msg.clickedButton() == view_list_btn:
+                    # Switch to Patient Queue page (index 10)
+                    self._navigate_to(10, nav_key="Patient Queue")
+        except Exception as e:
+            print(f"Error checking queue on signin: {e}")
 
     def _fetch_patient_timeline_records(self, patient_id: str) -> list[dict]:
         patient_id = str(patient_id or "").strip()
