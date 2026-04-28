@@ -399,14 +399,24 @@ class ScreeningComparisonDialog(QDialog):
     # NOTE: intentionally no "Both eyes" view — OD/OS comparison is handled via the toggle.
 
     def _render_single(self, previous_payload: dict, latest_payload: dict, *, eye_label_override: str | None) -> None:
-        prev_sev = _display_severity(previous_payload)
-        latest_sev = _display_severity(latest_payload)
-        trend_text, trend_color = self._trend_label(prev_sev, latest_sev)
+        has_prev = self._has_real_eye_payload(previous_payload)
+        has_latest = self._has_real_eye_payload(latest_payload)
         eye_part = f" ({escape(eye_label_override)})" if eye_label_override else ""
-        self._summary.setText(
-            f"Severity change{eye_part}: <b>{escape(prev_sev)}</b> -> <b>{escape(latest_sev)}</b> | "
-            f"<span style='color:{trend_color};font-weight:700;'>{escape(trend_text)}</span>"
-        )
+
+        if not has_prev or not has_latest:
+            missing_date = _format_screening_datetime_label(previous_payload.get('screened_at') if not has_prev else latest_payload.get('screened_at'))
+            self._summary.setText(
+                f"Comparison unavailable for {escape(eye_label_override or 'this eye')} | "
+                f"<span style='color:#64748b;'>Not screened on {escape(missing_date)}</span>"
+            )
+        else:
+            prev_sev = _display_severity(previous_payload)
+            latest_sev = _display_severity(latest_payload)
+            trend_text, trend_color = self._trend_label(prev_sev, latest_sev)
+            self._summary.setText(
+                f"Severity change{eye_part}: <b>{escape(prev_sev)}</b> -> <b>{escape(latest_sev)}</b> | "
+                f"<span style='color:{trend_color};font-weight:700;'>{escape(trend_text)}</span>"
+            )
 
         columns = QHBoxLayout()
         columns.setSpacing(10)
@@ -418,23 +428,41 @@ class ScreeningComparisonDialog(QDialog):
         self._content_layout.addWidget(host, 1)
 
     def _build_eye_card(self, record: dict, *, heading: str) -> QGroupBox:
-        result = _display_severity(record)
-        conf_label, unc_label, _, _ = _parse_confidence_metrics(record.get("confidence"))
+        has_data = self._has_real_eye_payload(record)
         card = QGroupBox(heading)
         card.setStyleSheet(
             "QGroupBox{font-weight:700;padding-top:16px;}"
             "QGroupBox::title{subcontrol-origin:margin;left:12px;padding:0 6px;}"
         )
         card_layout = QVBoxLayout(card)
-        # Slightly tighter so the full card content fits more often.
         card_layout.setSpacing(8)
         card_layout.setContentsMargins(12, 14, 12, 12)
 
+        date_label = escape(_format_screening_datetime_label(record.get('screened_at')))
         eye_label = str(record.get("eye_label") or record.get("eyes") or "—")
+
+        if not has_data:
+            placeholder = QLabel(
+                f"<div style='text-align:center; padding: 40px 10px;'>"
+                f"<div style='font-size:48px; color:#cbd5e1;'>∅</div><br>"
+                f"<b style='font-size:14px; color:#64748b;'>Not screened on this date</b><br>"
+                f"<span style='font-size:12px; color:#94a3b8;'>{date_label}</span>"
+                f"</div>"
+            )
+            placeholder.setWordWrap(True)
+            placeholder.setAlignment(Qt.AlignCenter)
+            placeholder.setStyleSheet("background:#f8fafc; border:1px dashed #cbd5e1; border-radius:12px;")
+            card_layout.addStretch(1)
+            card_layout.addWidget(placeholder)
+            card_layout.addStretch(1)
+            return card
+
+        result = _display_severity(record)
+        conf_label, unc_label, _, _ = _parse_confidence_metrics(record.get("confidence"))
         meta = QLabel(
             "<br>".join(
                 [
-                    f"<b>Date:</b> {escape(_format_screening_datetime_label(record.get('screened_at')))}",
+                    f"<b>Date:</b> {date_label}",
                     f"<b>Eye:</b> {escape(eye_label)}",
                     f"<b>Severity:</b> {escape(result)}",
                     f"<b>{escape(conf_label)}</b>",
@@ -449,7 +477,6 @@ class ScreeningComparisonDialog(QDialog):
         for label_text, path_key in (("Fundus Image", "source_image_path"), ("Grad-CAM", "heatmap_image_path")):
             img = QLabel(label_text)
             img.setAlignment(Qt.AlignCenter)
-            # Keep previews compact; scroll area guarantees no cut-off.
             img.setMinimumHeight(170)
             img.setMaximumHeight(220)
             img.setStyleSheet("background:#0f172a;color:#e2e8f0;border:1px solid #cbd5e1;border-radius:10px;")
@@ -457,7 +484,6 @@ class ScreeningComparisonDialog(QDialog):
             if img_path:
                 pixmap = QPixmap(img_path)
                 if not pixmap.isNull():
-                    # Scale to a conservative size; the scroll area prevents clipping if the dialog is small.
                     img.setPixmap(pixmap.scaled(360, 220, Qt.KeepAspectRatio, Qt.SmoothTransformation))
             card_layout.addWidget(img)
 
@@ -1893,88 +1919,81 @@ class ReportsPage(QWidget):
 
         self.setStyleSheet("""
             QWidget {
-                background: #f2f6fb;
-                color: #1f2a37;
-                font-family: 'Segoe UI';
+                background: #f8fafc;
+                color: #0f172a;
+                font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
             }
             QGroupBox {
                 background: #ffffff;
-                border: 1px solid #d8e2ee;
-                border-radius: 14px;
+                border: 1px solid #e2e8f0;
+                border-radius: 12px;
             }
             QLineEdit, QComboBox {
                 background: #ffffff;
-                border: 1px solid #c7d5e6;
+                border: 1px solid #cbd5e1;
                 border-radius: 10px;
-                padding: 8px 12px;
+                padding: 8px 14px;
+                font-size: 14px;
             }
             QLineEdit:hover, QComboBox:hover {
-                border: 1px solid #9eb9d8;
+                border: 1px solid #3b82f6;
             }
             QLineEdit:focus, QComboBox:focus {
-                border: 1px solid #1f6fe5;
+                border: 2px solid #3b82f6;
+                padding: 7px 13px;
             }
             QTableWidget {
                 background: #ffffff;
-                border: 1px solid #d3deeb;
+                border: 1px solid #e2e8f0;
                 border-radius: 12px;
-                gridline-color: #edf2f7;
-                alternate-background-color: #f7fafd;
-                selection-background-color: #e8f0ff;
-                selection-color: #1f2a37;
-                padding: 4px;
+                gridline-color: #f1f5f9;
+                selection-background-color: #eff6ff;
+                selection-color: #1e40af;
+                outline: none;
             }
             QTableWidget::item {
-                padding: 10px 8px;
-                border: none;
+                border-bottom: 1px solid #f1f5f9;
+                padding: 12px;
             }
-            QTableWidget#patientRecordsTable::item {
-                padding: 8px 10px;
-                border-bottom: 1px solid #eef2f7;
-            }
-            QTableWidget#patientRecordsTable::item:hover {
-                background: #f1f7ff;
-            }
-            QTableWidget#patientRecordsTable::item:selected {
-                background: #dbeafe;
-                color: #0f172a;
+            QTableWidget::item:selected {
+                background: #eff6ff;
+                color: #1e40af;
             }
             QHeaderView::section {
-                background: #f3f7fc;
-                color: #3d526b;
-                border: none;
-                border-bottom: 1px solid #dbe6f2;
-                padding: 10px 8px;
+                background: #f8fafc;
+                color: #475569;
                 font-weight: 700;
-            }
-            QPushButton:focus, QTableWidget:focus {
-                border: 1px solid #1f6fe5;
+                font-size: 12px;
+                text-transform: uppercase;
+                letter-spacing: 0.05em;
+                border: none;
+                border-bottom: 2px solid #e2e8f0;
+                padding: 12px 16px;
             }
             QPushButton {
                 background: #ffffff;
-                border: 1px solid #bfdbfe;
-                color: #0f172a;
+                border: 1px solid #e2e8f0;
                 border-radius: 8px;
-                padding: 8px 14px;
-                font-size: 13px;
-                font-family: 'Segoe UI';
+                padding: 8px 16px;
                 font-weight: 600;
+                font-size: 13px;
+                color: #334155;
             }
             QPushButton:hover {
-                background: #eff6ff;
-                border: 1px solid #93c5fd;
+                background: #f1f5f9;
+                border: 1px solid #cbd5e1;
+                color: #0f172a;
+            }
+            QPushButton:pressed {
+                background: #e2e8f0;
             }
             QPushButton:disabled {
                 background: #f8fafc;
-                border: 1px solid #dbeafe;
-                color: #9ca3af;
+                color: #94a3b8;
+                border: 1px solid #f1f5f9;
             }
             QLabel#statusLabel {
-                color: #4f637a;
-                font-size: 12px;
-            }
-            QLabel#hintLabel {
-                color: #62788f;
+                color: #64748b;
                 font-size: 12px;
             }
         """)
@@ -1988,64 +2007,82 @@ class ReportsPage(QWidget):
         _outer.addWidget(self._main_stack)
         self._main_stack.addWidget(self._reports_page)
 
-        root = QVBoxLayout(self._reports_page)
-        root.setContentsMargins(24, 22, 24, 22)
-        root.setSpacing(18)
+        # ── centeralized layout matching Medical Partners ────────
+        centering_layout = QHBoxLayout(self._reports_page)
+        centering_layout.setContentsMargins(0, 0, 0, 0)
+        centering_layout.setSpacing(0)
+        centering_layout.addStretch(1)
 
-        self._rep_title_lbl = QLabel("")
-        self._rep_title_lbl.setObjectName("pageHeader")
-        self._rep_title_lbl.setStyleSheet("font-size:26px;font-weight:700;color:#1f6fe5;font-family:'Segoe UI';")
-        self._rep_subtitle_lbl = QLabel("")
-        self._rep_subtitle_lbl.setObjectName("pageSubtitle")
-        self._rep_subtitle_lbl.setStyleSheet("font-size:13px;color:#6b7f95;")
-        self._rep_subtitle_lbl.setAlignment(Qt.AlignLeft)
+        page_container = QWidget()
+        page_container.setMinimumWidth(1200)
+        page_container.setMaximumWidth(1200)
+        centering_layout.addWidget(page_container)
+        centering_layout.addStretch(1)
 
-        self._rep_title_lbl.hide()
+        root = QVBoxLayout(page_container)
+        root.setContentsMargins(32, 32, 32, 32)
+        root.setSpacing(16)
+
+        # ── Hero Section (Title + Main Buttons) ────────
+        hero = QFrame()
+        hero.setObjectName("reportsHero")
+        hero.setStyleSheet("""
+            QFrame#reportsHero {
+                background: #ffffff;
+                border: 1px solid #dbeafe;
+                border-radius: 12px;
+            }
+        """)
+        hero_layout = QVBoxLayout(hero)
+        hero_layout.setContentsMargins(16, 12, 16, 12)
+        
+        header_row = QHBoxLayout()
+        header_row.setSpacing(12)
+        
+        title_lbl = QLabel("Patient Records")
+        title_lbl.setStyleSheet("font-size:20px; font-weight:400; color:#1d4ed8; background:transparent;")
+        header_row.addWidget(title_lbl)
+        header_row.addStretch(1)
+
         self.export_btn = QPushButton("Export Results")
-        self.export_btn.setAutoDefault(True)
-        self.export_btn.setDefault(True)
         self.export_btn.clicked.connect(self.export_summary)
+        
         if self.can_manage_archives:
-            self.archive_btn = QPushButton("Archive Selected")
+            self.archive_btn = QPushButton("Archive")
             self.archive_btn.clicked.connect(self.archive_selected_record)
             self.archive_btn.setEnabled(False)
-        else:
-            self.archive_btn = None
-        if self.can_manage_archives:
+            
             self.archived_records_btn = QPushButton("Archived Records")
             self.archived_records_btn.clicked.connect(self.open_archived_records_window)
+            
+            header_row.addWidget(self.archive_btn)
+            header_row.addWidget(self.archived_records_btn)
         else:
+            self.archive_btn = None
             self.archived_records_btn = None
-        self.report_btn = QPushButton("Generate Report")
+
+        self.report_btn = QPushButton("Report")
         self.report_btn.setEnabled(False)
         self.report_btn.clicked.connect(self.generate_report)
-        self.referral_btn = QPushButton("Generate Referral")
+        
+        self.referral_btn = QPushButton("Referral")
         self.referral_btn.setEnabled(False)
         self.referral_btn.clicked.connect(self.start_referral_flow)
-        self.rescreen_btn = QPushButton("New Follow-up Screening" if self.is_frontdesk else "Add Follow-Up Screening")
+        
+        if not getattr(self, "is_frontdesk", False):
+            header_row.addWidget(self.report_btn)
+            header_row.addWidget(self.referral_btn)
+        else:
+            header_row.addWidget(self.export_btn)
+            
+        hero_layout.addLayout(header_row)
+        root.addWidget(hero)
+
+        self.rescreen_btn = QPushButton("Add Follow-Up Screening")
         self.rescreen_btn.setEnabled(False)
         self.rescreen_btn.clicked.connect(self.start_frontdesk_followup if self.is_frontdesk else self.rescreen_patient)
-        # Frontdesk: hide rescreen button from top bar (follow-up is accessible from patient overview)
-        if getattr(self, "is_frontdesk", False):
-            self.rescreen_btn.hide()
-        self.fd_followup_btn = None
+        self.rescreen_btn.hide()
 
-        # Front desk: doctors handle clinical outputs (reports/referrals).
-        if getattr(self, "is_frontdesk", False):
-            self.report_btn.setEnabled(False)
-            self.report_btn.hide()
-            self.referral_btn.setEnabled(False)
-            self.referral_btn.hide()
-
-        # Doctor POV: patients must go to front desk for queue fairness.
-        # Hide top-bar shortcuts that bypass the queue workflow.
-        if not getattr(self, "is_frontdesk", False):
-            self.export_btn.setEnabled(False)
-            self.export_btn.hide()
-            self.rescreen_btn.setEnabled(False)
-            self.rescreen_btn.hide()
-
-        self._rep_subtitle_lbl.hide()
         self.status_label = QLabel("")
         self.status_label.setObjectName("statusLabel")
         self.status_label.setAlignment(Qt.AlignCenter)
@@ -2053,33 +2090,27 @@ class ReportsPage(QWidget):
         self.status_label.hide()
         root.addWidget(self.status_label)
 
+        # ── Controls Section (Search + Filter) ────────
         self._controls_group = QGroupBox("")
+        self._controls_group.setStyleSheet("QGroupBox{border:1px solid #dbeafe; border-radius:12px; margin-top:0; padding:10px;}")
         cl = QHBoxLayout(self._controls_group)
-        cl.setContentsMargins(18, 16, 18, 16)
+        cl.setContentsMargins(12, 8, 12, 8)
         cl.setSpacing(14)
+        
         self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText("Search")
+        self.search_input.setPlaceholderText("Search patient name or ID...")
         self.search_input.setMinimumHeight(40)
         self.search_input.textChanged.connect(self.apply_filters)
         cl.addWidget(self.search_input, 1)
+        
         if not getattr(self, "is_frontdesk", False):
             self.result_filter = QComboBox()
             self.result_filter.addItems(["All","No DR","Mild DR","Moderate DR","Severe DR","Proliferative DR"])
             self.result_filter.setMinimumHeight(40)
+            self.result_filter.setMinimumWidth(160)
             self.result_filter.currentTextChanged.connect(self.apply_filters)
             cl.addWidget(self.result_filter)
-        cl.addStretch(1)
-        if self.archive_btn is not None:
-            cl.addWidget(self.archive_btn)
-        if self.archived_records_btn is not None:
-            cl.addWidget(self.archived_records_btn)
-        if getattr(self, "is_frontdesk", False):
-            cl.addWidget(self.export_btn)
-        if not getattr(self, "is_frontdesk", False):
-            cl.addWidget(self.report_btn)
-            cl.addWidget(self.referral_btn)
-        if getattr(self, "is_frontdesk", False) and not self.rescreen_btn.isHidden():
-            cl.addWidget(self.rescreen_btn)
+        
         root.addWidget(self._controls_group)
 
         self._results_group = QGroupBox("")
@@ -2137,9 +2168,9 @@ class ReportsPage(QWidget):
                 hint.setHeight(max(hint.height(), 44))
                 return hint
 
-        self.results_table = QTableWidget(0, 3)
+        self.results_table = QTableWidget(0, 4)
         self.results_table.setObjectName("patientRecordsTable")
-        self.results_table.setHorizontalHeaderLabels(["Patient", "Screening Date", "Screened by"])
+        self.results_table.setHorizontalHeaderLabels(["Patient", "Risk level", "Screening Date", "Screened by"])
         self.results_table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.results_table.setAlternatingRowColors(True)
         self.results_table.setShowGrid(False)
@@ -2159,6 +2190,7 @@ class ReportsPage(QWidget):
         self.results_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
         self.results_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
         self.results_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
+        self.results_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Stretch)
         self.results_table.horizontalHeader().setStretchLastSection(True)
         self.results_table.setItemDelegateForColumn(0, _PatientCellDelegate(self.results_table))
         rl.addWidget(self.results_table)
@@ -2453,12 +2485,24 @@ class ReportsPage(QWidget):
             patient_item.setTextAlignment(Qt.AlignLeft | Qt.AlignVCenter)
             self.results_table.setItem(i, 0, patient_item)
 
+            severity = _display_severity(row)
+            risk_text, risk_color = _risk_status_for(severity)
+            risk_item = QTableWidgetItem(risk_text)
+            risk_item.setTextAlignment(Qt.AlignCenter)
+            risk_item.setForeground(QColor(risk_color))
+            # Aesthetic: make it bold
+            f = risk_item.font()
+            f.setWeight(QFont.Weight.Bold)
+            risk_item.setFont(f)
+            self.results_table.setItem(i, 1, risk_item)
+
             screened_at_item = QTableWidgetItem(str(row.get("screened_at") or ""))
             screened_at_item.setTextAlignment(Qt.AlignCenter)
-            self.results_table.setItem(i, 1, screened_at_item)
+            self.results_table.setItem(i, 2, screened_at_item)
+
             screened_by_item = QTableWidgetItem(str(row.get("screened_by") or "--"))
             screened_by_item.setTextAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-            self.results_table.setItem(i, 2, screened_by_item)
+            self.results_table.setItem(i, 3, screened_by_item)
         self.results_table.setSortingEnabled(True)
         for row_idx in range(self.results_table.rowCount()):
             self.results_table.setRowHeight(row_idx, 44)
@@ -3329,8 +3373,6 @@ class ReportsPage(QWidget):
     def apply_language(self, language: str):
         from translations import get_pack
         pack = get_pack(language)
-        self._rep_title_lbl.setText("")
-        self._rep_subtitle_lbl.setText("")
         self._controls_group.setTitle("")
         self._results_group.setTitle("")
         self._setup_action_buttons_ui()

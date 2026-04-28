@@ -1,7 +1,7 @@
 import json
 import os
 
-from PySide6.QtWidgets import QWidget, QLabel, QVBoxLayout, QScrollArea
+from PySide6.QtWidgets import QWidget, QLabel, QVBoxLayout, QScrollArea, QHBoxLayout, QPushButton
 from PySide6.QtCore import Qt
 
 class HelpSupportPage(QWidget):
@@ -38,6 +38,36 @@ class HelpSupportPage(QWidget):
         header_layout.addWidget(self._help_subtitle_lbl)
         root_layout.addLayout(header_layout)
 
+        # --- Internal nav (Help vs System → Info) ---
+        nav_wrap = QWidget()
+        nav_l = QHBoxLayout(nav_wrap)
+        nav_l.setContentsMargins(0, 0, 0, 0)
+        nav_l.setSpacing(10)
+
+        sys_lbl = QLabel("SYSTEM")
+        sys_lbl.setStyleSheet("color:#94a3b8;font-size:10px;font-weight:800;letter-spacing:1.1px;")
+        nav_l.addWidget(sys_lbl, 0, Qt.AlignVCenter)
+
+        def _tab_btn(text: str) -> QPushButton:
+            b = QPushButton(text)
+            b.setCursor(Qt.PointingHandCursor)
+            b.setCheckable(True)
+            b.setStyleSheet(
+                "QPushButton{background:#ffffff;border:1px solid #e2e8f0;border-radius:10px;"
+                "padding:7px 12px;font-size:12px;font-weight:700;color:#0f172a;}"
+                "QPushButton:checked{background:#eff6ff;border-color:#93c5fd;color:#1d4ed8;}"
+                "QPushButton:hover{background:#f8fafc;border-color:#cbd5e1;}"
+            )
+            return b
+
+        self._tab_help = _tab_btn("Help")
+        self._tab_info = _tab_btn("Info")
+        self._tab_help.setChecked(True)
+        nav_l.addWidget(self._tab_help)
+        nav_l.addWidget(self._tab_info)
+        nav_l.addStretch(1)
+        root_layout.addWidget(nav_wrap)
+
         # --- Scroll Area for Content ---
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -71,6 +101,20 @@ class HelpSupportPage(QWidget):
         scroll.setWidget(self._help_content_widget)
         root_layout.addWidget(scroll)
 
+        self._tab_help.clicked.connect(lambda: self._switch_mode("help"))
+        self._tab_info.clicked.connect(lambda: self._switch_mode("info"))
+
+    def _switch_mode(self, mode: str) -> None:
+        m = str(mode or "help").strip().lower()
+        self._tab_help.setChecked(m == "help")
+        self._tab_info.setChecked(m == "info")
+        main_window = self.window()
+        lang = getattr(main_window, "_current_language", "English") if main_window is not self else "English"
+        if m == "info":
+            self._build_info_groups(lang)
+        else:
+            self._build_help_groups(lang)
+
     def _build_help_groups(self, language: str):
         from translations import get_pack
         pack = get_pack(language)
@@ -98,6 +142,45 @@ class HelpSupportPage(QWidget):
             body_html = contact_body if body_key is None else pack[body_key]
             card = self.build_card(pack[title_key], body_html)
             self._help_list_layout.addWidget(card)
+
+        self._help_list_layout.addStretch(1)
+
+    def _build_info_groups(self, language: str) -> None:
+        from translations import get_pack
+        pack = get_pack(language)
+        self._active_language = language
+
+        while self._help_list_layout.count():
+            item = self._help_list_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        # Reuse the same content strings used in Settings.
+        topics = [
+            (pack.get("settings_about", "About"), pack.get("settings_about_text", "")),
+            (pack.get("settings_terms", "Terms of Use"), pack.get("settings_terms_text", "")),
+            (pack.get("settings_privacy", "Privacy Policy"), pack.get("settings_privacy_text", "")),
+        ]
+        for title, body in topics:
+            body_html = str(body or "").strip()
+            # If translations didn't provide an override, fall back to a short default.
+            if not body_html:
+                if str(title).lower().startswith("about"):
+                    body_html = (
+                        "<p><b>EyeShield EMR</b> is an offline clinical screening system for diabetic retinopathy.</p>"
+                        "<p>AI output is decision support only and must be reviewed by a qualified clinician.</p>"
+                    )
+                elif "term" in str(title).lower():
+                    body_html = (
+                        "<p>Use EyeShield EMR only for authorized clinical screening, documentation, and referral workflows.</p>"
+                        "<p>Follow role-based permissions and applicable data-handling policies.</p>"
+                    )
+                else:
+                    body_html = (
+                        "<p>EyeShield EMR stores patient and user data locally on this device.</p>"
+                        "<p>Restrict access to authorized users and handle exports according to retention policy.</p>"
+                    )
+            self._help_list_layout.addWidget(self.build_card(str(title), body_html))
 
         self._help_list_layout.addStretch(1)
 

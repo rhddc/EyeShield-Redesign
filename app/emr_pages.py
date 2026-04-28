@@ -1074,116 +1074,82 @@ class EmrVisitsPage(QWidget):
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(10)
         self.setStyleSheet(
-            "QWidget#emrRoot{background:#f1f5f9;}"
+            "QWidget#emrRoot{background:#f8fafc;}"
             + _input_style()
             + """
-            QTableWidget#queueTable{
-                background:#ffffff;
-                color:#0f172a;
-                border:none;
-                border-radius:12px;
-                gridline-color:transparent;
-                alternate-background-color:#f8fafc;
+            QWidget {
+                background: #f8fafc;
+                color: #0f172a;
+                font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
             }
-            QHeaderView::section{
-                background:#eff6ff;
-                color:#1d4ed8;
-                border:none;
-                border-bottom:1px solid #e2e8f0;
-                padding:10px 10px;
-                font-size:11px;
-                font-weight:700;
+            QTableWidget#queueTable {
+                background: #ffffff;
+                border: 1px solid #e2e8f0;
+                border-radius: 12px;
+                gridline-color: #f1f5f9;
+                selection-background-color: #eff6ff;
+                selection-color: #1e40af;
+                outline: none;
             }
-            QTableWidget::item{
-                padding:8px 10px;
-                color:#0f172a;
-                border-bottom:1px solid #f1f5f9;
+            QTableWidget::item {
+                border-bottom: 1px solid #f1f5f9;
+                padding: 12px 10px;
             }
-            QTableWidget::item:selected{
-                background:#dbeafe;
-                color:#0f172a;
+            QHeaderView::section {
+                background: #f8fafc;
+                color: #475569;
+                font-weight: 700;
+                font-size: 12px;
+                text-transform: uppercase;
+                letter-spacing: 0.05em;
+                border: none;
+                border-bottom: 2px solid #e2e8f0;
+                padding: 12px 16px;
             }
-            QTableWidget::item:hover{
-                background:#e0f2fe;
+            QFrame#queueHeaderCard, QFrame#queueTableCard {
+                background: #ffffff;
+                border: 1px solid #e2e8f0;
+                border-radius: 12px;
             }
-            QFrame#queueHeaderCard, QFrame#queueTableCard{
-                background:#ffffff;
-                border:1px solid #e2e8f0;
-                border-radius:12px;
+            QLabel#queueTitle {
+                font-size: 20px;
+                font-weight: 400;
+                color: #1d4ed8;
             }
-            QFrame#queueHeaderCard{
-                border-top:3px solid #2563eb;
+            QLabel#queueSubtitle {
+                font-size: 13px;
+                color: #64748b;
             }
-            QLabel#queueTitle{
-                font-size:16px;
-                font-weight:700;
-                color:#0f172a;
+            QLineEdit#queueSearch {
+                background: #ffffff;
+                border: 1px solid #cbd5e1;
+                border-radius: 10px;
+                padding: 8px 14px;
+                font-size: 14px;
             }
-            QLabel#queueSubtitle{
-                font-size:11px;
-                font-weight:400;
-                color:#64748b;
+            QLineEdit#queueSearch:focus {
+                border: 2px solid #3b82f6;
+                padding: 7px 13px;
             }
-            QLabel#queueChip{
-                background:#f8fafc;
-                border:none;
-                border-radius:10px;
-                padding:6px 10px;
-                font-size:11px;
-                font-weight:600;
-                color:#0f172a;
+            QPushButton {
+                background: #ffffff;
+                border: 1px solid #e2e8f0;
+                border-radius: 8px;
+                padding: 8px 16px;
+                font-weight: 600;
+                font-size: 13px;
+                color: #334155;
             }
-            QLabel#queueChipMuted{
-                background:#f8fafc;
-                border:none;
-                border-radius:10px;
-                padding:6px 10px;
-                font-size:11px;
-                font-weight:600;
-                color:#64748b;
+            QPushButton:hover {
+                background: #f1f5f9;
+                border: 1px solid #cbd5e1;
+                color: #0f172a;
             }
-            QLineEdit#queueSearch{
-                background:#ffffff;
-                border:1px solid #e2e8f0;
-                border-radius:10px;
-                padding:8px 10px;
-                font-size:12px;
-                color:#111827;
+            QPushButton:disabled {
+                background: #f8fafc;
+                color: #94a3b8;
+                border: 1px solid #f1f5f9;
             }
-            QLineEdit#queueSearch:focus{border-color:#93c5fd;}
-            QPushButton#queueBtnPrimary{
-                background:#dbeafe;
-                color:#111827;
-                border:1px solid #93c5fd;
-                border-radius:10px;
-                padding:9px 14px;
-                font-size:12px;
-                font-weight:700;
-                text-align:left;
-            }
-            QPushButton#queueBtnPrimary:hover{background:#bfdbfe;border-color:#60a5fa;}
-            QPushButton#queueBtnSecondary{
-                background:#ffffff;
-                color:#111827;
-                border:1px solid #e2e8f0;
-                border-radius:10px;
-                padding:9px 12px;
-                font-size:12px;
-                font-weight:600;
-                text-align:left;
-            }
-            QPushButton#queueBtnSecondary:hover{background:#f8fafc;border-color:#cbd5e1;}
-            QPushButton#queueBtnDanger{
-                background:#fee2e2;
-                color:#111827;
-                border:1px solid #fecaca;
-                border-radius:10px;
-                padding:9px 12px;
-                font-size:12px;
-                font-weight:700;
-                text-align:left;
-            }
-            QPushButton#queueBtnDanger:hover{background:#fecaca;border-color:#fca5a5;}
             """
         )
         self.setObjectName("emrRoot")
@@ -1192,9 +1158,19 @@ class EmrVisitsPage(QWidget):
         layout.addWidget(self._emr_stack, 1)
 
         queue_page = QWidget()
-        qp_layout = QVBoxLayout(queue_page)
-        qp_layout.setContentsMargins(0, 0, 0, 0)
-        qp_layout.setSpacing(0)
+        qp_centering = QHBoxLayout(queue_page)
+        qp_centering.setContentsMargins(0, 0, 0, 0)
+        qp_centering.addStretch(1)
+
+        page_container = QWidget()
+        page_container.setMinimumWidth(1200)
+        page_container.setMaximumWidth(1200)
+        qp_centering.addWidget(page_container)
+        qp_centering.addStretch(1)
+
+        qp_layout = QVBoxLayout(page_container)
+        qp_layout.setContentsMargins(32, 32, 32, 32)
+        qp_layout.setSpacing(16)
 
         content = QWidget()
         content.setStyleSheet("background: transparent;")
@@ -1218,10 +1194,14 @@ class EmrVisitsPage(QWidget):
         _ncol = 7 if self._is_clinical() else 6
         self.table = QTableWidget(0, _ncol)
         self.table.setObjectName("queueTable")
+        self.table.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.table.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        
         headers = ["Name", "Age", "Sex", "Purpose", "Queue Number", "queue_id"]
         if self._is_clinical():
             headers.append("Actions")
         self.table.setHorizontalHeaderLabels(headers)
+        self.table.horizontalHeader().setDefaultAlignment(Qt.AlignCenter)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SingleSelection)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
@@ -1230,18 +1210,24 @@ class EmrVisitsPage(QWidget):
         self.table.verticalHeader().setVisible(False)
         self.table.doubleClicked.connect(self._on_row_activated)
         self.table.setColumnHidden(5, True)
+        self.table.setFocusPolicy(Qt.NoFocus)
 
         # Column sizing (aesthetic + scannable)
         hh = self.table.horizontalHeader()
-        hh.setStretchLastSection(True)
-        # Prevent "Start diagnosis" from being squeezed/clipped on narrow windows.
-        hh.setMinimumSectionSize(120)
-        # Even columns across the visible table (queue_id is hidden).
-        for col in (0, 1, 2, 3, 4):
-            hh.setSectionResizeMode(col, QHeaderView.Stretch)
+        hh.setStretchLastSection(False)
+        hh.setMinimumSectionSize(60)
+        
+        # Name column stretches to fill available space
+        hh.setSectionResizeMode(0, QHeaderView.Stretch)
+        # Other info columns fit their contents
+        for col in (1, 2, 3, 4):
+            hh.setSectionResizeMode(col, QHeaderView.ResizeToContents)
+            
         if self._is_clinical():
-            hh.setSectionResizeMode(6, QHeaderView.Stretch)  # Actions
-            self.table.setColumnWidth(6, 190)
+            # Actions column is fixed width to prevent clipping
+            hh.setSectionResizeMode(6, QHeaderView.Fixed)
+            self.table.setColumnWidth(6, 260)
+            
         results_layout.addWidget(self.table)
 
         self._queue_stack = QStackedWidget()
@@ -1395,21 +1381,41 @@ class EmrVisitsPage(QWidget):
                 btn_text = "Start Follow-up" if purpose == "Follow-up" else "Start diagnosis"
                 btn = QPushButton(btn_text)
                 btn.setObjectName("queueBtnPrimary")
+                btn.setStyleSheet("""
+                    QPushButton {
+                        background-color: #2563eb;
+                        color: #ffffff;
+                        border: 1px solid #1d4ed8;
+                        border-radius: 10px;
+                        font-weight: 700;
+                        font-size: 13px;
+                        padding: 8px 20px;
+                        min-width: 160px;
+                    }
+                    QPushButton:hover {
+                        background-color: #1d4ed8;
+                        border-color: #1e40af;
+                    }
+                """)
                 btn.setCursor(Qt.PointingHandCursor)
-                btn.setFixedHeight(34)
-                btn.setMinimumWidth(160)
                 btn.clicked.connect(
                     lambda checked=False, q=qid, p=pid: self._on_start_diagnosis_clicked(q, p)
                 )
+                
+                # Container to center the button in the cell
                 wrap = QWidget()
+                wrap.setStyleSheet("background: transparent; border: none;")
                 wl = QHBoxLayout(wrap)
                 wl.setContentsMargins(0, 0, 0, 0)
+                wl.setSpacing(0)
                 wl.addStretch(1)
                 wl.addWidget(btn)
                 wl.addStretch(1)
+                
                 self.table.setCellWidget(i, 6, wrap)
+
         for row in range(self.table.rowCount()):
-            self.table.setRowHeight(row, 42)
+            self.table.setRowHeight(row, 64)
 
     def _selected_queue_and_patient(self) -> tuple[int | None, int | None]:
         r = self.table.currentRow()

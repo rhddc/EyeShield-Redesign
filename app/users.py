@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
     QFileDialog, QDateEdit, QGridLayout, QCalendarWidget, QSpinBox,
     QSizePolicy, QFrame
 )
-from PySide6.QtGui import QFont, QAction, QIcon, QColor
+from PySide6.QtGui import QFont, QAction, QIcon, QColor, QPixmap, QImage, QPainter, QPainterPath
 from PySide6.QtCore import Qt, QTime, QDate, QTimer
 try:
     from . import user_store
@@ -510,10 +510,12 @@ _PAGE_STYLE = """
     QLabel#usrStatTotal,
     QLabel#usrStatAdmin,
     QLabel#usrStatSpecialists,
+    QLabel#usrStatFrontdesk,
     QLabel#usrStatViewer,
     QPushButton#usrStatTotal,
     QPushButton#usrStatAdmin,
     QPushButton#usrStatSpecialists,
+    QPushButton#usrStatFrontdesk,
     QPushButton#usrStatViewer {
         border-radius: 12px;
         padding: 6px 10px;
@@ -539,6 +541,12 @@ _PAGE_STYLE = """
         background: #e8f7ef;
         border-color: #b7e4c7;
     }
+    QLabel#usrStatFrontdesk,
+    QPushButton#usrStatFrontdesk {
+        color: #0f766e;
+        background: #ecfdf5;
+        border-color: #b7e4c7;
+    }
     QLabel#usrStatViewer,
     QPushButton#usrStatViewer {
         color: #495057;
@@ -557,12 +565,14 @@ _PAGE_STYLE = """
     QPushButton#usrStatTotal:checked,
     QPushButton#usrStatAdmin:checked,
     QPushButton#usrStatSpecialists:checked,
+    QPushButton#usrStatFrontdesk:checked,
     QPushButton#usrStatViewer:checked {
         border-width: 2px;
     }
     QPushButton#usrStatTotal:hover,
     QPushButton#usrStatAdmin:hover,
     QPushButton#usrStatSpecialists:hover,
+    QPushButton#usrStatFrontdesk:hover,
     QPushButton#usrStatViewer:hover {
         border-width: 2px;
     }
@@ -878,10 +888,12 @@ _ACTIVITY_LOG_STYLE = """
     QLabel#usrStatTotal,
     QLabel#usrStatAdmin,
     QLabel#usrStatSpecialists,
+    QLabel#usrStatFrontdesk,
     QLabel#usrStatViewer,
     QPushButton#usrStatTotal,
     QPushButton#usrStatAdmin,
     QPushButton#usrStatSpecialists,
+    QPushButton#usrStatFrontdesk,
     QPushButton#usrStatViewer {
         border-radius: 999px;
         padding: 6px 12px;
@@ -894,6 +906,7 @@ _ACTIVITY_LOG_STYLE = """
     QPushButton#usrStatTotal:checked,
     QPushButton#usrStatAdmin:checked,
     QPushButton#usrStatSpecialists:checked,
+    QPushButton#usrStatFrontdesk:checked,
     QPushButton#usrStatViewer:checked {
         background: #eff6ff;
         color: #2563eb;
@@ -902,6 +915,7 @@ _ACTIVITY_LOG_STYLE = """
     QPushButton#usrStatTotal:hover,
     QPushButton#usrStatAdmin:hover,
     QPushButton#usrStatSpecialists:hover,
+    QPushButton#usrStatFrontdesk:hover,
     QPushButton#usrStatViewer:hover {
         background: #eff6ff;
     }
@@ -1552,16 +1566,22 @@ class UsersPage(QWidget):
         self.setObjectName("usersPage")
         self.setStyleSheet(f"{_PAGE_STYLE}\n{_ACTIVITY_LOG_STYLE}")
 
-        main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(0, 0, 0, 0)
-        main_layout.setSpacing(0)
+        root_layout = QHBoxLayout(self)
+        root_layout.setContentsMargins(0, 0, 0, 0)
+        root_layout.setSpacing(0)
+        root_layout.addStretch(1)
 
         page_container = QWidget()
         page_container.setObjectName("usrActivityContainer")
+        # Standardize on 1200px centered layout (matches Patient Records/EMR pages).
+        page_container.setMaximumWidth(1200)
+        root_layout.addWidget(page_container)
+        root_layout.addStretch(1)
+
         page_layout = QVBoxLayout(page_container)
-        page_layout.setContentsMargins(14, 12, 14, 12)
-        page_layout.setSpacing(10)
-        main_layout.addWidget(page_container)
+        # Align margins with Activity Log (32px instead of 24px) for consistency.
+        page_layout.setContentsMargins(32, 32, 32, 32)
+        page_layout.setSpacing(16)
 
         # â”€â”€ Header â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         header_row = QHBoxLayout()
@@ -1574,6 +1594,10 @@ class UsersPage(QWidget):
         header_row.addWidget(self.count_label)
         header_row.addStretch()
         page_layout.addLayout(header_row)
+
+        self._usr_section_hint = QLabel("Manage accounts, roles, and access status. Availability is edited per staff user.")
+        self._usr_section_hint.setObjectName("usrSectionHint")
+        page_layout.addWidget(self._usr_section_hint)
 
         self.notify_bar = QWidget()
         self.notify_bar.setObjectName("usrNotifyBar")
@@ -1624,35 +1648,26 @@ class UsersPage(QWidget):
         }
         self._sync_role_filter_buttons()
 
-        # Users table card
-        self._usr_table_group = QGroupBox("Users")
-        self._usr_table_group.setObjectName("usrUsersPanel")
+        # Users table panel (match Activity Log layout)
+        self._usr_table_group = QFrame()
+        self._usr_table_group.setObjectName("usrActivityPanel")
         table_vbox = QVBoxLayout(self._usr_table_group)
-        table_vbox.setSpacing(6)
-
-        users_hdr = QHBoxLayout()
-        users_hdr.setContentsMargins(2, 0, 2, 2)
-        users_hdr_col = QVBoxLayout()
-        users_hdr_col.setSpacing(0)
-        users_hdr.addLayout(users_hdr_col)
-        table_vbox.addLayout(users_hdr)
+        table_vbox.setContentsMargins(0, 0, 0, 0)
+        table_vbox.setSpacing(0)
 
         users_toolbar_host = QWidget()
         users_toolbar_host.setObjectName("usrActivityFilters")
         users_toolbar = QHBoxLayout(users_toolbar_host)
-        users_toolbar.setContentsMargins(10, 8, 10, 8)
-        users_toolbar.setSpacing(8)
+        users_toolbar.setContentsMargins(16, 14, 16, 14)
+        users_toolbar.setSpacing(10)
 
         self.search_input.setMinimumWidth(170)
-        self.search_input.setMaximumWidth(260)
-        self.search_input.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        self.search_input.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         users_toolbar.addWidget(self.search_input)
 
         for chip in (self.total_chip, self.admin_chip, self.specialists_chip, self.frontdesk_chip):
             chip.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
             users_toolbar.addWidget(chip)
-
-        users_toolbar.addStretch()
 
         self.new_user_btn = QPushButton("\u002b  New User")
         self.new_user_btn.setObjectName("ghostAction")
@@ -1662,17 +1677,17 @@ class UsersPage(QWidget):
 
         table_vbox.addWidget(users_toolbar_host)
 
-        self.users_table = QTableWidget(0, 7)
+        self.users_table = QTableWidget(0, 5)
         self.users_table.setObjectName("usrUsersTable")
         self.users_table.setHorizontalHeaderLabels([
-            "Name", "Username", "Contact", "Availability Time", "Availability Days", "Role", "Status"
+            "Name", "Username", "Contact", "Role", "Status"
         ])
         self.users_table.horizontalHeader().setDefaultAlignment(Qt.AlignCenter | Qt.AlignVCenter)
         for col_idx in range(self.users_table.columnCount()):
             hdr_item = self.users_table.horizontalHeaderItem(col_idx)
             if hdr_item is not None:
                 hdr_item.setTextAlignment(Qt.AlignCenter | Qt.AlignVCenter)
-        self.users_table.setColumnCount(7)
+        self.users_table.setColumnCount(5)
         self.users_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.users_table.setSelectionMode(QAbstractItemView.SingleSelection)
         self.users_table.setEditTriggers(QTableWidget.NoEditTriggers)
@@ -1682,17 +1697,15 @@ class UsersPage(QWidget):
         self.users_table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.users_table.customContextMenuRequested.connect(self._open_user_context_menu)
         self.users_table.itemSelectionChanged.connect(self._sync_status_action_labels)
-        self.users_table.cellDoubleClicked.connect(self._edit_availability_from_cell)
+        # Make the Users panel "fill" like Activity Log (avoid compact columns + empty space).
         self.users_table.horizontalHeader().setStretchLastSection(False)
-        self.users_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.users_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
         self.users_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Interactive)
-        self.users_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
-        self.users_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Interactive)
-        self.users_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.Stretch)
-        self.users_table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeToContents)
-        self.users_table.horizontalHeader().setSectionResizeMode(6, QHeaderView.ResizeToContents)
+        self.users_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
+        self.users_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        self.users_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
         self.users_table.setColumnWidth(1, 140)
-        self.users_table.setColumnWidth(3, 165)
+        self.users_table.setColumnWidth(4, 110)
         self.users_table.verticalHeader().setDefaultSectionSize(44)
         self.users_table.setMinimumHeight(200)
         table_vbox.addWidget(self.users_table)
@@ -1788,16 +1801,55 @@ class UsersPage(QWidget):
             self._avatar_palette[key] = "usrAvatarBlue" if len(self._avatar_palette) % 2 == 0 else "usrAvatarPink"
         return self._avatar_palette[key]
 
-    def _user_cell_widget(self, username: str) -> QWidget:
+    def _user_cell_widget(self, display_name: str, role: str = None) -> QWidget:
         cell = QWidget()
         cell.setObjectName("usrUserCell")
         row = QHBoxLayout(cell)
-        row.setContentsMargins(0, 0, 0, 0)
-        row.setSpacing(8)
+        row.setContentsMargins(8, 4, 8, 4)
+        row.setSpacing(10)
 
-        avatar = QLabel(self._username_initials(username))
-        avatar.setObjectName(self._avatar_variant(username))
-        name_lbl = QLabel(str(username or "").strip())
+        avatar = QLabel()
+        avatar.setFixedSize(28, 28)
+        avatar.setAlignment(Qt.AlignCenter)
+        
+        # Resolve avatar image based on role
+        role_key = str(role or "").lower().strip()
+        avatar_file = ""
+        if role_key == "admin":
+            avatar_file = "admin_avatar.png"
+        elif role_key == "clinician":
+            avatar_file = "doctor_avatar.jpg"
+        elif role_key == "frontdesk":
+            avatar_file = "frontdesk_avatar.png"
+
+        img_path = ""
+        if avatar_file:
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+            img_path = os.path.join(base_dir, "avatars", avatar_file)
+
+        pixmap = None
+        if img_path and os.path.exists(img_path):
+            loaded = QPixmap(img_path)
+            if not loaded.isNull():
+                out_img = QImage(28, 28, QImage.Format_ARGB32_Premultiplied)
+                out_img.fill(Qt.transparent)
+                p = QPainter(out_img)
+                p.setRenderHint(QPainter.Antialiasing)
+                path = QPainterPath()
+                path.addEllipse(0, 0, 28, 28)
+                p.setClipPath(path)
+                p.drawPixmap(0, 0, 28, 28, loaded)
+                p.end()
+                pixmap = QPixmap.fromImage(out_img)
+
+        if pixmap:
+            avatar.setPixmap(pixmap)
+        else:
+            # Fallback to initials
+            avatar.setText(self._username_initials(display_name))
+            avatar.setObjectName(self._avatar_variant(display_name))
+
+        name_lbl = QLabel(str(display_name or "").strip())
         name_lbl.setObjectName("usrUserName")
 
         row.addWidget(avatar)
@@ -1873,7 +1925,7 @@ class UsersPage(QWidget):
         row = self.users_table.currentRow()
         if row < 0:
             return "Set Active/Inactive"
-        status_item = self.users_table.item(row, 6)
+        status_item = self.users_table.item(row, 4)
         if not status_item:
             return "Set Active/Inactive"
         is_active = bool(status_item.data(Qt.UserRole))
@@ -1882,11 +1934,6 @@ class UsersPage(QWidget):
     def _sync_status_action_labels(self):
         if hasattr(self, "toggle_active_btn"):
             self.toggle_active_btn.setText(self._status_action_text_for_selected_row())
-
-    def _edit_availability_from_cell(self, row, column):
-        if column in (3, 4):
-            self.users_table.selectRow(row)
-            self.edit_selected_availability()
 
     def _get_user_by_username(self, username: str):
         target = str(username or "").strip().lower()
@@ -2058,72 +2105,20 @@ class UsersPage(QWidget):
             row = self.users_table.rowCount()
             self.users_table.insertRow(row)
 
-            name_item = QTableWidgetItem(user.get("full_name") or user["username"])
+            username = user["username"]
+            display_name = user.get("full_name") or username
+            # Plain text cell (no avatars/widgets): much faster to render/scroll.
+            name_item = QTableWidgetItem(str(display_name))
             name_item.setFlags(name_item.flags() & ~Qt.ItemIsEditable)
             name_item.setTextAlignment(Qt.AlignCenter | Qt.AlignVCenter)
-            username_item = QTableWidgetItem(user["username"])
+            self.users_table.setItem(row, 0, name_item)
+            
+            username_item = QTableWidgetItem(username)
             username_item.setFlags(username_item.flags() & ~Qt.ItemIsEditable)
             username_item.setTextAlignment(Qt.AlignCenter | Qt.AlignVCenter)
             contact_item = QTableWidgetItem(str(user.get("contact") or ""))
             contact_item.setFlags(contact_item.flags() & ~Qt.ItemIsEditable)
             contact_item.setTextAlignment(Qt.AlignCenter | Qt.AlignVCenter)
-
-            availability_time_text = "Not set"
-            availability_days_text = "Not set"
-            role = str(user.get("role") or "").strip().lower()
-
-            if role == "admin":
-                availability_time_text = ""
-                availability_days_text = ""
-
-            raw_availability = user.get("availability_json")
-            if raw_availability and role != "admin":
-                try:
-                    payload = json.loads(raw_availability) if isinstance(raw_availability, str) else raw_availability
-                except Exception:
-                    payload = {}
-
-                if isinstance(payload, dict):
-                    start_time = str(payload.get("start_time") or "").strip()
-                    end_time = str(payload.get("end_time") or "").strip()
-                    if start_time and end_time:
-                        parsed_start = AvailabilityDialog._parse_time_value(start_time)
-                        parsed_end = AvailabilityDialog._parse_time_value(end_time)
-                        if parsed_start.isValid() and parsed_end.isValid():
-                            availability_time_text = (
-                                f"{parsed_start.toString('hh:mm AP')} - {parsed_end.toString('hh:mm AP')}"
-                            )
-                        else:
-                            availability_time_text = f"{start_time} - {end_time}"
-
-                    selected_days = payload.get("days") or []
-
-                    # Backward compatibility with older payloads that stored concrete dates.
-                    if not selected_days:
-                        legacy_dates = payload.get("dates") or []
-                        if isinstance(legacy_dates, list):
-                            derived = []
-                            for date_value in legacy_dates:
-                                try:
-                                    derived.append(datetime.strptime(str(date_value), "%Y-%m-%d").date().strftime("%a").lower())
-                                except Exception:
-                                    pass
-                            selected_days = derived
-
-                    if isinstance(selected_days, list) and selected_days:
-                        ordered = []
-                        for day_key, _ in _WEEKDAY_OPTIONS:
-                            if any(str(value).strip().lower() == day_key for value in selected_days):
-                                ordered.append(_WEEKDAY_LABELS[day_key][:3])
-                        if ordered:
-                            availability_days_text = ", ".join(ordered)
-
-            availability_time_item = QTableWidgetItem(availability_time_text)
-            availability_time_item.setFlags(availability_time_item.flags() & ~Qt.ItemIsEditable)
-            availability_time_item.setTextAlignment(Qt.AlignCenter | Qt.AlignVCenter)
-            availability_days_item = QTableWidgetItem(availability_days_text)
-            availability_days_item.setFlags(availability_days_item.flags() & ~Qt.ItemIsEditable)
-            availability_days_item.setTextAlignment(Qt.AlignCenter | Qt.AlignVCenter)
 
             role = user["role"]
             specialization = str(user.get("specialization") or "").strip()
@@ -2149,13 +2144,10 @@ class UsersPage(QWidget):
                 status_item.setForeground(QColor("#991b1b"))
                 status_item.setBackground(QColor("#fee2e2"))
 
-            self.users_table.setItem(row, 0, name_item)
             self.users_table.setItem(row, 1, username_item)
             self.users_table.setItem(row, 2, contact_item)
-            self.users_table.setItem(row, 3, availability_time_item)
-            self.users_table.setItem(row, 4, availability_days_item)
-            self.users_table.setItem(row, 5, role_item)
-            self.users_table.setItem(row, 6, status_item)
+            self.users_table.setItem(row, 3, role_item)
+            self.users_table.setItem(row, 4, status_item)
             
         self.users_table.resizeRowsToContents()
         self._sync_status_action_labels()
@@ -2210,7 +2202,7 @@ class UsersPage(QWidget):
             return
 
         username_item = self.users_table.item(row, 1)
-        role_item = self.users_table.item(row, 5)
+        role_item = self.users_table.item(row, 3)
         if not username_item or not role_item:
             return
 
@@ -2336,8 +2328,8 @@ class UsersPage(QWidget):
             return
 
         username_item = self.users_table.item(row, 1)
-        role_item = self.users_table.item(row, 5)
-        status_item = self.users_table.item(row, 6)
+        role_item = self.users_table.item(row, 3)
+        status_item = self.users_table.item(row, 4)
         if not username_item or not role_item or not status_item:
             return
 
@@ -2643,6 +2635,7 @@ class ActivityLogPage(QWidget):
         self.total_events = 0
         self.total_pages = 1
         self._avatar_palette = {}
+        self._role_cache = {}
         self._selected_event_filter = ""
 
         root_layout = QHBoxLayout(self)
@@ -2952,20 +2945,71 @@ class ActivityLogPage(QWidget):
         cell = QWidget()
         cell.setObjectName("usrUserCell")
         row = QHBoxLayout(cell)
-        row.setContentsMargins(6, 0, 6, 0)
+        row.setContentsMargins(6, 4, 6, 4)
         row.setSpacing(8)
 
         username_text = str(username or "").strip()
-        avatar = QLabel(self._username_initials(username_text))
-        avatar.setObjectName(self._avatar_variant(username))
+        avatar = QLabel()
+        avatar.setFixedSize(24, 24)
         avatar.setAlignment(Qt.AlignCenter)
+
+        # Look up role for avatar
+        role = self._role_cache.get(username_text)
+        if not role:
+            # user_store does not expose get_user_by_username; resolve from get_all_users().
+            resolved = None
+            try:
+                for u in user_store.get_all_users():
+                    if str(u.get("username") or "").strip().lower() == username_text.lower():
+                        resolved = u
+                        break
+            except Exception:
+                resolved = None
+            if resolved:
+                role = resolved.get("role")
+                self._role_cache[username_text] = role
+
+        role_key = str(role or "").lower().strip()
+        avatar_file = ""
+        if role_key == "admin":
+            avatar_file = "admin_avatar.png"
+        elif role_key == "clinician":
+            avatar_file = "doctor_avatar.jpg"
+        elif role_key == "frontdesk":
+            avatar_file = "frontdesk_avatar.png"
+
+        img_path = ""
+        if avatar_file:
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+            img_path = os.path.join(base_dir, "avatars", avatar_file)
+
+        pixmap = None
+        if img_path and os.path.exists(img_path):
+            loaded = QPixmap(img_path)
+            if not loaded.isNull():
+                out_img = QImage(24, 24, QImage.Format_ARGB32_Premultiplied)
+                out_img.fill(Qt.transparent)
+                p = QPainter(out_img)
+                p.setRenderHint(QPainter.Antialiasing)
+                path = QPainterPath()
+                path.addEllipse(0, 0, 24, 24)
+                p.setClipPath(path)
+                p.drawPixmap(0, 0, 24, 24, loaded)
+                p.end()
+                pixmap = QPixmap.fromImage(out_img)
+
+        if pixmap:
+            avatar.setPixmap(pixmap)
+        else:
+            avatar.setText(self._username_initials(username_text))
+            avatar.setObjectName(self._avatar_variant(username))
 
         name_lbl = QLabel()
         name_lbl.setObjectName("usrUserName")
         name_lbl.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         name_lbl.setToolTip(username_text)
 
-        available = max(40, self.activity_log.columnWidth(0) - 28 - 8 - 20)
+        available = max(40, self.activity_log.columnWidth(0) - 24 - 8 - 20)
         elided = name_lbl.fontMetrics().elidedText(username_text, Qt.TextElideMode.ElideRight, available)
         name_lbl.setText(elided)
 
@@ -3146,8 +3190,13 @@ class ActivityLogPage(QWidget):
             self.activity_log.setItem(row, 1, action_item)
             self.activity_log.setItem(row, 2, QTableWidgetItem(event_type))
             self.activity_log.setItem(row, 3, time_item)
-            self.activity_log.setCellWidget(row, 0, self._user_cell_widget(username))
-            self.activity_log.setCellWidget(row, 2, self._event_badge_widget(event_type))
+            # Plain text cells (no avatars/badges): reduces UI lag on large logs.
+            username_item.setText(username)
+            username_item.setTextAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+            event_item = self.activity_log.item(row, 2)
+            if event_item is not None:
+                event_item.setFlags(event_item.flags() & ~Qt.ItemIsEditable)
+                event_item.setTextAlignment(Qt.AlignCenter | Qt.AlignVCenter)
 
             action_item.setForeground(QColor("#6b7280"))
             time_item.setForeground(QColor("#9ca3af"))

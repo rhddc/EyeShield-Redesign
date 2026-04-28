@@ -389,10 +389,15 @@ class EyeShieldApp(QMainWindow):
                 "group": "SYSTEM",
             },
             {
-                "icon": self._resolve_existing_path(os.path.join(icons_dir, "help.svg")),
-                "label": "Help",
-                "page_index": 6,
-                "group": None,
+                "icon": self._resolve_existing_path(
+                    os.path.join(icons_dir, "info.svg"),
+                    os.path.join(icons_dir, "help.svg"),
+                ),
+                "label": "Info",
+                "display_label": "Info",
+                "page_index": 6,  # Help page, switched into Info mode
+                "nav_key": "help_info",
+                "group": "SYSTEM",
             },
         ]
 
@@ -681,36 +686,70 @@ class EyeShieldApp(QMainWindow):
         )
 
     def _draw_sidebar_avatar(self):
-        """Draw initials-based circular avatar for sidebar user chip."""
+        """Draw circular avatar for sidebar (role-aware)."""
         size = 32
-        initials = ""
+        initials = self._display_initials()
+        pix = self._resolve_role_avatar_pixmap(size, initials)
+        if pix is not None and not pix.isNull():
+            self._sidebar_avatar_lbl.setPixmap(pix)
+
+    def _display_initials(self) -> str:
         name = self.display_name or self.username or ""
-        parts = name.strip().split()
+        parts = str(name).strip().split()
         if len(parts) >= 2:
-            initials = (parts[0][0] + parts[-1][0]).upper()
-        elif parts:
-            initials = parts[0][:2].upper()
-        else:
-            initials = "U"
+            return (parts[0][0] + parts[-1][0]).upper()
+        if parts:
+            return parts[0][:2].upper()
+        return "U"
 
-        img = QImage(size, size, QImage.Format_ARGB32_Premultiplied)
-        img.fill(Qt.transparent)
-        painter = QPainter(img)
-        painter.setRenderHint(QPainter.Antialiasing)
+    def _role_avatar_bg(self) -> str:
+        """Role → avatar background (used when no avatar image exists)."""
+        role = str(getattr(self, "role", "") or "").strip().lower()
+        return {
+            "admin": "#7c3aed",       # purple
+            "doctor": "#0ea5e9",      # sky
+            "clinician": "#0ea5e9",   # sky
+            "frontdesk": "#f59e0b",   # amber
+            "viewer": "#64748b",      # slate
+        }.get(role, "#3b82f6")        # blue default
 
-        path = QPainterPath()
-        path.addEllipse(0, 0, size, size)
-        painter.setClipPath(path)
-        painter.fillRect(0, 0, size, size, QColor("#3b82f6"))
+    def _role_avatar_file(self) -> str:
+        """Role → optional avatar image file under app/avatars/."""
+        role = str(getattr(self, "role", "") or "").strip().lower()
+        return {
+            "admin": "admin_avatar.png",
+            "doctor": "doctor_avatar.jpg",
+            "clinician": "doctor_avatar.jpg",
+            "frontdesk": "frontdesk_avatar.png",
+        }.get(role, "")
 
-        font = QFont("Segoe UI Variable", 11)
-        font.setBold(True)
-        painter.setFont(font)
-        painter.setPen(QColor("#ffffff"))
-        painter.drawText(img.rect(), Qt.AlignCenter, initials)
-        painter.end()
+    def _resolve_role_avatar_pixmap(self, size: int, initials: str) -> QPixmap:
+        """
+        Prefer role avatar image if present; otherwise render initials with role color.
+        Returns a pixmap sized exactly (size x size).
+        """
+        avatar_file = self._role_avatar_file()
+        if avatar_file:
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+            img_path = os.path.join(base_dir, "avatars", avatar_file)
+            if os.path.exists(img_path):
+                src = QPixmap(img_path)
+                if not src.isNull():
+                    src = src.scaled(QSize(size, size), Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
+                    out_img = QImage(size, size, QImage.Format_ARGB32_Premultiplied)
+                    out_img.fill(Qt.transparent)
+                    painter = QPainter(out_img)
+                    painter.setRenderHint(QPainter.Antialiasing)
+                    path = QPainterPath()
+                    path.addEllipse(0, 0, size, size)
+                    painter.setClipPath(path)
+                    painter.drawPixmap(0, 0, size, size, src)
+                    painter.end()
+                    return QPixmap.fromImage(out_img)
 
-        self._sidebar_avatar_lbl.setPixmap(QPixmap.fromImage(img))
+        bg = self._role_avatar_bg()
+        pix = self._make_circle_avatar_pixmap(size * 2, initials, bg)
+        return pix.scaled(QSize(size, size), Qt.KeepAspectRatio, Qt.SmoothTransformation)
 
     @staticmethod
     def _make_circle_avatar_pixmap(size: int, initials: str, bg_color: str = "#3b82f6") -> QPixmap:
@@ -1039,6 +1078,12 @@ class EyeShieldApp(QMainWindow):
             self.emr_page.release_screening_to_main_stack_if_embedded()
         self._active_nav_key = str(nav_key or self._default_nav_key_for_page(index) or "")
         self.pages.setCurrentIndex(index)
+        # Help page has internal modes (Help vs System → Info).
+        if index == 6 and hasattr(self, "help_support_page"):
+            mode = "info" if str(self._active_nav_key or "").strip().lower() == "help_info" else "help"
+            if hasattr(self.help_support_page, "_switch_mode"):
+                with contextlib.suppress(Exception):
+                    self.help_support_page._switch_mode(mode)
         if index == 1 and hasattr(self, "screening_page") and hasattr(self.screening_page, "sync_frontdesk_purpose_lock"):
             with contextlib.suppress(Exception):
                 self.screening_page.sync_frontdesk_purpose_lock()
@@ -1570,15 +1615,8 @@ class EyeShieldApp(QMainWindow):
         left_stack.addWidget(self.dashboard_date_label)
         left_stack.addStretch()
 
-        # Right: circular avatar
-        initials = ""
-        parts = (self.display_name or self.username or "").strip().split()
-        if len(parts) >= 2:
-            initials = (parts[0][0] + parts[-1][0]).upper()
-        elif parts:
-            initials = parts[0][:2].upper()
-        else:
-            initials = "U"
+        # Right: circular avatar (role-aware)
+        initials = self._display_initials()
 
         avatar_size = 56
         avatar_lbl = QLabel()
@@ -1586,10 +1624,7 @@ class EyeShieldApp(QMainWindow):
         avatar_lbl.setFixedSize(avatar_size, avatar_size)
         avatar_lbl.setAlignment(Qt.AlignCenter)
         avatar_lbl.setToolTip(self.display_name or self.username)
-        avatar_pix = self._make_circle_avatar_pixmap(avatar_size * 2, initials, "#3b82f6")
-        avatar_lbl.setPixmap(
-            avatar_pix.scaled(QSize(avatar_size, avatar_size), Qt.KeepAspectRatio, Qt.SmoothTransformation)
-        )
+        avatar_lbl.setPixmap(self._resolve_role_avatar_pixmap(avatar_size, initials))
         self._hero_avatar_lbl = avatar_lbl
 
         hero_h.addLayout(left_stack, 1)

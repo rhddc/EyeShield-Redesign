@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
     QTableWidget,
     QTableWidgetItem,
     QHeaderView,
+    QSizePolicy,
 )
 from PySide6.QtGui import QAction, QIcon
 from PySide6.QtCore import QTime, Qt
@@ -502,6 +503,35 @@ class SettingsPage(QWidget):
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(10)
 
+        # Match Patient Records canvas spacing a bit closer.
+        try:
+            layout.setContentsMargins(24, 22, 24, 22)
+            layout.setSpacing(14)
+        except Exception:
+            pass
+
+        # Single centered panel (match Patient Records table "card" vibe).
+        panel = QFrame()
+        panel.setObjectName("settingsPanel")
+        # Patient Records table card is wide; make Settings match by default
+        # (min width encourages expansion, max prevents ultra-wide on big screens).
+        panel.setMinimumWidth(1120)
+        panel.setMaximumWidth(1320)
+        panel.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        panel.setStyleSheet(
+            "QFrame#settingsPanel{background:#ffffff;border:1px solid #dbe7f5;border-radius:14px;}"
+        )
+        panel_l = QVBoxLayout(panel)
+        panel_l.setContentsMargins(18, 16, 18, 16)
+        panel_l.setSpacing(12)
+
+        panel_row = QHBoxLayout()
+        panel_row.setContentsMargins(0, 0, 0, 0)
+        panel_row.addStretch(1)
+        panel_row.addWidget(panel, 0)
+        panel_row.addStretch(1)
+        layout.addLayout(panel_row)
+
         hero_card = QFrame()
         hero_card.setObjectName("settingsHero")
         hero_layout = QVBoxLayout(hero_card)
@@ -515,7 +545,7 @@ class SettingsPage(QWidget):
         self.subtitle_label = QLabel("Configuration hub for preferences, security, and support")
         self.subtitle_label.setObjectName("headerSubtitle")
         hero_layout.addWidget(self.subtitle_label)
-        layout.addWidget(hero_card)
+        panel_l.addWidget(hero_card)
 
         pref_group = QGroupBox("Preferences")
         self.pref_group = pref_group
@@ -580,7 +610,9 @@ class SettingsPage(QWidget):
         self.timeout_help_label.setWordWrap(True)
         session_layout.addWidget(self.timeout_help_label)
 
-        self.support_group = QGroupBox("Support")
+        # Important: ensure admin-only groups are parented to the settings panel,
+        # otherwise they can become detached top-level windows.
+        self.support_group = QGroupBox("Support", panel)
         support_layout = QGridLayout(self.support_group)
         support_layout.setHorizontalSpacing(8)
         support_layout.setVerticalSpacing(6)
@@ -609,7 +641,7 @@ class SettingsPage(QWidget):
         support_layout.addWidget(self.support_phone_input, 1, 1)
         support_layout.addWidget(self.support_hours_input, 3, 0, 1, 2)
 
-        self.admin_contact_group = QGroupBox("Admin Details")
+        self.admin_contact_group = QGroupBox("Admin Details", panel)
         admin_contact_layout = QGridLayout(self.admin_contact_group)
         admin_contact_layout.setHorizontalSpacing(8)
         admin_contact_layout.setVerticalSpacing(6)
@@ -644,7 +676,7 @@ class SettingsPage(QWidget):
         admin_contact_layout.addWidget(self.admin_contact_location_label, 2, 1)
         admin_contact_layout.addWidget(self.admin_contact_location_input, 3, 1)
 
-        self.referral_hospitals_group = QGroupBox("Trusted referred hospitals")
+        self.referral_hospitals_group = QGroupBox("Trusted referred hospitals", panel)
         referral_layout = QVBoxLayout(self.referral_hospitals_group)
         referral_layout.setSpacing(6)
 
@@ -772,7 +804,7 @@ class SettingsPage(QWidget):
         self._policy_auto_logout_enabled = True
         self._policy_warning_seconds = 30
 
-        self.account_group = QGroupBox("My Account")
+        self.account_group = QGroupBox("My Account", panel)
         account_layout = QVBoxLayout(self.account_group)
         account_layout.setSpacing(8)
 
@@ -817,7 +849,7 @@ class SettingsPage(QWidget):
         account_btn_row.addWidget(self.account_save_btn)
         account_layout.addLayout(account_btn_row)
 
-        self.schedule_group = QGroupBox("My Schedule")
+        self.schedule_group = QGroupBox("My Schedule", panel)
         schedule_layout = QVBoxLayout(self.schedule_group)
         schedule_layout.setSpacing(6)
 
@@ -871,6 +903,7 @@ class SettingsPage(QWidget):
             days_grid.addWidget(checkbox, row, col)
         schedule_layout.addLayout(days_grid)
 
+        # Panel sizing: keep a single centered column like Patient Records.
         for card in (
             pref_group,
             self.session_group,
@@ -878,10 +911,11 @@ class SettingsPage(QWidget):
             self.admin_contact_group,
             self.account_group,
             self.schedule_group,
+            self.referral_hospitals_group,
         ):
-            card.setMaximumWidth(640)
-        for wide_card in (self.referral_hospitals_group,):
-            wide_card.setMaximumWidth(1020)
+            if card is not None:
+                card.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+                card.setMaximumWidth(1320)
 
         schedule_btn_row = QHBoxLayout()
         schedule_btn_row.addStretch(1)
@@ -891,21 +925,14 @@ class SettingsPage(QWidget):
         schedule_btn_row.addWidget(self.schedule_save_btn)
         schedule_layout.addLayout(schedule_btn_row)
 
-        top_bento_grid = QGridLayout()
-        top_bento_grid.setHorizontalSpacing(10)
-        top_bento_grid.setVerticalSpacing(10)
-        top_bento_grid.addWidget(pref_group, 0, 0)
-        top_bento_grid.addWidget(self.session_group, 0, 1)
-        top_bento_grid.addWidget(self.support_group, 1, 0)
-        top_bento_grid.addWidget(self.admin_contact_group, 1, 1)
-        top_bento_grid.addWidget(self.account_group, 2, 0)
-        top_bento_grid.addWidget(self.schedule_group, 2, 1)
-        top_bento_grid.setColumnStretch(0, 1)
-        top_bento_grid.setColumnStretch(1, 1)
-        layout.addLayout(top_bento_grid)
+        # Section layout (requested):
+        # Preferences → Session Settings → (admin-only) Support/Admin Details → My Account → Buttons
+        for section in (pref_group, self.session_group, self.support_group, self.admin_contact_group, self.account_group):
+            panel_l.addWidget(section)
 
         # Global settings actions.
         button_row = QHBoxLayout()
+        button_row.setContentsMargins(0, 0, 0, 0)
         button_row.addStretch(1)
         self.reset_btn = QPushButton("Reset Defaults")
         self.reset_btn.clicked.connect(self.reset_defaults)
@@ -920,17 +947,22 @@ class SettingsPage(QWidget):
         button_row.addWidget(self.reset_btn)
         button_row.addWidget(self.quick_backup_btn)
         button_row.addWidget(self.save_btn)
-        layout.addLayout(button_row)
+        btn_wrap = QWidget()
+        btn_wrap.setStyleSheet("background: transparent;")
+        btn_wrap_l = QHBoxLayout(btn_wrap)
+        btn_wrap_l.setContentsMargins(0, 0, 0, 0)
+        btn_wrap_l.addLayout(button_row)
+        panel_l.addWidget(btn_wrap)
 
         self.status_label = QLabel("Ready")
         self.status_label.setObjectName("statusLabel")
-        layout.addWidget(self.status_label)
+        panel_l.addWidget(self.status_label)
 
         # ── Divider ───────────────────────────────────────────────────────
         divider = QLabel()
         divider.setFixedHeight(1)
         divider.setStyleSheet("background:#dee2e6; margin: 4px 0;")
-        layout.addWidget(divider)
+        panel_l.addWidget(divider)
 
         # ── About ─────────────────────────────────────────────────────────
         about_group = QGroupBox("About")
@@ -991,7 +1023,14 @@ class SettingsPage(QWidget):
         sections_row.addWidget(privacy_group, 1, 0, 1, 2)
         sections_row.setColumnStretch(0, 1)
         sections_row.setColumnStretch(1, 1)
-        layout.addLayout(sections_row)
+        # Info sections are hidden (moved under Help → System → Info).
+        # Keep them in the layout for admin/dev contexts but center-align.
+        info_wrap = QWidget()
+        info_wrap.setStyleSheet("background: transparent;")
+        info_wrap_l = QVBoxLayout(info_wrap)
+        info_wrap_l.setContentsMargins(0, 0, 0, 0)
+        info_wrap_l.addLayout(sections_row)
+        panel_l.addWidget(info_wrap)
 
         self.load_settings()
         self.theme_combo.currentTextChanged.connect(self.apply_live_preview)
@@ -1001,7 +1040,20 @@ class SettingsPage(QWidget):
         self._configure_schedule_section()
         self._configure_session_support_section()
         self._configure_admin_contact_section()
+        self._configure_info_sections()
         self._sync_timeout_enabled_state()
+
+        # Frontdesk / doctor: simplify settings surface area.
+        role = self._active_role()
+        if role in {"frontdesk", "doctor"}:
+            for w in (
+                getattr(self, "support_group", None),
+                getattr(self, "admin_contact_group", None),
+                getattr(self, "referral_hospitals_group", None),
+                getattr(self, "schedule_group", None),
+            ):
+                if w is not None:
+                    w.setVisible(False)
 
         self.theme_combo.setFocus()
         self.setTabOrder(self.theme_combo, self.lang_combo)
@@ -1009,6 +1061,15 @@ class SettingsPage(QWidget):
         self.setTabOrder(self.reset_btn, self.save_btn)
 
         layout.addStretch()
+
+    def _configure_info_sections(self) -> None:
+        """
+        About / Terms / Privacy are now presented under Help → System → Info.
+        Keep the content in code (no destruction), but hide from Settings UI.
+        """
+        for w in (getattr(self, "about_group", None), getattr(self, "terms_group", None), getattr(self, "privacy_group", None)):
+            if w is not None:
+                w.setVisible(False)
 
     def _active_role(self) -> str:
         main_window = self.window()
@@ -1022,7 +1083,7 @@ class SettingsPage(QWidget):
 
     def _configure_account_section(self):
         role = self._active_role()
-        show_account = role == "clinician"
+        show_account = role in {"clinician", "doctor", "frontdesk"}
         self.account_group.setVisible(show_account)
         if not show_account:
             return
@@ -1095,7 +1156,8 @@ class SettingsPage(QWidget):
 
     def _configure_session_support_section(self):
         role = self._active_role()
-        show_session_support = role in {"admin", "clinician", "viewer"}
+        # Frontdesk/doctor still need Session Settings (timeouts, etc.)
+        show_session_support = role in {"admin", "clinician", "doctor", "frontdesk", "viewer"}
         is_admin = role == "admin"
         self.session_group.setVisible(show_session_support)
         self.support_group.setVisible(is_admin)
@@ -1692,7 +1754,7 @@ class SettingsPage(QWidget):
         if self._active_role() == "clinician":
             self._load_schedule_fields()
         self.apply_live_preview()
-        self.status_label.setText("Settings loaded")
+        self.status_label.setText("")
 
     def save_settings(self):
         is_admin = self._active_role() == "admin"
@@ -1818,8 +1880,8 @@ class SettingsPage(QWidget):
             QMessageBox.warning(self, "Settings", f"Failed to save settings: {err}")
 
     def update_account(self):
-        if self._active_role() != "clinician":
-            QMessageBox.warning(self, "Account", "Only clinicians can update this section.")
+        if self._active_role() not in {"clinician", "doctor", "frontdesk"}:
+            QMessageBox.warning(self, "Account", "Only staff accounts can update this section.")
             return
 
         current_username = self._active_username()

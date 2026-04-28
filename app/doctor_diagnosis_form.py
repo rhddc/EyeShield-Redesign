@@ -32,20 +32,14 @@ from PySide6.QtGui import QPixmap, QTextCursor
 
 try:
     from .screening_form import ScreeningPage
-except Exception:
-    from screening_form import ScreeningPage
-
-try:
     from .ui_feedback import show_warning, apply_dialog_style
-except Exception:
-    from ui_feedback import show_warning, apply_dialog_style
-
-try:
-    import emr_service as emr
+    from . import emr_service as emr
     from .auth import UserManager
     from .trusted_hospitals import ReferralHospitalDialog
-except Exception:
-    from . import emr_service as emr
+except (ImportError, ValueError):
+    from screening_form import ScreeningPage
+    from ui_feedback import show_warning, apply_dialog_style
+    import emr_service as emr
     from auth import UserManager
     from trusted_hospitals import ReferralHospitalDialog
 
@@ -181,7 +175,6 @@ class DoctorDiagnosisForm(QWidget):
         left_l.setSpacing(12)
         left_l.addWidget(self._build_patient_info_card())
         left_l.addWidget(self._build_clinical_history_card())
-        left_l.addWidget(self._build_referral_card())
         left_l.addStretch(1)
 
         # ── Screening page (fundus upload + results) ───────────────────────────
@@ -288,370 +281,7 @@ class DoctorDiagnosisForm(QWidget):
             if signal is not None:
                 signal.connect(lambda *args: self._refresh_patient_card())
 
-    # ── Referral card ──────────────────────────────────────────────────────────
 
-    def _build_referral_card(self) -> QWidget:
-        card = self._card_frame()
-        v = QVBoxLayout(card)
-        v.setContentsMargins(14, 12, 14, 12)
-        v.setSpacing(12)
-        self._add_card_header(v, "Medical Partners")
-
-        desc = QLabel("Generate a referral letter to a trusted doctor.")
-        desc.setStyleSheet("font-size:11px;color:#64748b;")
-        v.addWidget(desc)
-
-        form = QFormLayout()
-        form.setContentsMargins(0, 0, 0, 0)
-        form.setSpacing(8)
-
-        self.referral_combo = QComboBox()
-        self.referral_combo.setPlaceholderText("Select a doctor...")
-        self.referral_combo.setStyleSheet(
-            "QComboBox { background:#f8fafc; border:1px solid #cbd5e1; border-radius:6px; padding:6px; font-size:12px; }"
-            "QComboBox:hover { border-color:#94a3b8; }"
-        )
-        self._populate_referral_combo()
-
-        btn_manage = QPushButton("Manage...")
-        btn_manage.setCursor(Qt.PointingHandCursor)
-        btn_manage.setStyleSheet(
-            "QPushButton { background:transparent; color:#3f7ca7; border:none; font-size:11px; font-weight:600; text-align:right; }"
-            "QPushButton:hover { color:#1e40af; text-decoration:underline; }"
-        )
-        btn_manage.clicked.connect(self._open_referral_management)
-
-        form.addRow("To Doctor", self.referral_combo)
-        v.addLayout(form)
-        v.addWidget(btn_manage, 0, Qt.AlignRight)
-
-        btn_gen = QPushButton("Generate Referral Letter")
-        btn_gen.setCursor(Qt.PointingHandCursor)
-        btn_gen.setStyleSheet(
-            "QPushButton { background:#3f7ca7; color:#ffffff; border:none; border-radius:8px; padding:10px; font-weight:700; font-size:12px; }"
-            "QPushButton:hover { background:#336a91; }"
-        )
-        btn_gen.clicked.connect(self._generate_referral_letter)
-        v.addWidget(btn_gen)
-
-        return card
-
-    def _populate_referral_combo(self) -> None:
-        self.referral_combo.clear()
-        try:
-            items = UserManager.list_referral_hospitals(active_only=True)
-            for item in items:
-                doc = str(item.get("contact_person") or "").strip()
-                hosp = str(item.get("hospital_name") or "").strip()
-                label = f"{doc} ({hosp})" if doc and hosp else (doc or hosp or "Unnamed")
-                self.referral_combo.addItem(label, item)
-            
-            self.referral_combo.addItem("Manual Entry (Other)", None)
-        except Exception:
-            pass
-
-    def _open_referral_management(self) -> None:
-        from .trusted_hospitals import TrustedHospitalsPage
-        dlg = QDialog(self)
-        dlg.setWindowTitle("Manage Medical Partners")
-        dlg.resize(1000, 600)
-        lay = QVBoxLayout(dlg)
-        lay.setContentsMargins(0, 0, 0, 0)
-        
-        # Create the management page. 
-        # Since we refactored it to check for clinician role, it should work fine here.
-        page = TrustedHospitalsPage()
-        lay.addWidget(page)
-        
-        dlg.exec()
-        self._populate_referral_combo()
-
-    def _prompt_manual_partner(self) -> dict | None:
-        manual_dialog = QDialog(self)
-        manual_dialog.setWindowTitle("Manual Medical Partner Entry")
-        manual_dialog.setFixedSize(520, 260)
-
-        manual_layout = QVBoxLayout(manual_dialog)
-        manual_layout.setContentsMargins(16, 16, 16, 16)
-        manual_layout.setSpacing(10)
-
-        doc_input = QLineEdit()
-        doc_input.setPlaceholderText("Doctor Name")
-        hosp_input = QLineEdit()
-        hosp_input.setPlaceholderText("Hospital or Clinic")
-        addr_input = QLineEdit()
-        addr_input.setPlaceholderText("Address")
-        
-        manual_layout.addWidget(QLabel("Doctor Name"))
-        manual_layout.addWidget(doc_input)
-        manual_layout.addWidget(QLabel("Hospital / Clinic"))
-        manual_layout.addWidget(hosp_input)
-        manual_layout.addWidget(QLabel("Address"))
-        manual_layout.addWidget(addr_input)
-
-        manual_actions = QHBoxLayout()
-        manual_actions.addStretch(1)
-        manual_cancel_btn = QPushButton("Cancel")
-        manual_save_btn = QPushButton("Use Partner")
-        manual_save_btn.setObjectName("primaryAction")
-        manual_actions.addWidget(manual_cancel_btn)
-        manual_actions.addWidget(manual_save_btn)
-        manual_layout.addLayout(manual_actions)
-
-        manual_cancel_btn.clicked.connect(manual_dialog.reject)
-        manual_save_btn.clicked.connect(manual_dialog.accept)
-
-        while True:
-            if manual_dialog.exec() != QDialog.Accepted:
-                return None
-            doc_name = doc_input.text().strip()
-            hosp_name = hosp_input.text().strip()
-            addr = addr_input.text().strip()
-            
-            if not doc_name and not hosp_name:
-                QMessageBox.warning(manual_dialog, "Validation Error", "Please provide at least a Doctor or Hospital name.")
-                continue
-            
-            return {
-                "contact_person": doc_name,
-                "hospital_name": hosp_name,
-                "address": addr
-            }
-
-    def _generate_referral_letter(self) -> None:
-        idx = self.referral_combo.currentIndex()
-        if idx < 0:
-            show_warning(self, "Referral", "Please select a doctor first.")
-            return
-
-        ref_data = self.referral_combo.itemData(idx)
-        if ref_data is None:
-            # Handle Manual Entry
-            manual_data = self._prompt_manual_partner()
-            if not manual_data:
-                return
-            ref_data = manual_data
-
-        def esc(v) -> str:
-            s = str(v or "").strip()
-            return html.escape(s) if s and s not in ("0", "None", "Select", "-") else "&#8212;"
-
-        # 1. Patient Data
-        first_name = str(self._emr_patient.get('first_name') or "").strip()
-        last_name = str(self._emr_patient.get('last_name') or "").strip()
-        patient_name = f"{first_name} {last_name}".strip() or "N/A"
-        patient_name_esc = esc(patient_name)
-        
-        # 2. Referral Doctor Data
-        doctor_full = str(ref_data.get("contact_person") or "").strip()
-        hosp_name = str(ref_data.get("hospital_name") or "").strip()
-        hosp_addr = str(ref_data.get("address") or "").strip()
-        
-        parts = doctor_full.split()
-        surname = parts[-1] if parts else ""
-        date_str = datetime.now().strftime("%B %d, %Y")
-        
-        # 3. Clinical Data (Summary Background)
-        dm_type = str(getattr(self.screening, "diabetes_type", None).currentText() if hasattr(self.screening, "diabetes_type") else "").strip()
-        if dm_type.lower() == "select": dm_type = "Diabetes Mellitus"
-        
-        dm_duration = ""
-        if hasattr(self.screening, "diabetes_duration"):
-            dm_duration = self.screening.diabetes_duration.text()
-        
-        background_summary = f"The patient has a clinical history of {dm_type} for approximately {dm_duration}."
-
-        # 4. Gather Screened Eyes Data (Smart Eye Handling)
-        eyes_data = []
-        import re
-        
-        def clean_diag(diag: str) -> str:
-            if not diag: return "N/A"
-            # Strip confidence/uncertainty patterns like (Confidence: 85%) or Confidence: 85%
-            d = re.sub(r'\(.*?\)', '', diag).strip()
-            d = re.sub(r'(?i)confidence\s*:?\s*\d+.*', '', d).strip()
-            d = re.sub(r'(?i)uncertainty\s*:?\s*\d+.*', '', d).strip()
-            return d
-
-        # Check saved first eye
-        first = getattr(self.screening, "_first_eye_result", None)
-        if first and isinstance(first, dict) and first.get("image_path"):
-            eyes_data.append({
-                "label": str(first.get("eye") or "Screened Eye").upper(),
-                "diagnosis": clean_diag(first.get("result")),
-                "image": first.get("image_path")
-            })
-
-        # Check current results page (second eye or only eye)
-        res_win = getattr(self.screening, "results_page", None)
-        if res_win and res_win._current_image_path:
-            curr_label = str(res_win._current_eye_label or "").strip()
-            # Avoid duplicate if first eye is the same
-            if not any(e["label"] == curr_label.upper() for e in eyes_data):
-                payload = res_win.get_decision_payload()
-                diag = payload.get("final_diagnosis_icdr") or res_win._current_result_class
-                eyes_data.append({
-                    "label": curr_label.upper(),
-                    "diagnosis": clean_diag(diag),
-                    "image": res_win._current_image_path
-                })
-
-        # Build professional 2-page HTML
-        style = """
-        <style>
-            @page { margin: 10mm; }
-            body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; color: #1e293b; line-height: 1.4; font-size: 11.5pt; margin: 0; padding: 0; }
-            .page { width: 100%; }
-            .header { text-align: center; margin-bottom: 20px; }
-            .header h1 { font-size: 20pt; color: #0f172a; text-transform: uppercase; border-bottom: 2px solid #0f172a; padding-bottom: 5px; margin: 0; }
-            .meta-row { margin-bottom: 3px; }
-            .subject { font-weight: bold; margin-top: 15px; margin-bottom: 15px; text-decoration: underline; }
-            .section-title { font-weight: bold; margin-top: 15px; margin-bottom: 5px; color: #334155; text-transform: uppercase; font-size: 11pt; }
-            .findings-list { margin-left: 20px; margin-top: 5px; margin-bottom: 10px; }
-            .findings-list li { margin-bottom: 2px; }
-            .footer { margin-top: 30px; }
-            .page-break { page-break-before: always; }
-            .image-container { text-align: center; margin-top: 15px; margin-bottom: 30px; }
-            .image-container img { border: 1px solid #e2e8f0; border-radius: 4px; max-width: 600px; max-height: 400px; object-fit: contain; }
-            .eye-label { font-size: 16pt; font-weight: bold; color: #1e40af; margin-top: 5px; }
-            .diag-label { font-size: 14pt; margin-top: 3px; color: #1e293b; }
-            p { margin: 0 0 10px 0; }
-        </style>
-        """
-
-        # Page 1: Letter
-        html = f"<html><head>{style}</head><body>"
-        html += "<div class='page'>"
-        html += "<div class='header'><h1>Medical Referral Letter</h1></div>"
-        html += f"<div class='meta-row'><strong>Date:</strong> {date_str}</div>"
-        html += f"<div class='meta-row'><strong>To:</strong> Dr. {esc(doctor_full)}</div>"
-        html += f"<div class='meta-row'><strong>Address:</strong> {esc(hosp_addr)} ({esc(hosp_name)})</div>"
-        html += f"<div class='subject'>Subject: Clinical Referral for Patient: {patient_name_esc}</div>"
-        
-        html += f"<p>Dear Dr. {esc(surname)},</p>"
-        html += "<p>I am writing to formally refer the above-mentioned patient to your specialized care for further evaluation and management.</p>"
-        
-        html += "<div class='section-title'>Clinical Findings:</div>"
-        html += "<p>Based on the Diabetic Retinopathy (DR) screening conducted today, the following status has been identified:</p>"
-        html += "<ul class='findings-list'>"
-        for eye in eyes_data:
-            html += f"<li><strong>{eye['label']}:</strong> {esc(eye['diagnosis'])}</li>"
-        html += "</ul>"
-        
-        html += "<div class='section-title'>Patient Background:</div>"
-        html += f"<p>{esc(background_summary)}</p>"
-        
-        html += "<p>I would appreciate your expert consultation and any necessary intervention or specialized care that the patient may require. "
-        html += "Screening reports and fundus images have been provided to the patient for your reference.</p>"
-        
-        html += "<p>Thank you for your collaboration in providing comprehensive care for this patient.</p>"
-        
-        html += "<div class='footer'>"
-        html += "<p>Sincerely,</p><br>"
-        html += f"<strong>Dr. {esc(self.display_name or self.username)}</strong><br>"
-        html += "Clinician<br>"
-        html += "EyeShield DR Screening System"
-        html += "</div>"
-        html += "</div>" # End Page 1
-
-        # Page 2: Images (Smart Eye Handling)
-        if eyes_data:
-            html += "<div class='page-break'>"
-            html += "<div class='header'><h1>Screening Images</h1></div>"
-            for eye in eyes_data:
-                img_url = f"file:///{eye['image'].replace('\\', '/')}"
-                html += "<div class='image-container'>"
-                html += f"<div class='eye-label'>{eye['label']}</div>"
-                html += f"<img src='{img_url}' width='600'>"
-                html += f"<div class='diag-label'><strong>Diagnosis:</strong> {esc(eye['diagnosis'])}</div>"
-                html += "</div>"
-            html += "</div>"
-
-        html += "</body></html>"
-
-        dlg = ReferralLetterPreviewDialog(self, html)
-        dlg.exec()
-        
-        # Log audit event
-        try:
-            UserManager.add_activity_log(
-                self.username,
-                f"Generated 2-page referral letter for {patient_name} to Dr. {surname}"
-            )
-        except Exception:
-            pass
-
-class ReferralLetterPreviewDialog(QDialog):
-    def __init__(self, parent, html_content: str):
-        super().__init__(parent)
-        self.setWindowTitle("Referral Letter Preview")
-        self.resize(850, 850)
-        apply_dialog_style(self)
-        
-        l = QVBoxLayout(self)
-        l.setContentsMargins(15, 15, 15, 15)
-        l.setSpacing(10)
-        
-        header = QHBoxLayout()
-        title = QLabel("Medical Referral Letter")
-        title.setStyleSheet("font-size:20px;font-weight:700;color:#1e293b;")
-        header.addWidget(title)
-        header.addStretch()
-        l.addLayout(header)
-        
-        self.text_edit = QTextEdit()
-        self.text_edit.setHtml(html_content)
-        self.text_edit.setReadOnly(True)
-        self.text_edit.setStyleSheet(
-            "QTextEdit { background:#ffffff; border:1px solid #e2e8f0; border-radius:10px; "
-            "padding:10px; color:#1e293b; }"
-        )
-        l.addWidget(self.text_edit)
-        
-        btn_row = QHBoxLayout()
-        btn_copy = QPushButton("Copy to Clipboard")
-        btn_copy.setCursor(Qt.PointingHandCursor)
-        btn_copy.setStyleSheet(
-            "QPushButton { background:#f1f5f9; border:1px solid #cbd5e1; border-radius:8px; padding:10px; font-weight:600; color:#334155; }"
-            "QPushButton:hover { background:#e2e8f0; }"
-        )
-        btn_copy.clicked.connect(self._copy_to_clipboard)
-
-        btn_print = QPushButton("Print / Save as PDF")
-        btn_print.setCursor(Qt.PointingHandCursor)
-        btn_print.setStyleSheet(
-            "QPushButton { background:#eff6ff; border:1px solid #bfdbfe; border-radius:8px; padding:10px; font-weight:600; color:#1d4ed8; }"
-            "QPushButton:hover { background:#dbeafe; }"
-        )
-        btn_print.clicked.connect(self._print_letter)
-        
-        btn_close = QPushButton("Close")
-        btn_close.setCursor(Qt.PointingHandCursor)
-        btn_close.setStyleSheet(
-            "QPushButton { background:#0f172a; color:#ffffff; border:none; border-radius:8px; padding:10px; font-weight:600; }"
-            "QPushButton:hover { background:#1e293b; }"
-        )
-        btn_close.clicked.connect(self.accept)
-        
-        btn_row.addWidget(btn_copy)
-        btn_row.addWidget(btn_print)
-        btn_row.addStretch(1)
-        btn_row.addWidget(btn_close)
-        l.addLayout(btn_row)
-
-    def _print_letter(self):
-        from PySide6.QtPrintSupport import QPrintDialog, QPrinter
-        printer = QPrinter(QPrinter.HighResolution)
-        printer.setPageSize(QPageSize(QPageSize.A4))
-        
-        dlg = QPrintDialog(printer, self)
-        if dlg.exec() == QPrintDialog.Accepted:
-            self.text_edit.print_(printer)
-            QMessageBox.information(self, "Print", "The document has been sent to the printer.")
-
-    def _copy_to_clipboard(self):
-        QApplication.clipboard().setText(self.text_edit.toPlainText())
-        QMessageBox.information(self, "Copied", "Letter content copied to clipboard.")
 
     # ── Patient info card ──────────────────────────────────────────────────────
 
@@ -1128,6 +758,7 @@ class ReferralLetterPreviewDialog(QDialog):
             in_height.setValue(float(p.get("height_cm") or 0))
         except (TypeError, ValueError):
             in_height.setValue(0)
+        in_height.setSpecialValueText(" ")
         in_weight = QDoubleSpinBox()
         in_weight.setRange(0, 500)
         in_weight.setDecimals(1)
@@ -1136,6 +767,7 @@ class ReferralLetterPreviewDialog(QDialog):
             in_weight.setValue(float(p.get("weight_kg") or 0))
         except (TypeError, ValueError):
             in_weight.setValue(0)
+        in_weight.setSpecialValueText(" ")
 
         in_dm_dur = QSpinBox()
         in_dm_dur.setRange(0, 80)
@@ -1143,13 +775,14 @@ class ReferralLetterPreviewDialog(QDialog):
             in_dm_dur.setValue(int(float(p.get("dm_duration_years") or 0)))
         except (TypeError, ValueError):
             in_dm_dur.setValue(0)
+        in_dm_dur.setSpecialValueText(" ")
 
         form.addRow("Height", in_height)
         form.addRow("Weight", in_weight)
         form.addRow(QLabel("Diabetic History"))
 
         in_dm_type = QComboBox()
-        in_dm_type.addItems(["Select", "Type 1", "Type 2", "Gestational", "Type 1 + Type 2", "Type 1 + Gestational", "Type 2 + Gestational"])
+        in_dm_type.addItems(["", "Type 1", "Type 2", "Gestational", "Type 1 + Type 2", "Type 1 + Gestational", "Type 2 + Gestational"])
         current_dm_type = str(p.get("diabetes_type") or "")
         if current_dm_type:
             idx = in_dm_type.findText(current_dm_type)
@@ -1172,8 +805,8 @@ class ReferralLetterPreviewDialog(QDialog):
                 in_treatment_regimen.addItem(self.screening.treatment_regimen.itemText(i))
             self._set_combo_value(
                 in_treatment_regimen,
-                self._screening_choice_text(getattr(self.screening, "treatment_regimen", None), blank_values={"Select"}),
-                blank_values={"Select"},
+                self._screening_choice_text(getattr(self.screening, "treatment_regimen", None), blank_values={""}),
+                blank_values={""},
             )
 
         in_prev_dr_stage = QComboBox()
@@ -1182,8 +815,8 @@ class ReferralLetterPreviewDialog(QDialog):
                 in_prev_dr_stage.addItem(self.screening.prev_dr_stage.itemText(i))
             self._set_combo_value(
                 in_prev_dr_stage,
-                self._screening_choice_text(getattr(self.screening, "prev_dr_stage", None), blank_values={"Select"}),
-                blank_values={"Select"},
+                self._screening_choice_text(getattr(self.screening, "prev_dr_stage", None), blank_values={""}),
+                blank_values={""},
             )
 
         in_prev_treatment = QCheckBox("Previous DR Treatment")
@@ -1390,3 +1023,4 @@ class ReferralLetterPreviewDialog(QDialog):
         if worker is not None and hasattr(worker, "isRunning") and worker.isRunning():
             return True
         return False
+

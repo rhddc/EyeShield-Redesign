@@ -123,8 +123,11 @@ class DurationSpinBox(QSpinBox):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setRange(0, 1200)
+        self.setSpecialValueText(" ")
         
     def textFromValue(self, value: int) -> str:
+        if value == 0:
+            return ""
         y = value // 12
         m = value % 12
         return f"{y} years and {m} months"
@@ -261,8 +264,8 @@ class ModernCalendarDateEdit(QDateEdit):
         self.setMinimumDate(min_date)
         self.setMaximumDate(max_date)
         self.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
-        self.setSpecialValueText("")
-        self.setDate(self._default_date)
+        self.setSpecialValueText(" ")
+        self.setDate(self._min_date)
 
         cal = QCalendarWidget(self)
         cal.setGridVisible(False)
@@ -270,6 +273,16 @@ class ModernCalendarDateEdit(QDateEdit):
         cal.setMinimumSize(410, 320)
         cal.currentPageChanged.connect(self._sync_year_dropdown)
         self.setCalendarWidget(cal)
+
+        # Ensure that if the date is blank (min_date), the calendar starts at the default year (e.g. 2000)
+        def _on_cal_show(e):
+            # Let the standard showEvent run first
+            QCalendarWidget.showEvent(cal, e)
+            if self.date() == self.minimumDate():
+                # Use singleShot to jump after the internal QDateEdit sync logic runs
+                QTimer.singleShot(0, lambda: self._sync_to_default_year())
+
+        cal.showEvent = _on_cal_show
 
         # Build the custom year dropdown once the calendar nav is initialized.
         QTimer.singleShot(0, self._setup_year_dropdown)
@@ -319,6 +332,15 @@ class ModernCalendarDateEdit(QDateEdit):
         if year_button is not None:
             year_button.hide()
             year_button.setEnabled(False)
+        self._sync_year_dropdown()
+
+    def _sync_to_default_year(self):
+        cal = self.calendarWidget()
+        if not cal:
+            return
+        cal.blockSignals(True)
+        cal.setCurrentPage(self._default_date.year(), self._default_date.month())
+        cal.blockSignals(False)
         self._sync_year_dropdown()
 
     def _sync_year_dropdown(self, year: int | None = None, _month: int | None = None):
@@ -1108,11 +1130,11 @@ class ScreeningPage(QWidget):
         c1.addLayout(pid_row)
 
         self.p_first_name = QLineEdit()
-        self.p_first_name.setPlaceholderText("First name")
+        self.p_first_name.setPlaceholderText("")
         self.p_middle_name = QLineEdit()
-        self.p_middle_name.setPlaceholderText("Middle name")
+        self.p_middle_name.setPlaceholderText("")
         self.p_last_name = QLineEdit()
-        self.p_last_name.setPlaceholderText("Last name")
+        self.p_last_name.setPlaceholderText("")
 
         # Legacy compatibility: keep a single full-name field used by existing logic paths.
         self.p_name = QLineEdit()
@@ -1172,13 +1194,13 @@ class ScreeningPage(QWidget):
 
         # Contact fields (split per request)
         self.p_phone = QLineEdit()
-        self.p_phone.setPlaceholderText("Phone number")
+        self.p_phone.setPlaceholderText("")
         self.p_email = QLineEdit()
-        self.p_email.setPlaceholderText("Email")
+        self.p_email.setPlaceholderText("")
         self.p_address = QLineEdit()
-        self.p_address.setPlaceholderText("Address")
+        self.p_address.setPlaceholderText("")
         self.p_address = QLineEdit()
-        self.p_address.setPlaceholderText("Address")
+        self.p_address.setPlaceholderText("")
 
         # Constraints
         # - Phone: digits only (optional)
@@ -1318,7 +1340,7 @@ class ScreeningPage(QWidget):
         self.diabetes_type = QComboBox()
         self.diabetes_type.setObjectName("diabetesTypeDropdown")
         # Initialize with normal options; will be updated via signal if sex is Female
-        self.diabetes_type.addItems(["Select", "Type 1", "Type 2", "Type 1 + Type 2"])
+        self.diabetes_type.addItems(["", "Type 1", "Type 2", "Type 1 + Type 2"])
         self._apply_visible_dropdown_style(self.diabetes_type)
         
         # Connect Sex signal to update Diabetes options
@@ -1332,6 +1354,7 @@ class ScreeningPage(QWidget):
         c2.addLayout(row2(field("Diabetes Type", self.diabetes_type, "scr_label_diabetes"), field("Diagnosis Date", self.diabetes_diagnosis_date)))
 
         self.diabetes_duration = DurationSpinBox()
+
         self.diabetes_duration.setReadOnly(True)
         self.diabetes_duration.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
         self.diabetes_duration.setStyleSheet(
@@ -1341,14 +1364,14 @@ class ScreeningPage(QWidget):
         # Previous DR stage dropdown
         self.prev_dr_stage = QComboBox()
         self.prev_dr_stage.setObjectName("prevDRStageDropdown")
-        self.prev_dr_stage.addItems(["Select", "No previous DR", "Mild NPDR", "Moderate NPDR", "Severe NPDR", "PDR (Proliferative)", "Unknown"])
+        self.prev_dr_stage.addItems(["", "No previous DR", "Mild NPDR", "Moderate NPDR", "Severe NPDR", "PDR (Proliferative)", "Unknown"])
         self._apply_visible_dropdown_style(self.prev_dr_stage)
         c2.addLayout(row2(field("Duration", self.diabetes_duration, "scr_label_duration"), field("Previous DR Stage", self.prev_dr_stage, "scr_label_prev_dr")))
 
         # Treatment regimen dropdown
         self.treatment_regimen = QComboBox()
         self.treatment_regimen.setObjectName("treatmentRegimenDropdown")
-        self.treatment_regimen.addItems(["Select", "Insulin only", "Oral medications only", "Insulin + Oral medications", "Diet control only", "None/Unknown"])
+        self.treatment_regimen.addItems(["", "Insulin only", "Oral medications only", "Insulin + Oral medications", "Diet control only", "None/Unknown"])
         self._apply_visible_dropdown_style(self.treatment_regimen)
         c2.addLayout(field("Treatment Regimen", self.treatment_regimen, "scr_label_treatment"))
         self.notes = QTextEdit()
@@ -1693,7 +1716,7 @@ class ScreeningPage(QWidget):
         height_cm = float(self.height.value()) if self.height.value() > 0 else None
         weight_kg = float(self.weight.value()) if self.weight.value() > 0 else None
         dm_type = self.diabetes_type.currentText().strip()
-        if dm_type == "Select":
+        if dm_type == "":
             dm_type = ""
         dm_duration = float(self.diabetes_duration.value()) if self.diabetes_duration.value() > 0 else None
         hba1c_val = None  # Removed for frontdesk
@@ -2208,7 +2231,7 @@ class ScreeningPage(QWidget):
 
         current_selection = self.diabetes_type.currentText()
         
-        normal_options = ["Select", "None", "Type 1", "Type 2", "Type 1 + Type 2"]
+        normal_options = ["", "None", "Type 1", "Type 2", "Type 1 + Type 2"]
         gestational_options = ["Gestational", "Type 1 + Gestational", "Type 2 + Gestational"]
         
         self.diabetes_type.blockSignals(True)
@@ -2218,9 +2241,9 @@ class ScreeningPage(QWidget):
             self.diabetes_type.addItems(normal_options + gestational_options)
         else:
             self.diabetes_type.addItems(normal_options)
-            # If a gestational option was selected and we're no longer female, reset to Select
+            # If a gestational option was selected and we're no longer female, reset to blank
             if current_selection in gestational_options:
-                current_selection = "Select"
+                current_selection = ""
                 
         # Restore selection if it still exists in the new list
         idx = self.diabetes_type.findText(current_selection)
@@ -2318,9 +2341,9 @@ class ScreeningPage(QWidget):
         patient_form.addRow("Sex:", self.p_sex)
 
         self.p_phone = QLineEdit()
-        self.p_phone.setPlaceholderText("Phone number")
+        self.p_phone.setPlaceholderText("")
         self.p_email = QLineEdit()
-        self.p_email.setPlaceholderText("Email")
+        self.p_email.setPlaceholderText("")
         # Keep legacy summary for older code paths.
         self.p_contact = QLineEdit()
         self.p_contact.hide()
@@ -2341,7 +2364,7 @@ class ScreeningPage(QWidget):
         clinical_form = QFormLayout()
 
         self.diabetes_type = QComboBox()
-        self.diabetes_type.addItems(["Select", "Type 1", "Type 2", "Gestational", "Type 1 + Type 2", "Type 1 + Gestational", "Type 2 + Gestational"])
+        self.diabetes_type.addItems(["", "Type 1", "Type 2", "Gestational", "Type 1 + Type 2", "Type 1 + Gestational", "Type 2 + Gestational"])
         clinical_form.addRow("Diabetes Type:", self.diabetes_type)
 
         self.diabetes_duration = DurationSpinBox()
@@ -2683,7 +2706,7 @@ class ScreeningPage(QWidget):
             return False
 
     def update_age_from_dob(self, date):
-        if not date.isValid():
+        if not date.isValid() or date == getattr(self, "min_dob_date", QDate(1900, 1, 1)):
             self.p_age.setValue(0)
             return
         today = QDate.currentDate()
@@ -2766,13 +2789,13 @@ class ScreeningPage(QWidget):
             else:
                 self.p_dob.setReadOnly(is_follow_up_locked)
 
-        # Clinical history
-        _set_enabled("diabetes_type", False if is_follow_up_locked else True)
-        _set_ro("diabetes_diagnosis_date", True if is_follow_up_locked else False)
+        # Clinical history (Keep editable even in follow-up mode per user request)
+        _set_enabled("diabetes_type", True)
+        _set_ro("diabetes_diagnosis_date", False)
         # HbA1c removed from UI.
-        _set_enabled("treatment_regimen", False if is_follow_up_locked else True)
+        _set_enabled("treatment_regimen", True)
         if hasattr(self, "prev_treatment"):
-            self.prev_treatment.setEnabled(False if is_follow_up_locked else True)
+            self.prev_treatment.setEnabled(True)
 
         # Vitals, symptoms, notes
         _set_ro("va_left", is_follow_up_locked)
@@ -2845,7 +2868,7 @@ class ScreeningPage(QWidget):
         if hasattr(self, "p_email"):
             self.p_email.clear()
         if isinstance(self.p_dob, QDateEdit):
-            self._set_dob_date(self.default_dob_date, user_selected=False)
+            self._set_dob_date(self.min_dob_date, user_selected=False)
         else:
             self.p_dob.clear()
         self.p_age.setValue(0)
@@ -3055,7 +3078,7 @@ class ScreeningPage(QWidget):
 
             # Safe diabetes type setting
             diabetes_str = str(diabetes_type or "").strip()
-            if diabetes_str and diabetes_str != "Select":
+            if diabetes_str and diabetes_str != "":
                 if self.diabetes_type.findText(diabetes_str) >= 0:
                     self.diabetes_type.setCurrentText(diabetes_str)
                 else:

@@ -198,6 +198,7 @@ class PatientTimelineDialog(QWidget):
         self._on_view_report = on_view_report
         self._on_compare     = on_compare
         self._on_export      = on_export
+        self._displayed_history_rows = []
 
         # Vital Signs UI was removed; keep an empty mapping so refresh paths stay safe.
         self.vital_rows: dict[str, QLabel] = {}
@@ -418,16 +419,14 @@ class PatientTimelineDialog(QWidget):
         title.setStyleSheet("font-size:13px;font-weight:700;color:#111827;")
         v.addWidget(title)
 
-        table = QTableWidget(0, 5)
+        table = QTableWidget(0, 4)
         table.setObjectName("screeningHistoryTable")
-        table.setHorizontalHeaderLabels(["Name", "Screening date", "Risk level", "Screened by", "Preview"])
-        # Evenly spread columns; keep Preview usable.
+        table.setHorizontalHeaderLabels(["Patient Name", "Risk level", "Screening date", "Screened by"])
+        # Evenly spread columns.
         header = table.horizontalHeader()
         header.setDefaultAlignment(Qt.AlignCenter)
         for c in range(0, 4):
             header.setSectionResizeMode(c, QHeaderView.Stretch)
-        header.setSectionResizeMode(4, QHeaderView.Fixed)
-        table.setColumnWidth(4, 84)
         table.verticalHeader().setVisible(False)
         table.setSelectionBehavior(QAbstractItemView.SelectRows)
         table.setSelectionMode(QAbstractItemView.SingleSelection)
@@ -442,9 +441,10 @@ class PatientTimelineDialog(QWidget):
         )
 
         self._history_table = table
+        table.itemDoubleClicked.connect(self._on_screening_row_double_click)
         v.addWidget(table)
 
-        hint = QLabel("Tip: click the eye icon to preview a past screening record (read-only).")
+        hint = QLabel("Tip: double-click a row to preview a past screening record (read-only).")
         hint.setStyleSheet("font-size:10px;color:#64748b;font-weight:400;")
         v.addWidget(hint)
 
@@ -465,9 +465,9 @@ class PatientTimelineDialog(QWidget):
         ]
         # Newest first in the list view.
         rows.sort(key=lambda r: (_parse_dt(r.get("screened_at")) or datetime.min, int(r.get("id") or 0)), reverse=True)
+        self._displayed_history_rows = rows
 
         table.setRowCount(len(rows))
-        eye_icon = QIcon(str((_ICONS_DIR / "eye_open.svg").resolve()))
 
         for i, rec in enumerate(rows):
             name = str(rec.get("name") or self.patient_summary.get("name") or "-").strip() or "-"
@@ -482,33 +482,27 @@ class PatientTimelineDialog(QWidget):
             it_name.setTextAlignment(Qt.AlignCenter)
             table.setItem(i, 0, it_name)
 
-            it_dt = QTableWidgetItem(dt_label)
-            it_dt.setTextAlignment(Qt.AlignCenter)
-            table.setItem(i, 1, it_dt)
-
             it_risk = QTableWidgetItem(risk_text)
             it_risk.setTextAlignment(Qt.AlignCenter)
             it_risk.setForeground(QColor(risk_color))
-            table.setItem(i, 2, it_risk)
+            table.setItem(i, 1, it_risk)
+
+            it_dt = QTableWidgetItem(dt_label)
+            it_dt.setTextAlignment(Qt.AlignCenter)
+            table.setItem(i, 2, it_dt)
 
             it_by = QTableWidgetItem(scr_by)
             it_by.setTextAlignment(Qt.AlignCenter)
             table.setItem(i, 3, it_by)
 
-            btn = QPushButton("")
-            btn.setCursor(Qt.PointingHandCursor)
-            btn.setToolTip("Preview this screening")
-            btn.setIcon(eye_icon)
-            btn.setFixedSize(34, 28)
-            btn.setStyleSheet(
-                "QPushButton{background:#f8fafc;border:none;border-radius:8px;}"
-                "QPushButton:hover{background:#e2e8f0;}"
-            )
-            btn.clicked.connect(lambda _=False, r=rec: self._open_screening_preview(r))
-            table.setCellWidget(i, 4, btn)
-
         for r in range(table.rowCount()):
             table.setRowHeight(r, 36)
+
+    def _on_screening_row_double_click(self, item: QTableWidgetItem) -> None:
+        row = item.row()
+        if 0 <= row < len(self._displayed_history_rows):
+            record = self._displayed_history_rows[row]
+            self._open_screening_preview(record)
 
     def _open_screening_preview(self, record: dict) -> None:
         dlg = PatientTimelineDialog(
@@ -660,6 +654,8 @@ class PatientTimelineDialog(QWidget):
             ("weight",     "Weight"),
             ("bmi",        "BMI"),
         ]:
+            if key == "eyes" and self._frontdesk_mode:
+                continue
             row_w, val_lbl = self._kv(label)
             self.info_rows[key] = val_lbl
             v.addWidget(row_w)
