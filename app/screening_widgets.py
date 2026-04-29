@@ -397,7 +397,7 @@ class ImageZoomDialog(QDialog):
         self.zoom_factor = 1.0
 
         self.setWindowTitle(title)
-        self.resize(1100, 850)
+        self.resize(1000, 680)
         self.setStyleSheet("QDialog{background:#ffffff;}")
 
         layout = QVBoxLayout(self)

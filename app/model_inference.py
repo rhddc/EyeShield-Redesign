@@ -18,6 +18,11 @@ import threading
 import warnings
 
 import numpy as np
+try:
+    import numpy.core as _np_core
+    import numpy._core as _np_internal
+except ImportError:
+    pass
 import torch
 import torch.nn as nn
 from torchvision import models, transforms
@@ -219,8 +224,10 @@ def _unwrap_state_dict(state: object) -> dict[str, torch.Tensor]:
 def _torch_load(path: str) -> object:
     """Load a checkpoint, falling back to weights_only=False for older or complex checkpoints."""
     try:
+        # Try the modern secure load first
         return torch.load(path, map_location=_device, weights_only=True)
     except Exception:
+        # Fallback to standard load for compatibility with custom classes or older checkpoints
         return torch.load(path, map_location=_device, weights_only=False)
 
 

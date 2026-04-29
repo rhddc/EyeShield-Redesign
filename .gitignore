@@ -7,6 +7,15 @@ __pycache__/
 *.pyo
 .aider*
 
+*dist/
+
+
+*build/
+
+*.vscode/
+
+*spec
+
 # Local data / artifacts
 app/stored_images/
 app/uploads/

@@ -201,8 +201,8 @@ class ScreeningComparisonDialog(QDialog):
             self.previous_record = self.all_records[-2] if len(self.all_records) >= 2 else self.latest_record
         
         self.setWindowTitle("Compare Screenings")
-        self.resize(1320, 960)
-        self.setMinimumSize(1100, 850)
+        self.resize(1280, 720)
+        self.setMinimumSize(1024, 600)
 
         self._root = QVBoxLayout(self)
         self._root.setContentsMargins(18, 16, 18, 16)

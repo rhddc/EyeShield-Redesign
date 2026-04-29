@@ -149,7 +149,8 @@ class ResultsWindow(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.parent_page = parent
-        self.setMinimumSize(900, 600)
+        self.setWindowTitle("Screening Results")
+        self.setMinimumSize(850, 500)
         self._icons_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icons")
 
         # Report generation state  updated by set_results()
@@ -170,7 +171,23 @@ class ResultsWindow(QWidget):
         self._uncertainty_pct = 0.0
 
         # Outer layout
-        layout = QVBoxLayout(self)
+        outer_layout = QVBoxLayout(self)
+        outer_layout.setContentsMargins(0, 0, 0, 0)
+        outer_layout.setSpacing(0)
+
+        # Scroll Area for responsiveness
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setStyleSheet("background: transparent;")
+        outer_layout.addWidget(scroll)
+
+        scroll_content = QWidget()
+        scroll_content.setObjectName("resultsScrollContent")
+        scroll_content.setStyleSheet("QWidget#resultsScrollContent { background: transparent; }")
+        scroll.setWidget(scroll_content)
+
+        layout = QVBoxLayout(scroll_content)
         layout.setContentsMargins(20, 16, 20, 16)
         layout.setSpacing(12)
 
@@ -397,7 +414,7 @@ class ResultsWindow(QWidget):
         actions_grid.setColumnStretch(0, 1)
         actions_layout.addLayout(actions_grid)
         actions_layout.addStretch(1)
-        actions_card.setMinimumWidth(300)
+        actions_card.setMinimumWidth(260)
 
         class_card = QFrame()
         class_card.setObjectName("resultStatCard")

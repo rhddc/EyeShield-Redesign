@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
     QFileDialog, QFormLayout, QGroupBox, QComboBox, QDateEdit, QMessageBox,
     QDoubleSpinBox, QSpinBox, QCheckBox, QTextEdit, QCalendarWidget, QStackedWidget,
     QGridLayout, QFrame, QSizePolicy, QSplitter, QAbstractSpinBox,
-    QApplication,
+    QApplication, QScrollArea,
 )
 from PySide6.QtGui import (
     QPixmap,
@@ -648,7 +648,23 @@ class ScreeningPage(QWidget):
     def create_unified_page(self):
         root = QWidget()
         root.setStyleSheet(_REDESIGN_STYLESHEET)
-        root_layout = QVBoxLayout(root)
+        
+        outer_layout = QVBoxLayout(root)
+        outer_layout.setContentsMargins(0, 0, 0, 0)
+        outer_layout.setSpacing(0)
+        
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setStyleSheet("background: transparent;")
+        outer_layout.addWidget(scroll)
+        
+        scroll_content = QWidget()
+        scroll_content.setObjectName("screeningScrollContent")
+        scroll_content.setStyleSheet("QWidget#screeningScrollContent { background: transparent; }")
+        scroll.setWidget(scroll_content)
+        
+        root_layout = QVBoxLayout(scroll_content)
         embedded = bool(getattr(self, "_embedded_compact", False))
         # Wider side gutters improve readability (less edge-to-edge scanning).
         root_layout.setContentsMargins(0 if embedded else 16, 0 if embedded else 12, 0 if embedded else 16, 0 if embedded else 12)
@@ -699,8 +715,9 @@ class ScreeningPage(QWidget):
         # Wide enough for the intake + upload split, but not edge-to-edge on large screens.
         screen = QGuiApplication.primaryScreen()
         screen_w = int(screen.availableGeometry().width()) if screen else 1366
-        assess_max_w = max(1100, min(1440, int(screen_w * 0.92)))
-        assess_min_w = max(880, min(1120, int(screen_w * 0.70)))
+        assess_max_w = min(1440, int(screen_w * 0.95))
+        # Ensure minimum width doesn't exceed available space on small screens (sidebar is ~260px)
+        assess_min_w = min(880, max(600, screen_w - 300))
         if bool(getattr(self, "_embedded_compact", False)):
             assess_max_w = 16777215 # No artificial cap when embedded
             assess_min_w = 0
@@ -3798,7 +3815,7 @@ class ScreeningPage(QWidget):
             cur.execute(
                 """
                 UPDATE patient_records SET
-                    patient_id = ?, name = ?, birthdate = ?, age = ?, sex = ?, contact = ?, phone = ?, address = ?, eyes = ?,
+                    patient_id = ?, name = ?, birthdate = ?, age = ?, sex = ?, contact = ?, phone = ?, email = ?, address = ?, eyes = ?,
                     diabetes_type = ?, duration = ?, hba1c = ?, prev_treatment = ?, notes = ?,
                     result = ?, confidence = ?, screened_at = ?,
                     ai_classification = ?, doctor_classification = ?, decision_mode = ?, override_justification = ?,
@@ -4072,6 +4089,7 @@ class ScreeningPage(QWidget):
         sex = self.p_sex.currentText()
         contact = self.p_contact.text().strip()
         phone = self.p_phone.text().strip() if hasattr(self, "p_phone") else ""
+        email = self.p_email.text().strip() if hasattr(self, "p_email") else ""
         address = self.p_address.text().strip() if hasattr(self, "p_address") else ""
         eye = self.p_eye.currentText()
         diabetes_type = self.diabetes_type.currentText()
@@ -4212,6 +4230,7 @@ class ScreeningPage(QWidget):
             "sex": sex,
             "contact": contact,
             "phone": phone,
+            "email": email,
             "address": address,
             "eye": eye,
             "diabetes_type": diabetes_type,
@@ -4288,6 +4307,7 @@ class ScreeningPage(QWidget):
             sex,
             contact,
             phone,
+            email,
             address,
             eye,
             diabetes_type if diabetes_type != "Select" else "",
@@ -4535,7 +4555,7 @@ class ScreeningPage(QWidget):
             cur.execute(
                 """
                 INSERT INTO patient_records (
-                    patient_id, name, birthdate, age, sex, contact, phone, address, eyes,
+                    patient_id, name, birthdate, age, sex, contact, phone, email, address, eyes,
                     diabetes_type, duration, hba1c, prev_treatment, notes,
                     result, confidence, screened_at,
                     ai_classification, doctor_classification, decision_mode, override_justification,

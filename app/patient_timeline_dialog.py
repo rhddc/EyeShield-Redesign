@@ -604,7 +604,7 @@ class PatientTimelineDialog(QWidget):
         lay.setContentsMargins(0, 0, 0, 0)
         lay.addWidget(dlg)
         dlg.back_requested.connect(shell.accept)
-        shell.resize(1000, 800) # Slightly larger for better readability
+        shell.resize(1000, 700) # Adjusted for 768p screens
         shell.exec()
 
     def _build_three_col_page(
