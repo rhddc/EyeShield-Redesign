@@ -51,9 +51,14 @@ def _fmt_long(v: str) -> str:
 
 
 def _is_completed_visit(visit: dict) -> bool:
-    """Heuristic: a visit is only comparable if it has real fundus images."""
+    """Heuristic: a visit is comparable if it has real fundus images or is marked completed."""
     if not isinstance(visit, dict):
         return False
+    
+    # If explicitly marked completed, trust the status
+    if str(visit.get("status") or "").strip().lower() == "completed":
+        return True
+        
     eye_details = list(visit.get("eye_details") or [])
     for d in eye_details:
         if not isinstance(d, dict):
@@ -406,7 +411,7 @@ class PatientTimelineDialog(QWidget):
 
             # Inline compare button (blue). Only show when explicitly enabled (follow-up review flow).
             if self._on_compare and self._show_inline_compare:
-                self._inline_compare_btn = QPushButton("Compare screenings")
+                self._inline_compare_btn = QPushButton("Compare screenings", self)
                 self._inline_compare_btn.setCursor(Qt.PointingHandCursor)
                 self._inline_compare_btn.setFixedHeight(40)
                 self._inline_compare_btn.setStyleSheet(
@@ -457,20 +462,22 @@ class PatientTimelineDialog(QWidget):
             btn = getattr(self, btn_name, None)
             if btn is None:
                 continue
+            
+            # Frontdesk actions card should only show Follow-up; don't force Compare visible there.
+            if btn_name == "btn_compare" and self._frontdesk_mode:
+                continue
+
             with contextlib.suppress(Exception):
                 btn.setVisible(bool(can_compare))
             with contextlib.suppress(Exception):
                 btn.setToolTip(hint)
         
-        # If the actions card is not placed in the overview (e.g. EMR review uses inline compare only),
-        # never show it — an unparented QFrame becomes a stray top-level window when setVisible(True).
-        if hasattr(self, "_card_actions") and not self._frontdesk_mode:
+        # Ensure the actions card is only visible if it's actually embedded in the layout.
+        # An unparented or non-embedded QFrame becomes a stray top-level window when setVisible(True).
+        if hasattr(self, "_card_actions"):
             embedded = bool(getattr(self, "_actions_card_embedded", False))
             with contextlib.suppress(Exception):
-                if embedded:
-                    self._card_actions.setVisible(bool(can_compare))
-                else:
-                    self._card_actions.setVisible(False)
+                self._card_actions.setVisible(embedded and can_compare)
 
     def _build_screening_history_page(self) -> QWidget:
         page = QWidget()
@@ -685,6 +692,7 @@ class PatientTimelineDialog(QWidget):
         sep.setStyleSheet("background:#f1f5f9;max-height:1px;border:none;")
         v.addWidget(sep)
         return f, v
+
 
     def _build_patient_info_card(self) -> QWidget:
         card = QFrame()
@@ -974,15 +982,15 @@ class PatientTimelineDialog(QWidget):
         self._actions_has_buttons = False
         if self._frontdesk_mode:
             # Frontdesk mode: show only the follow-up screening button
-            self.btn_followup = self._action_btn("+ Follow-up screening", primary=True, large=True)
+            self.btn_followup = self._action_btn("+ Follow-up screening", card, primary=True, large=True)
             self.btn_followup.clicked.connect(self._handle_follow_up)
             v.addWidget(self.btn_followup)
             self._actions_has_buttons = True
             # Create hidden compare button for compatibility
-            self.btn_compare = self._action_btn("Compare Screenings", large=True)
+            self.btn_compare = self._action_btn("Compare Screenings", card, large=True)
             self.btn_compare.hide()
         else:
-            self.btn_compare = self._action_btn("Compare Screenings", large=True)
+            self.btn_compare = self._action_btn("Compare Screenings", card, large=True)
             if callable(self._on_compare):
                 self.btn_compare.clicked.connect(self._handle_compare)
                 v.addWidget(self.btn_compare)
@@ -991,8 +999,8 @@ class PatientTimelineDialog(QWidget):
                 self.btn_compare.hide()
         return card
 
-    def _action_btn(self, text: str, primary: bool = False, large: bool = False) -> QPushButton:
-        b = QPushButton(text)
+    def _action_btn(self, text: str, parent: QWidget, primary: bool = False, large: bool = False) -> QPushButton:
+        b = QPushButton(text, parent)
         b.setCursor(Qt.PointingHandCursor)
         b.setFixedHeight(44 if large else 32)
         if primary:

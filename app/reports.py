@@ -426,7 +426,7 @@ class ScreeningComparisonDialog(QDialog):
             self.previous_record = self.all_records[-2] if len(self.all_records) >= 2 else self.latest_record
         
         self.setWindowTitle("Compare Screenings")
-        self.resize(1280, 720)
+        self.resize(1320, 960)
         self.setMinimumSize(1024, 600)
 
         self._root = QVBoxLayout(self)
@@ -3392,6 +3392,9 @@ class ReportsPage(QWidget):
             return
 
         dialog = ScreeningComparisonDialog(ordered, self)
+        from ui_feedback import apply_dialog_style
+        apply_dialog_style(dialog)
+        dialog.resize(max(dialog.width(), 1320), max(dialog.height(), 960))
         dialog.exec()
 
     def _export_patient_history(self, timeline_records: list[dict]):
