@@ -2670,6 +2670,14 @@ class EyeShieldApp(QMainWindow):
             hero_bg       = "qlineargradient(x1:0,y1:0,x2:1,y2:0,stop:0 #eff6ff,stop:1 #e0f2fe)"
             border_color  = "#e2e8f0"
 
+        # Apply global aesthetic font
+        self.dashboard_page.setStyleSheet(f"""
+            QWidget#dashboardPage {{
+                background: {bg_page};
+                font-family: 'Inter', 'Segoe UI', sans-serif;
+            }}
+        """)
+
         # Update Graph Dark Mode
         if hasattr(self, "weekly_graph"):
             self.weekly_graph.set_dark_mode(dark)
@@ -2843,7 +2851,7 @@ class EyeShieldApp(QMainWindow):
                     item_l.setSpacing(12)
 
                     name_lbl = QLabel(s["name"])
-                    name_lbl.setStyleSheet(f"font-size:14px;font-weight:800;color:{text_primary};background:transparent;")
+                    name_lbl.setStyleSheet(f"font-size:14px;font-weight:500;color:{text_primary};background:transparent;")
                     
                     contact_lbl = QLabel(s["contact"])
                     contact_lbl.setStyleSheet(f"font-size:13px;font-weight:600;color:{text_secondary};background:transparent;")

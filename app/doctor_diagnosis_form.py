@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QGridLayout,
     QTextEdit,
+    QScrollArea,
 )
 from PySide6.QtCore import Qt, QDate, QTime
 from PySide6.QtGui import QPixmap, QTextCursor
@@ -269,7 +270,6 @@ class DoctorDiagnosisForm(QWidget):
             ("diabetes_diagnosis_date", "textChanged"),
             ("treatment_regimen", "currentTextChanged"),
             ("prev_dr_stage", "currentTextChanged"),
-            ("prev_treatment", "toggled"),
         ):
             widget = getattr(self.screening, name, None)
             signal = getattr(widget, signal_name, None) if widget is not None else None
@@ -568,7 +568,6 @@ class DoctorDiagnosisForm(QWidget):
             values.get("prev_dr_stage") or "",
             blank_values={"Select"},
         )
-        self._set_checked(getattr(self.screening, "prev_treatment", None), bool(values.get("prev_treatment")))
 
         try:
             h = float(values.get("height_cm") or 0)
@@ -685,10 +684,6 @@ class DoctorDiagnosisForm(QWidget):
                 (vd.get("prev_dr_stage") if vd else None) or p.get("prev_dr_stage") or "—"
             ).strip() or "—"
 
-            prev_val = (vd.get("prev_treatment") if vd else None)
-            if prev_val in (None, ""):
-                prev_val = p.get("previous_eye_treatment")
-            prev_txt = str(prev_val or "—").strip() or "—"
 
             updates = {
                 "diabetes_type":    diabetes_type,
@@ -714,139 +709,264 @@ class DoctorDiagnosisForm(QWidget):
             show_warning(self, "Edit", "Could not resolve current user.")
             return
 
-        dlg = QDialog(self)
-        dlg.setWindowTitle("Edit patient info")
-        lay = QVBoxLayout(dlg)
-        form = QFormLayout()
+        # Fetch latest visit details to ensure height/weight/etc are current
+        qid = int(self._queue_entry_id or 0)
+        vd = emr.get_visit_details(qid) if qid else {}
+        
+        # Merge visit details into patient dict for initialization convenience
+        # preferring visit data (clinically current) over EMR defaults.
+        h_init = vd.get("height_cm") if vd.get("height_cm") is not None else p.get("height_cm")
+        w_init = vd.get("weight_kg") if vd.get("weight_kg") is not None else p.get("weight_kg")
+        dm_type_init = vd.get("diabetes_type") if vd.get("diabetes_type") is not None else p.get("diabetes_type")
+        dm_dur_init = vd.get("dm_duration_years") if vd.get("dm_duration_years") is not None else p.get("dm_duration_years")
+        diag_date_init = vd.get("diabetes_diagnosis_date") if vd.get("diabetes_diagnosis_date") is not None else p.get("diabetes_diagnosis_date")
+        regimen_init = vd.get("treatment_regimen") if vd.get("treatment_regimen") is not None else p.get("treatment_regimen")
+        fam_hx_init = vd.get("prev_dr_stage") if vd.get("prev_dr_stage") is not None else p.get("prev_dr_stage")
 
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Edit Patient Information")
+        apply_dialog_style(dlg)
+        dlg.setMinimumWidth(600)
+        dlg.setStyleSheet("QDialog { background: #f8fafc; }")
+
+        main_v = QVBoxLayout(dlg)
+        main_v.setContentsMargins(0, 0, 0, 0)
+        main_v.setSpacing(0)
+
+        # ── Header ───────────────────────────────────────────────────────────
+        header = QFrame()
+        header.setFixedHeight(64)
+        header.setStyleSheet("background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #1e293b, stop:1 #334155); border-bottom: 1px solid #0f172a;")
+        header_l = QHBoxLayout(header)
+        header_l.setContentsMargins(24, 0, 24, 0)
+        
+        ttl_l = QVBoxLayout()
+        ttl_l.setSpacing(2)
+        ttl_l.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+        
+        ttl = QLabel("Edit Patient Profile")
+        ttl.setStyleSheet("color: #ffffff; font-size: 18px; font-weight: 700; background: transparent; border: none;")
+        ttl_l.addWidget(ttl)
+        
+        sub_ttl = QLabel("Update clinical and personal information")
+        sub_ttl.setStyleSheet("color: #94a3b8; font-size: 11px; font-weight: 500; background: transparent; border: none;")
+        ttl_l.addWidget(sub_ttl)
+        
+        header_l.addLayout(ttl_l)
+        header_l.addStretch()
+        main_v.addWidget(header)
+
+        # ── Scroll Area for Content ──────────────────────────────────────────
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setStyleSheet("background: transparent; border: none;")
+        
+        scroll_content = QWidget()
+        scroll_content.setStyleSheet("background: transparent;")
+        scroll_l = QVBoxLayout(scroll_content)
+        scroll_l.setContentsMargins(24, 24, 24, 24)
+        scroll_l.setSpacing(24)
+
+        # ── Input Styles ─────────────────────────────────────────────────────
+        input_style = (
+            "QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox, QDateEdit {"
+            "background: #ffffff; border: 1px solid #cbd5e1; border-radius: 8px;"
+            "padding: 8px 12px; font-size: 13px; color: #1e293b; min-height: 36px; }"
+            "QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus, QDateEdit:focus {"
+            "border: 2px solid #3b82f6; background: #ffffff; }"
+            "QLabel { color: #475569; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }"
+        )
+
+        def create_section(title_text: str):
+            sec = QWidget()
+            sec_l = QVBoxLayout(sec)
+            sec_l.setContentsMargins(0, 0, 0, 0)
+            sec_l.setSpacing(12)
+            
+            s_ttl = QLabel(title_text)
+            s_ttl.setStyleSheet("color: #3b82f6; font-size: 12px; font-weight: 800; letter-spacing: 1px; text-transform: uppercase;")
+            sec_l.addWidget(s_ttl)
+            
+            line = QFrame()
+            line.setFixedHeight(1)
+            line.setStyleSheet("background: #e2e8f0;")
+            sec_l.addWidget(line)
+            
+            grid = QGridLayout()
+            grid.setContentsMargins(0, 8, 0, 0)
+            grid.setHorizontalSpacing(24)
+            grid.setVerticalSpacing(16)
+            sec_l.addLayout(grid)
+            return sec, grid
+
+        # ── Section 1: Personal Details ──────────────────────────────────────
+        sec_personal, grid_p = create_section("Personal Information")
+        sec_personal.setStyleSheet(input_style)
+        
         in_first   = QLineEdit(str(p.get("first_name") or ""))
+        in_first.setPlaceholderText("First Name")
         in_last    = QLineEdit(str(p.get("last_name") or ""))
+        in_last.setPlaceholderText("Last Name")
         in_contact = QLineEdit(str(p.get("contact_number") or ""))
-        in_sex     = QComboBox()
+        in_contact.setPlaceholderText("Contact Number")
+        
+        in_sex = QComboBox()
         in_sex.addItems(["", "Male", "Female", "Other"])
         sx = str(p.get("sex") or "")
         if sx:
             idx = in_sex.findText(sx)
-            if idx >= 0:
-                in_sex.setCurrentIndex(idx)
+            if idx >= 0: in_sex.setCurrentIndex(idx)
 
         in_dob = QDateEdit()
         in_dob.setCalendarPopup(True)
         in_dob.setDisplayFormat("yyyy-MM-dd")
         dob_s = str(p.get("date_of_birth") or "")[:10]
         qd = QDate.fromString(dob_s, "yyyy-MM-dd")
-        if qd.isValid():
-            in_dob.setDate(qd)
+        if qd.isValid(): in_dob.setDate(qd)
 
-        form.addRow("First name", in_first)
-        form.addRow("Last name", in_last)
-        form.addRow("Date of birth", in_dob)
-        form.addRow("Sex", in_sex)
-        form.addRow("Contact", in_contact)
+        def add_field(g, label, widget, row, col):
+            v = QVBoxLayout()
+            v.setSpacing(6)
+            v.addWidget(QLabel(label))
+            v.addWidget(widget)
+            g.addLayout(v, row, col)
 
+        add_field(grid_p, "First Name", in_first, 0, 0)
+        add_field(grid_p, "Last Name", in_last, 0, 1)
+        add_field(grid_p, "Date of Birth", in_dob, 1, 0)
+        add_field(grid_p, "Gender", in_sex, 1, 1)
+        add_field(grid_p, "Contact Number", in_contact, 2, 0)
+        
+        scroll_l.addWidget(sec_personal)
+
+        # ── Section 2: Clinical Details ──────────────────────────────────────
+        sec_clinical, grid_c = create_section("Clinical Context")
+        sec_clinical.setStyleSheet(input_style)
+        
         in_height = QDoubleSpinBox()
         in_height.setRange(0, 300)
         in_height.setDecimals(1)
         in_height.setSuffix(" cm")
-        try:
-            in_height.setValue(float(p.get("height_cm") or 0))
-        except (TypeError, ValueError):
-            in_height.setValue(0)
+        try: in_height.setValue(float(h_init or 0))
+        except: in_height.setValue(0)
         in_height.setSpecialValueText(" ")
+
         in_weight = QDoubleSpinBox()
         in_weight.setRange(0, 500)
         in_weight.setDecimals(1)
         in_weight.setSuffix(" kg")
-        try:
-            in_weight.setValue(float(p.get("weight_kg") or 0))
-        except (TypeError, ValueError):
-            in_weight.setValue(0)
+        try: in_weight.setValue(float(w_init or 0))
+        except: in_weight.setValue(0)
         in_weight.setSpecialValueText(" ")
+
+        in_bmi = QLineEdit()
+        in_bmi.setReadOnly(True)
+        in_bmi.setStyleSheet("background: #f1f5f9; border-color: #e2e8f0; color: #64748b; font-weight: 700;")
+        
+        def update_bmi():
+            try:
+                h_val = float(in_height.value())
+                w_val = float(in_weight.value())
+                if h_val > 0 and w_val > 0:
+                    val = round(w_val / ((h_val / 100.0) ** 2), 1)
+                    in_bmi.setText(f"{val}")
+                else:
+                    in_bmi.setText("—")
+            except:
+                in_bmi.setText("—")
+        
+        in_height.valueChanged.connect(lambda: update_bmi())
+        in_weight.valueChanged.connect(lambda: update_bmi())
+        update_bmi()
 
         in_dm_dur = QSpinBox()
         in_dm_dur.setRange(0, 80)
-        try:
-            in_dm_dur.setValue(int(float(p.get("dm_duration_years") or 0)))
-        except (TypeError, ValueError):
-            in_dm_dur.setValue(0)
+        in_dm_dur.setSuffix(" years")
+        try: in_dm_dur.setValue(int(float(dm_dur_init or 0)))
+        except: in_dm_dur.setValue(0)
         in_dm_dur.setSpecialValueText(" ")
-
-        form.addRow("Height", in_height)
-        form.addRow("Weight", in_weight)
-        form.addRow(QLabel("Diabetic History"))
 
         in_dm_type = QComboBox()
         in_dm_type.addItems(["", "Type 1", "Type 2", "Gestational", "Type 1 + Type 2", "Type 1 + Gestational", "Type 2 + Gestational"])
-        current_dm_type = str(p.get("diabetes_type") or "")
+        current_dm_type = str(dm_type_init or "")
         if current_dm_type:
             idx = in_dm_type.findText(current_dm_type)
-            if idx >= 0:
-                in_dm_type.setCurrentIndex(idx)
-
-        form.addRow("DM duration (years)", in_dm_dur)
+            if idx >= 0: in_dm_type.setCurrentIndex(idx)
 
         arrow_path = os.path.join(os.path.dirname(__file__), "icons", "dropdown_arrow.svg")
-        in_diagnosis_date = ModernCalendarDateEdit(
-            QDate(1900, 1, 1),
-            QDate.currentDate(),
-            arrow_path,
-            QDate.currentDate()
-        )
-        
-        # Initialize with current value
+        in_diagnosis_date = ModernCalendarDateEdit(QDate(1900, 1, 1), QDate.currentDate(), arrow_path, QDate.currentDate())
+        # Initialize with the most current diagnosis date available
         init_diag = QDate()
-        if hasattr(self.screening, "_get_diagnosis_date"):
+        if diag_date_init:
+            init_diag = QDate.fromString(str(diag_date_init), "dd/MM/yyyy")
+        if not init_diag.isValid() and hasattr(self.screening, "_get_diagnosis_date"):
             init_diag = self.screening._get_diagnosis_date()
-        
-        if init_diag.isValid():
-            in_diagnosis_date.setDate(init_diag)
-        else:
-            in_diagnosis_date.setDate(QDate.currentDate())
-        
-        # Ensure it's light themed
+            
+        if init_diag.isValid(): in_diagnosis_date.setDate(init_diag)
+        else: in_diagnosis_date.setDate(QDate.currentDate())
         in_diagnosis_date.apply_theme(False)
-
-        in_diagnosis_date.dateChanged.connect(
-            lambda: self._update_duration_from_diagnosis_date_in_dialog(in_diagnosis_date, in_dm_dur)
-        )
+        in_diagnosis_date.dateChanged.connect(lambda: self._update_duration_from_diagnosis_date_in_dialog(in_diagnosis_date, in_dm_dur))
 
         in_treatment_regimen = QComboBox()
         if hasattr(self.screening, "treatment_regimen") and hasattr(self.screening.treatment_regimen, "itemText"):
             for i in range(self.screening.treatment_regimen.count()):
                 in_treatment_regimen.addItem(self.screening.treatment_regimen.itemText(i))
-            self._set_combo_value(
-                in_treatment_regimen,
-                self._screening_choice_text(getattr(self.screening, "treatment_regimen", None), blank_values={""}),
-                blank_values={""},
-            )
+            self._set_combo_value(in_treatment_regimen, str(regimen_init or ""), blank_values={""})
 
         in_prev_dr_stage = QComboBox()
         if hasattr(self.screening, "prev_dr_stage") and hasattr(self.screening.prev_dr_stage, "itemText"):
             for i in range(self.screening.prev_dr_stage.count()):
                 in_prev_dr_stage.addItem(self.screening.prev_dr_stage.itemText(i))
-            self._set_combo_value(
-                in_prev_dr_stage,
-                self._screening_choice_text(getattr(self.screening, "prev_dr_stage", None), blank_values={""}),
-                blank_values={""},
-            )
+            self._set_combo_value(in_prev_dr_stage, str(fam_hx_init or ""), blank_values={""})
 
-   
+        add_field(grid_c, "Height", in_height, 0, 0)
+        add_field(grid_c, "Weight", in_weight, 0, 1)
+        add_field(grid_c, "BMI", in_bmi, 1, 0)
+        add_field(grid_c, "Diabetes Type", in_dm_type, 2, 0)
+        add_field(grid_c, "Diagnosis Date", in_diagnosis_date, 2, 1)
+        add_field(grid_c, "DM Duration", in_dm_dur, 3, 0)
+        add_field(grid_c, "Treatment Regimen", in_treatment_regimen, 3, 1)
+        add_field(grid_c, "Family History", in_prev_dr_stage, 4, 0)
 
-        form.addRow("Diabetes type", in_dm_type)
-        form.addRow("Diagnosis date", in_diagnosis_date)
-        form.addRow("Treatment regimen", in_treatment_regimen)
-        form.addRow("Family History of Diabetes", in_prev_dr_stage)
- 
-        lay.addLayout(form)
+        scroll_l.addWidget(sec_clinical)
+        scroll_l.addStretch()
+        
+        scroll.setWidget(scroll_content)
+        main_v.addWidget(scroll, 1)
 
-        btn_row = QHBoxLayout()
-        btn_row.addStretch(1)
+        # ── Footer Actions ───────────────────────────────────────────────────
+        footer = QFrame()
+        footer.setFixedHeight(72)
+        footer.setStyleSheet("background: #ffffff; border-top: 1px solid #e2e8f0;")
+        footer_l = QHBoxLayout(footer)
+        footer_l.setContentsMargins(24, 0, 24, 0)
+        footer_l.setSpacing(12)
+        
+        footer_l.addStretch()
+        
         b_cancel = QPushButton("Cancel")
-        b_save   = QPushButton("Save")
+        b_cancel.setFixedSize(100, 40)
+        b_cancel.setCursor(Qt.PointingHandCursor)
+        b_cancel.setStyleSheet(
+            "QPushButton { background: #ffffff; border: 1px solid #cbd5e1; border-radius: 8px; color: #64748b; font-weight: 600; }"
+            "QPushButton:hover { background: #f1f5f9; color: #1e293b; border-color: #94a3b8; }"
+        )
+        
+        b_save = QPushButton("Save Changes")
+        b_save.setFixedSize(140, 40)
+        b_save.setCursor(Qt.PointingHandCursor)
         b_save.setDefault(True)
-        btn_row.addWidget(b_cancel)
-        btn_row.addWidget(b_save)
-        lay.addLayout(btn_row)
+        b_save.setStyleSheet(
+            "QPushButton { background: #3b82f6; border: none; border-radius: 8px; color: #ffffff; font-weight: 700; }"
+            "QPushButton:hover { background: #2563eb; }"
+            "QPushButton:pressed { background: #1d4ed8; }"
+        )
+        
+        footer_l.addWidget(b_cancel)
+        footer_l.addWidget(b_save)
+        
+        main_v.addWidget(footer)
 
         def _save():
             fields = {
@@ -905,7 +1025,6 @@ class DoctorDiagnosisForm(QWidget):
                     "diagnosis_date":   in_diagnosis_date.date().toString("dd/MM/yyyy") if in_diagnosis_date.date() != QDate(1900, 1, 1) else "",
                     "treatment_regimen":in_treatment_regimen.currentText().strip(),
                     "prev_dr_stage":    in_prev_dr_stage.currentText().strip(),
-                    "prev_treatment":   in_prev_treatment.isChecked(),
                 }
             )
             self._refresh_patient_card()
@@ -974,8 +1093,6 @@ class DoctorDiagnosisForm(QWidget):
                         "diagnosis_date":   vd.get("diabetes_diagnosis_date") or "",
                         "treatment_regimen":vd.get("treatment_regimen") or "",
                         "prev_dr_stage":    vd.get("prev_dr_stage") or "",
-                        "prev_treatment":   str(vd.get("prev_treatment") or "").strip().lower()
-                                            in {"1", "true", "yes", "y"},
                         "height_cm":        vd.get("height_cm") or 0,
                         "weight_kg":        vd.get("weight_kg") or 0,
                     }

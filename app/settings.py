@@ -861,9 +861,9 @@ class SettingsPage(QWidget):
         self._configure_info_sections()
         self._sync_timeout_enabled_state()
 
-        # Frontdesk / doctor: simplify settings surface area.
+        # Frontdesk / doctor / clinician: simplify settings surface area.
         role = self._active_role()
-        if role in {"frontdesk", "doctor"}:
+        if role != "admin":
             if hasattr(self, "quick_backup_btn"):
                 self.quick_backup_btn.setVisible(False)
             for w in (

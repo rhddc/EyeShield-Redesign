@@ -16,7 +16,7 @@ except Exception:  # pragma: no cover
     from patient_timeline_dialog import PatientTimelineDialog
 from pathlib import Path
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timezone
 
 from PySide6.QtWidgets import (
     QWidget, QLabel, QVBoxLayout, QHBoxLayout, QPushButton, QGroupBox,
@@ -83,24 +83,47 @@ def _parse_datetime_value(value: str) -> datetime | None:
         return None
 
     normalized = raw.replace("Z", "+00:00")
+    dt = None
     try:
-        return datetime.fromisoformat(normalized)
+        dt = datetime.fromisoformat(normalized)
     except ValueError:
-        pass
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
+            try:
+                dt = datetime.strptime(raw, fmt)
+                break
+            except ValueError:
+                continue
+    
+    if dt and dt.tzinfo is None:
+        # Standardize naive datetimes to UTC for consistent comparison
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
 
-    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
-        try:
-            return datetime.strptime(raw, fmt)
-        except ValueError:
-            continue
-    return None
+def _to_local_datetime(dt: datetime | None) -> datetime | None:
+    if dt is None:
+        return None
+    # dt is now always aware (UTC) because of _parse_datetime_value standardization
+    return dt.astimezone() # Converts to system local time
+
+
+@staticmethod
+def _format_screening_datetime(value: str) -> str:
+    parsed = _parse_datetime_value(value)
+    if not parsed:
+        return str(value or "—").strip() or "—"
+    
+    # Convert to local system time (PH)
+    local_dt = _to_local_datetime(parsed)
+    hour = local_dt.strftime("%I").lstrip("0") or "0"
+    return f"{local_dt.strftime('%B')} {local_dt.day}, {local_dt.year} - {hour}:{local_dt.strftime('%M')} {local_dt.strftime('%p').lower()}"
 
 
 def _format_screening_datetime_label(value: str) -> str:
     parsed = _parse_datetime_value(value)
     if not parsed:
         return str(value or "-")
-    return parsed.strftime("%B %d, %Y  %I:%M %p")
+    local_dt = _to_local_datetime(parsed)
+    return local_dt.strftime("%B %d, %Y  %I:%M %p")
 
 
 def generate_unified_patient_report(parent, patient_record, eye_records, username, output_path=None):
@@ -304,14 +327,6 @@ def generate_unified_patient_report(parent, patient_record, eye_records, usernam
 
     doc.print_(writer)
     return True
-
-
-def _format_screening_datetime_label(value: str) -> str:
-    parsed = _parse_datetime_value(value)
-    if parsed is None:
-        return str(value or "—").strip() or "—"
-    hour = parsed.strftime("%I").lstrip("0") or "0"
-    return f"{parsed.strftime('%B')} {parsed.day}, {parsed.year} - {hour}:{parsed.strftime('%M')} {parsed.strftime('%p').lower()}"
 
 
 def _normalize_severity(value: str) -> str:
@@ -2221,7 +2236,7 @@ class ReportsPage(QWidget):
             QWidget {
                 background: #f8fafc;
                 color: #0f172a;
-                font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+                font-family: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
             }
             QGroupBox {
                 background: #ffffff;
@@ -2434,32 +2449,19 @@ class ReportsPage(QWidget):
                     style.drawControl(QStyle.CE_ItemViewItem, opt, painter, widget)
 
                     name = str(index.data(self.NAME_ROLE) or "—").strip() or "—"
-                    pid = str(index.data(self.PID_ROLE) or "").strip()
-
-                    r = opt.rect.adjusted(12, 6, -12, -6)
-                    name_rect = QRect(r.left(), r.top(), r.width(), max(0, int(r.height() * 0.58)))
-                    pid_rect = QRect(
-                        r.left(),
-                        name_rect.bottom() + 1,
-                        r.width(),
-                        max(0, r.bottom() - name_rect.bottom() - 1),
-                    )
+                    
+                    r = opt.rect.adjusted(12, 0, -12, 0)
+                    name_rect = r
 
                     selected = bool(opt.state & QStyle.State_Selected)
                     name_color = QColor("#0f172a") if not selected else QColor("#0b1220")
-                    pid_color = QColor("#64748b") if not selected else QColor("#334155")
 
                     name_font = QFont(opt.font)
-                    name_font.setBold(True)
+                    name_font.setBold(False)
+                    name_font.setPixelSize(14)
                     painter.setFont(name_font)
                     painter.setPen(name_color)
                     painter.drawText(name_rect, int(Qt.AlignLeft | Qt.AlignVCenter), name)
-
-                    pid_font = QFont(opt.font)
-                    pid_font.setPointSize(max(9, pid_font.pointSize() - 1))
-                    painter.setFont(pid_font)
-                    painter.setPen(pid_color)
-                    painter.drawText(pid_rect, int(Qt.AlignLeft | Qt.AlignVCenter), pid)
                 finally:
                     painter.restore()
 
@@ -2611,27 +2613,13 @@ class ReportsPage(QWidget):
 
     @staticmethod
     def _format_screening_datetime(value: str) -> str:
-        raw = str(value or "").strip()
-        if not raw:
-            return "—"
-
-        parsed = None
-        normalized = raw.replace("Z", "+00:00")
-        try:
-            parsed = datetime.fromisoformat(normalized)
-        except ValueError:
-            for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
-                try:
-                    parsed = datetime.strptime(raw, fmt)
-                    break
-                except ValueError:
-                    continue
-
-        if parsed is None:
-            return raw
-
-        hour = parsed.strftime("%I").lstrip("0") or "0"
-        return f"{parsed.strftime('%B')} {parsed.day}, {parsed.year} - {hour}:{parsed.strftime('%M')} {parsed.strftime('%p').lower()}"
+        parsed = _parse_datetime_value(value)
+        if not parsed:
+            return str(value or "—").strip() or "—"
+        
+        local_dt = _to_local_datetime(parsed)
+        hour = local_dt.strftime("%I").lstrip("0") or "0"
+        return f"{local_dt.strftime('%B')} {local_dt.day}, {local_dt.year} - {hour}:{local_dt.strftime('%M')} {local_dt.strftime('%p').lower()}"
 
     def _build_display_rows(self, rows: list[dict]) -> list[dict]:
         grouped_rows = group_patient_record_rows(rows)
