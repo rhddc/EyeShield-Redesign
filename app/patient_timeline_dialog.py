@@ -1101,7 +1101,14 @@ class PatientTimelineDialog(QWidget):
         self.risk_chip._value.setText(risk_text)
         self.risk_chip._value.setStyleSheet(
             f"font-size:14px;color:{risk_color};font-weight:700;")
-        self.total_chip._value.setText(str(len(self.timeline_records) or 1))
+        # Filter out pending/incomplete records from the total count to match the history list.
+        completed_count = len([
+            r for r in (self.timeline_records or [])
+            if str(r.get("result") or "").strip().lower() != "pending"
+            and str(r.get("final_diagnosis_icdr") or "").strip().lower() != "pending"
+            and bool(str(r.get("source_image_path") or "").strip())
+        ])
+        self.total_chip._value.setText(str(completed_count or 1))
 
         # Combine date + time into single kv row value
         date_str = _fmt_long(record.get("screened_at"))

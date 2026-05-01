@@ -25,8 +25,8 @@ from PySide6.QtWidgets import (
     QTextEdit, QProgressBar, QStackedWidget, QStyledItemDelegate,
     QApplication, QStyle, QStyleOptionViewItem,
 )
-from PySide6.QtCore import Qt, QSize, QRect
-from PySide6.QtGui import QColor, QIcon, QPixmap, QPainter, QFont
+from PySide6.QtCore import Qt, QSize, QRect, QMarginsF, QBuffer, QByteArray, QIODevice
+from PySide6.QtGui import QColor, QIcon, QPixmap, QPainter, QFont, QImage, QPdfWriter, QPageSize, QPageLayout, QTextDocument
 
 try:
     from .auth import UserManager
@@ -94,6 +94,216 @@ def _parse_datetime_value(value: str) -> datetime | None:
         except ValueError:
             continue
     return None
+
+
+def _format_screening_datetime_label(value: str) -> str:
+    parsed = _parse_datetime_value(value)
+    if not parsed:
+        return str(value or "-")
+    return parsed.strftime("%B %d, %Y  %I:%M %p")
+
+
+def generate_unified_patient_report(parent, patient_record, eye_records, username, output_path=None):
+    """
+    Shared logic for generating a premium, minimalist PDF report.
+    Used by both historic record viewing and immediate post-screening review.
+    """
+    if not output_path:
+        patient_name_raw = str(patient_record.get("name") or "Patient").strip().replace(" ", "_")
+        default_name = f"EyeShield_Report_{patient_name_raw}_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf"
+        output_path, _ = QFileDialog.getSaveFileName(parent, "Save Patient Report", default_name, "PDF Files (*.pdf)")
+    
+    if not output_path:
+        return False
+
+    def esc(v) -> str:
+        return escape(str(v or "").strip() or "—")
+
+    # Metadata
+    report_date = datetime.now().strftime("%B %d, %Y %I:%M %p")
+    created_by = str(os.environ.get("EYESHIELD_CURRENT_NAME", "") or username or "Staff").strip()
+
+    # Diagnosis logic (pick most severe or just the latest if only one)
+    final_dx = "Pending"
+    for r in eye_records:
+        grade = str(r.get("final_diagnosis_icdr") or r.get("result") or "Pending").strip()
+        if grade != "Pending":
+            if final_dx == "Pending" or _SEVERITY_RANK.get(grade, 0) > _SEVERITY_RANK.get(final_dx, 0):
+                final_dx = grade
+
+    # Helpers for images
+    def resolve_image_path(path_value: str) -> str:
+        raw = str(path_value or "").strip()
+        if not raw: return ""
+        candidate = raw if os.path.isabs(raw) else os.path.join(os.path.dirname(os.path.abspath(__file__)), raw)
+        if os.path.isfile(candidate):
+            return str(Path(candidate).resolve())
+        return ""
+
+    def build_b64_image(path_value: str, width: int = 400) -> str:
+        res = resolve_image_path(path_value)
+        if not res: return ""
+        img = QImage(res)
+        if img.isNull(): return ""
+        
+        # Scale for report
+        scaled = img.scaled(width, width, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+        ba = QByteArray()
+        buf = QBuffer(ba)
+        buf.open(QIODevice.OpenModeFlag.WriteOnly)
+        scaled.save(buf, "PNG")
+        buf.close()
+        return f"data:image/png;base64,{bytes(ba.toBase64()).decode('ascii')}"
+
+    # Sections
+    def sec(title):
+        return (
+            f'<div style="margin:20px 0 10px;padding-bottom:8px;border-bottom:2px solid #334155;">'
+            f'<span style="font-size:10pt;font-weight:800;color:#1e293b;letter-spacing:1px;text-transform:uppercase;">{title}</span>'
+            f'</div>'
+        )
+
+    def field_row(label, value):
+        return (
+            f'<tr>'
+            f'<td style="padding:10px 14px;border-bottom:1px solid #f1f5f9;font-size:9.5pt;color:#64748b;font-weight:500;width:35%;">{label}</td>'
+            f'<td style="padding:10px 14px;border-bottom:1px solid #f1f5f9;font-size:9.5pt;color:#0f172a;font-weight:600;">{value}</td>'
+            f'</tr>'
+        )
+
+    # Image pair block
+    def eye_result_block(eye_record: dict) -> str:
+        eye_label = str(eye_record.get("eyes") or eye_record.get("eye") or "Eye").strip()
+        result = str(eye_record.get("result") or "No DR").strip()
+        
+        src_b64 = build_b64_image(eye_record.get("source_image_path") or eye_record.get("image_path"))
+        heat_b64 = build_b64_image(eye_record.get("heatmap_image_path") or eye_record.get("heatmap_path"))
+        
+        def img_tag(b64, label):
+            if not b64:
+                return '<div style="height:200px;background:#f8fafc;border:1px solid #e2e8f0;display:flex;align-items:center;justify-content:center;color:#94a3b8;font-size:9pt;font-style:italic;">' + label + ' not available</div>'
+            return f'<img src="{b64}" style="width:100%;max-width:340px;border:1px solid #cbd5e1;border-radius:6px;" />'
+
+        return f"""
+        <div style="page-break-inside:avoid;margin-bottom:24px;background:#ffffff;border:1px solid #e2e8f0;border-radius:10px;padding:20px;">
+            <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:15px;">
+                <tr>
+                    <td style="font-size:12pt;font-weight:700;color:#1e3a8a;">{esc(eye_label)}</td>
+                    <td align="right" style="font-size:10pt;color:#1e40af;font-weight:600;">Result: {esc(result)}</td>
+                </tr>
+            </table>
+            <table width="100%" cellpadding="0" cellspacing="12">
+                <tr>
+                    <td width="50%" align="center">
+                        <div style="font-size:8pt;font-weight:700;color:#64748b;margin-bottom:6px;text-transform:uppercase;">Source Fundus</div>
+                        {img_tag(src_b64, "Source")}
+                    </td>
+                    <td width="50%" align="center">
+                        <div style="font-size:8pt;font-weight:700;color:#64748b;margin-bottom:6px;text-transform:uppercase;">AI Analysis (Heatmap)</div>
+                        {img_tag(heat_b64, "Heatmap")}
+                    </td>
+                </tr>
+            </table>
+        </div>
+        """
+
+    # Categorize eyes for layout
+    right_eye_record = next((r for r in eye_records if "right" in str(r.get("eyes") or r.get("eye") or "").lower()), None)
+    left_eye_record = next((r for r in eye_records if "left" in str(r.get("eyes") or r.get("eye") or "").lower()), None)
+    
+    # Diagnosis summary by eye (for all eyes in the encounter)
+    diagnosis_by_eye_html = ""
+    for r in eye_records:
+        label = str(r.get("eyes") or r.get("eye") or "Eye").strip()
+        grade = str(r.get("final_diagnosis_icdr") or r.get("result") or "Pending").strip()
+        diagnosis_by_eye_html += field_row(f"{esc(label)} Diagnosis", esc(grade))
+
+    html = f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<style>
+    body {{ font-family: 'Segoe UI', Arial, sans-serif; color: #1e293b; line-height: 1.6; margin: 0; padding: 0; }}
+    table {{ border-collapse: collapse; }}
+    .header {{ background: #1e3a8a; color: #ffffff; padding: 35px 40px; border-bottom: 5px solid #1e40af; text-align: center; }}
+    .content {{ padding: 30px 40px; }}
+    .footer {{ padding: 20px 40px; border-top: 1px solid #e2e8f0; font-size: 8pt; color: #94a3b8; }}
+    .page-break {{ page-break-before: always; }}
+    .section-title {{ margin:20px 0 10px; padding-bottom:8px; border-bottom:2px solid #334155; }}
+    .section-label {{ font-size:10pt; font-weight:800; color:#1e293b; letter-spacing:1px; text-transform:uppercase; }}
+</style>
+</head><body>
+    <!-- PAGE 1: IDENTITY & HISTORY -->
+    <div class="header">
+        <div style="font-size:24pt;font-weight:800;letter-spacing:-0.5px;margin-bottom:5px;">Patient Screening Report</div>
+        <div style="margin-top:10px;font-size:10pt;opacity:0.9;">
+            <b>ID:</b> {esc(patient_record.get('patient_id'))} &nbsp;|&nbsp; <b>Date:</b> {report_date} &nbsp;|&nbsp; <b>By:</b> {esc(created_by)}
+        </div>
+    </div>
+    
+    <div class="content">
+        <div class="section-title"><span class="section-label">Patient Identity</span></div>
+        <table width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #e2e8f0;border-radius:10px;overflow:hidden;margin-bottom:20px;">
+            {field_row("Full Name", esc(patient_record.get('name')))}
+            {field_row("Date of Birth", esc(patient_record.get('birthdate')))}
+            {field_row("Age", esc(patient_record.get('age')))}
+            {field_row("Sex", esc(patient_record.get('sex')))}
+            {field_row("Contact Number", esc(patient_record.get('phone')))}
+            {field_row("Email Address", esc(patient_record.get('email')))}
+            {field_row("Residential Address", esc(patient_record.get('address')))}
+        </table>
+
+        <div class="section-title"><span class="section-label">Diabetic History</span></div>
+        <table width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #e2e8f0;border-radius:10px;overflow:hidden;margin-bottom:20px;">
+            {field_row("Diabetes Type", esc(patient_record.get('diabetes_type')))}
+            {field_row("Diagnosis Date", esc(patient_record.get('diag_date')))}
+            {field_row("Duration", f"{esc(patient_record.get('duration'))} years" if patient_record.get('duration') else "—")}
+            {field_row("Treatment Regimen", esc(patient_record.get('treatment_regimen')))}
+        </table>
+    </div>
+
+    <!-- PAGE 2: SUMMARY & RIGHT EYE -->
+    <div class="page-break content">
+        <div class="section-title"><span class="section-label">Screening Summary</span></div>
+        <table width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #e2e8f0;border-radius:10px;overflow:hidden;margin-bottom:24px;">
+            {diagnosis_by_eye_html}
+            {field_row("Reviewer Comments", esc(eye_records[-1].get('doctor_findings') if eye_records else ""))}
+        </table>
+
+        {"<!-- Right Eye Analysis -->" if right_eye_record else ""}
+        {f'<div class="section-title"><span class="section-label">Right Eye Analysis</span></div>' if right_eye_record else ""}
+        {eye_result_block(right_eye_record) if right_eye_record else ""}
+    </div>
+
+    <!-- PAGE 3: LEFT EYE -->
+    {f'<div class="page-break content">' if left_eye_record else ""}
+        {f'<div class="section-title"><span class="section-label">Left Eye Analysis</span></div>' if left_eye_record else ""}
+        {eye_result_block(left_eye_record) if left_eye_record else ""}
+    {f'</div>' if left_eye_record else ""}
+
+    <div class="footer">
+        <table width="100%">
+            <tr>
+                <td><b>EyeShield Clinical Suite</b> - Automated Diabetic Retinopathy Screening</td>
+                <td align="right">Digital Clinical Report</td>
+            </tr>
+        </table>
+        <div style="margin-top:10px;font-style:italic;">
+            Disclaimer: This report is generated by an automated AI system and serves as clinical decision support. 
+            All findings must be confirmed by a licensed medical professional before clinical action is taken.
+        </div>
+    </div>
+</body></html>"""
+
+    doc = QTextDocument()
+    doc.setDocumentMargin(0)
+    doc.setHtml(html)
+
+    writer = QPdfWriter(output_path)
+    writer.setResolution(300)
+    writer.setPageSize(QPageSize(QPageSize.PageSizeId.A4))
+    writer.setPageMargins(QMarginsF(0, 0, 0, 0), QPageLayout.Unit.Millimeter)
+
+    doc.print_(writer)
+    return True
 
 
 def _format_screening_datetime_label(value: str) -> str:
@@ -3221,39 +3431,14 @@ class ReportsPage(QWidget):
         try:
             with open(path, "w", newline="", encoding="utf-8") as f:
                 writer = csv.writer(f)
-                writer.writerow(
-                    [
-                        "Record ID",
-                        "Patient ID",
-                        "Name",
-                        "Screened At",
-                        "Eye",
-                        "AI Classification",
-                        "Doctor Classification",
-                        "Final Diagnosis",
-                        "Confidence",
-                        "Decision Mode",
-                        "Screening Type",
-                        "Previous Screening ID",
-                        "Findings",
-                    ]
-                )
+                writer.writerow(["Name", "Screening Date", "Screened By"])
+
                 for record in ordered:
                     writer.writerow(
                         [
-                            record.get("id"),
-                            record.get("patient_id"),
                             record.get("name"),
                             record.get("screened_at"),
-                            record.get("eyes"),
-                            record.get("ai_classification") or record.get("result"),
-                            record.get("doctor_classification") or record.get("result"),
-                            record.get("final_diagnosis_icdr") or record.get("doctor_classification") or record.get("result"),
-                            record.get("confidence"),
-                            record.get("decision_mode"),
-                            record.get("screening_type") or ("follow_up" if _is_truthy_flag(record.get("follow_up")) else "initial"),
-                            record.get("previous_screening_id"),
-                            record.get("doctor_findings"),
+                            record.get("original_screener_name") or record.get("original_screener_username") or "—"
                         ]
                     )
         except OSError as err:
@@ -3462,16 +3647,15 @@ class ReportsPage(QWidget):
         try:
             with open(path, "w", newline="", encoding="utf-8") as f:
                 w = csv.writer(f)
-                w.writerow(["Patient ID","Name","Eye Screened","Screening Date","AI Classification","Doctor Classification","Final Diagnosis (ICDR)","Doctor Findings","Decision Mode","Override Justification","Confidence","Diabetes Type","HbA1c","Record Status","Archived At","Archived By"])
+                w.writerow(["Name", "Screening Date", "Screened By"])
                 for row in self._filtered_rows:
-                    w.writerow([row["patient_id"],row["name"],row.get("eyes", ""),row.get("screened_at", ""),
-                                row.get("ai_classification",""), row.get("doctor_classification",""), row.get("final_diagnosis_icdr",""),
-                                row.get("doctor_findings",""),
-                                row.get("decision_mode",""), row.get("override_justification",""),
-                                row["confidence"],
-                                row["diabetes_type"],row["hba1c"],
-                                "Archived" if row["archived_at"] else "Active",
-                                row["archived_at"],row["archived_by"]])
+                    w.writerow(
+                        [
+                            row.get("name"),
+                            row.get("screened_at", ""),
+                            row.get("original_screener_name") or row.get("original_screener_username") or "—"
+                        ]
+                    )
             self.status_label.setText(f"Exported {len(self._filtered_rows)} rows to {path}")
             UserManager.add_activity_log(
                 self.username,
@@ -3507,6 +3691,28 @@ class ReportsPage(QWidget):
         out["fbs"] = out.get("fasting_blood_sugar")
         out["rbs"] = out.get("random_blood_sugar")
         out["symptom_blurred"] = out.get("symptom_blurred_vision")
+        out["diag_date"] = out.get("diabetes_diagnosis_date")
+        
+        # Ensure age is computed if missing
+        if not out.get("age") or out.get("age") == "0":
+            dob = out.get("birthdate") or out.get("date_of_birth")
+            if dob:
+                try:
+                    # Handle YYYY-MM-DD or other formats
+                    bdate = _parse_datetime_value(dob)
+                    if bdate:
+                        today = datetime.now()
+                        age = today.year - bdate.year - ((today.month, today.day) < (bdate.month, bdate.day))
+                        out["age"] = str(age)
+                except Exception:
+                    pass
+
+        # Ensure phone and email have fallbacks
+        if not out.get("phone"):
+            out["phone"] = out.get("contact") or out.get("contact_number")
+        if not out.get("email"):
+            out["email"] = out.get("email_address")
+        
         return out
 
     def _fetch_report_eye_records(self, patient_id: str, screened_at: str, fallback_record_id: int, screening_group_id: str = "") -> list[dict]:
@@ -3692,19 +3898,6 @@ class ReportsPage(QWidget):
             QMessageBox.information(self, "Generate Report", "No patient record is available for report generation.")
             return
 
-        patient_name_raw = str(record.get("name") or "Patient").strip()
-        default_name = f"EyeShield_Report_{patient_name_raw}_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf"
-        path, _ = QFileDialog.getSaveFileName(self, "Save Patient Report", default_name, "PDF Files (*.pdf)")
-        if not path:
-            return
-
-        try:
-            from PySide6.QtGui import QPdfWriter, QPageSize, QPageLayout, QTextDocument
-            from PySide6.QtCore import QMarginsF
-        except ImportError:
-            QMessageBox.warning(self, "Generate Report", "PDF generation requires PySide6 PDF support.")
-            return
-
         full = self._fetch_full_record(record["id"]) or record
         eye_records = self._fetch_report_eye_records(
             full.get("patient_id"),
@@ -3715,482 +3908,14 @@ class ReportsPage(QWidget):
         if not eye_records:
             eye_records = [full]
 
-        severity_rank = {
-            "No DR": 0,
-            "Mild DR": 1,
-            "Moderate DR": 2,
-            "Severe DR": 3,
-            "Proliferative DR": 4,
-        }
-
-        def pick_worst_grade(values: list[str]) -> str:
-            best = ""
-            best_rank = -1
-            for raw in values:
-                value = str(raw or "").strip()
-                rank = severity_rank.get(value, -1)
-                if rank > best_rank:
-                    best = value
-                    best_rank = rank
-            return best
-
-        bilateral_grades = []
-        for eye_record in eye_records:
-            grade = (
-                str(eye_record.get("final_diagnosis_icdr") or "").strip()
-                or str(eye_record.get("doctor_classification") or "").strip()
-                or str(eye_record.get("ai_classification") or "").strip()
-                or str(eye_record.get("result") or "").strip()
+        success = generate_unified_patient_report(self, full, eye_records, self.username)
+        if success:
+            UserManager.add_activity_log(
+                self.username,
+                f"REPORT_GENERATED patient_id={full.get('patient_id')}; record_id={full.get('id')}",
             )
-            if grade:
-                bilateral_grades.append(grade)
-        bilateral_worst_grade = pick_worst_grade(bilateral_grades)
+            QMessageBox.information(self, "Report Saved", "Patient report has been generated successfully.")
 
-        # ── helpers ──────────────────────────────────────────────────────────
-        def esc(v) -> str:
-            s = str(v or "").strip()
-            return escape(s) if s and s not in ("0", "None", "Select", "-") else "&#8212;"
-
-        # ── clinic name ───────────────────────────────────────────────────────
-        clinic_name = "EyeShield EMR"
-        try:
-            cfg_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config", "config.json")
-            with open(cfg_path, "r", encoding="utf-8") as f:
-                cfg = json.load(f)
-            clinic_name = cfg.get("clinic_name") or clinic_name
-        except (FileNotFoundError, json.JSONDecodeError):
-            pass
-
-        # ── confidence ────────────────────────────────────────────────────────
-        raw_conf = str(full.get("confidence") or "").strip()
-        if raw_conf.lower().startswith("confidence:"):
-            raw_conf = raw_conf[len("confidence:"):].strip()
-        conf_display = escape(raw_conf) if raw_conf else "&#8212;"
-
-        # ── grade maps ────────────────────────────────────────────────────────
-        ai_result_raw = str(full.get("ai_classification") or full.get("result") or "").strip()
-        doctor_result_raw = str(full.get("doctor_classification") or full.get("result") or "").strip()
-        decision_mode_raw = str(full.get("decision_mode") or "accepted").strip().lower()
-        override_reason_raw = str(full.get("override_justification") or "").strip()
-        final_dx_raw = str(full.get("final_diagnosis_icdr") or doctor_result_raw or ai_result_raw).strip()
-        if bilateral_worst_grade and severity_rank.get(bilateral_worst_grade, -1) > severity_rank.get(final_dx_raw, -1):
-            final_dx_raw = bilateral_worst_grade
-        doctor_findings_raw = str(full.get("doctor_findings") or "").strip()
-        result_raw = final_dx_raw or doctor_result_raw or ai_result_raw
-
-        # Recommendation and summary based on result
-        if result_raw == "No DR":
-            rec = "Annual screening recommended."
-            summary = "No signs of diabetic retinopathy were detected in this fundus image. Continue standard diabetes management, maintain optimal glycaemic and blood pressure control, and schedule routine annual retinal screening."
-        elif result_raw == "Mild DR":
-            rec = "Repeat screening in 6&#8211;12 months."
-            summary = "Early microaneurysms consistent with mild non-proliferative diabetic retinopathy (NPDR) were identified. Intensify glycaemic and blood pressure management. A repeat retinal examination in 6&#8211;12 months is recommended."
-        elif result_raw == "Moderate DR":
-            rec = "Ophthalmology referral within 3 months."
-            summary = "Features consistent with moderate non-proliferative diabetic retinopathy (NPDR) were detected, including microaneurysms, haemorrhages, and/or hard exudates. Referral to an ophthalmologist within 3 months is advised. Reassess systemic metabolic control."
-        elif result_raw == "Severe DR":
-            rec = "Urgent ophthalmology referral required."
-            summary = "Findings consistent with severe non-proliferative diabetic retinopathy (NPDR) were detected. The risk of progression to proliferative disease within 12 months is high. Urgent ophthalmology referral is required."
-        elif result_raw == "Proliferative DR":
-            rec = "Immediate ophthalmology referral required."
-            summary = "Proliferative diabetic retinopathy (PDR) was detected &#8212; a sight-threatening condition. Immediate ophthalmology referral is required for evaluation and potential intervention, such as laser photocoagulation or intravitreal anti-VEGF therapy."
-        else:
-            rec = "Consult a qualified ophthalmologist."
-            summary = "Please consult a qualified ophthalmologist for further evaluation."
-
-        report_date = datetime.now().strftime("%B %d, %Y  %I:%M %p")
-        screening_date = str(full.get("screened_at") or "").strip() or report_date
-
-        created_by_raw = str(full.get("original_screener_name") or full.get("original_screener_username") or "").strip()
-        finalized_by_raw = str(self.display_name or os.environ.get("EYESHIELD_CURRENT_NAME", "") or self.username).strip()
-        created_by = escape(self._format_doctor_label(created_by_raw or finalized_by_raw))
-        finalized_by = escape(self._format_doctor_label(finalized_by_raw))
-
-        dur_raw  = str(full.get("duration") or "").strip()
-        dur_disp = f"{escape(dur_raw)} year(s)" if dur_raw and dur_raw != "0" else "&#8212;"
-
-        notes_raw  = str(full.get("notes") or "").strip()
-        other_symptom_lines = []
-        note_lines = []
-        for raw_line in notes_raw.splitlines():
-            line = str(raw_line or "").strip()
-            if not line:
-                continue
-            if line.lower().startswith("other symptom:"):
-                value = line.split(":", 1)[1].strip() if ":" in line else ""
-                if value:
-                    other_symptom_lines.append(value)
-                continue
-            note_lines.append(line)
-        notes_clean = "\n".join(note_lines).strip()
-        notes_disp = escape(notes_clean) if notes_clean else '<span style="color:#9ca3af;font-style:italic;">None recorded</span>'
-        other_symptom_disp = (
-            "<br>".join(escape(item) for item in other_symptom_lines)
-            if other_symptom_lines
-            else '<span style="color:#9ca3af;font-style:italic;">None recorded</span>'
-        )
-
-        bp_s    = str(full.get("blood_pressure_systolic") or full.get("bp_systolic") or "").strip()
-        bp_d    = str(full.get("blood_pressure_diastolic") or full.get("bp_diastolic") or "").strip()
-        bp_disp = f"{escape(bp_s)}/{escape(bp_d)} mmHg" if bp_s and bp_s != "0" and bp_d and bp_d != "0" else "&#8212;"
-        va_l    = esc(full.get("visual_acuity_left") or full.get("va_left"))
-        va_r    = esc(full.get("visual_acuity_right") or full.get("va_right"))
-        fbs_r   = str(full.get("fasting_blood_sugar") or full.get("fbs") or "").strip()
-        rbs_r   = str(full.get("random_blood_sugar") or full.get("rbs") or "").strip()
-        fbs_disp = f"{escape(fbs_r)} mg/dL" if fbs_r and fbs_r != "0" else "&#8212;"
-        rbs_disp = f"{escape(rbs_r)} mg/dL" if rbs_r and rbs_r != "0" else "&#8212;"
-
-        # Phase 1 additions
-        height_r = str(full.get("height") or "").strip()
-        weight_r = str(full.get("weight") or "").strip()
-        bmi_r = str(full.get("bmi") or "").strip()
-        height_disp = f"{escape(height_r)} cm" if height_r and height_r != "0" else "&#8212;"
-        weight_disp = f"{escape(weight_r)} kg" if weight_r and weight_r != "0" else "&#8212;"
-        
-        # BMI with classification
-        def get_bmi_category(bmi_value: str) -> tuple:
-            """Return (category, color) based on WHO BMI classification."""
-            try:
-                bmi = float(bmi_value)
-                if bmi < 18.5:
-                    return ("Underweight", "#ea580c")
-                elif bmi < 25.0:
-                    return ("Normal", "#16a34a")
-                elif bmi < 30.0:
-                    return ("Overweight", "#d97706")
-                else:
-                    return ("Obese", "#dc2626")
-            except (ValueError, TypeError):
-                return ("", "#6b7280")
-        
-        if bmi_r and bmi_r != "0":
-            bmi_category, bmi_color = get_bmi_category(bmi_r)
-            bmi_disp = f'{escape(bmi_r)} <span style="color:{bmi_color};font-weight:600;">({bmi_category})</span>'
-        else:
-            bmi_disp = "&#8212;"
-        
-        treatment_regimen_r = str(full.get("treatment_regimen") or "").strip()
-        treatment_regimen_disp = esc(treatment_regimen_r)
-        prev_dr_stage_r = str(full.get("prev_dr_stage") or "").strip()
-        prev_dr_stage_disp = esc(prev_dr_stage_r)
-
-        sym_map = [
-            ("symptom_blurred_vision", "Blurred Vision"),
-            ("symptom_floaters", "Floaters"),
-            ("symptom_flashes", "Flashes"),
-            ("symptom_vision_loss", "Vision Loss"),
-        ]
-        active_syms = [lbl for k, lbl in sym_map if _is_truthy_flag(full.get(k))]
-        sym_html = (
-            " ".join(
-                f'<span style="display:inline-block;background:#f3f4f6;color:#374151;'
-                f'border:1px solid #d1d5db;border-radius:4px;padding:3px 10px;'
-                f'font-size:8pt;font-weight:600;margin:2px 4px 2px 0;">{escape(s)}</span>'
-                for s in active_syms
-            )
-            if active_syms
-            else '<span style="color:#9ca3af;font-style:italic;font-size:9pt;">None reported</span>'
-        )
-
-        # ── image helpers ─────────────────────────────────────────────────────
-        def resolve_image_uri(path_value: str) -> str:
-            raw = str(path_value or "").strip()
-            if not raw:
-                return ""
-            candidate = raw if os.path.isabs(raw) else os.path.join(os.path.dirname(os.path.abspath(__file__)), raw)
-            if not os.path.isfile(candidate):
-                return ""
-            try:
-                return Path(candidate).resolve().as_uri()
-            except OSError:
-                return ""
-
-        # ── section heading ───────────────────────────────────────────────────
-        def sec(title: str) -> str:
-            return (
-                f'<div style="margin:18px 0 10px;padding-bottom:6px;border-bottom:2px solid #1f2937;">'
-                f'<span style="font-size:9pt;font-weight:700;color:#1f2937;letter-spacing:1.2px;text-transform:uppercase;">{title}</span>'
-                f'</div>'
-            )
-
-        # ── info table helpers ────────────────────────────────────────────────
-        def field_row(label: str, value: str, border: bool = True) -> str:
-            border_style = 'border-bottom:1px solid #e5e7eb;' if border else ''
-            return (
-                f'<tr>'
-                f'<td style="padding:8px 12px;{border_style}font-size:9pt;color:#4b5563;font-weight:500;width:35%;">{label}</td>'
-                f'<td style="padding:8px 12px;{border_style}font-size:9pt;color:#111827;font-weight:600;">{value}</td>'
-                f'</tr>'
-            )
-
-        def field_grid_2col(fields: list) -> str:
-            """Generate 2-column grid layout for fields"""
-            rows_html = ""
-            for i in range(0, len(fields), 2):
-                left_label, left_value = fields[i]
-                if i + 1 < len(fields):
-                    right_label, right_value = fields[i + 1]
-                else:
-                    right_label, right_value = "", "&#8212;"
-                
-                rows_html += (
-                    f'<tr>'
-                    f'<td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;font-size:8.5pt;color:#6b7280;font-weight:500;width:18%;">{left_label}</td>'
-                    f'<td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;font-size:9pt;color:#111827;font-weight:600;width:32%;">{left_value}</td>'
-                    f'<td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;font-size:8.5pt;color:#6b7280;font-weight:500;width:18%;">{right_label}</td>'
-                    f'<td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;font-size:9pt;color:#111827;font-weight:600;width:32%;">{right_value}</td>'
-                    f'</tr>'
-                )
-            return rows_html
-
-        # Build result badge - minimal style
-        ai_result_label = escape(ai_result_raw) if ai_result_raw else "—"
-        doctor_result_label = escape(doctor_result_raw) if doctor_result_raw else "—"
-        final_dx_label = escape(final_dx_raw) if final_dx_raw else "—"
-        if result_raw == "No DR":
-            result_badge_color = "#059669"
-        elif result_raw == "Mild DR":
-            result_badge_color = "#d97706"
-        elif result_raw in ("Moderate DR", "Severe DR"):
-            result_badge_color = "#dc2626"
-        elif result_raw == "Proliferative DR":
-            result_badge_color = "#991b1b"
-        else:
-            result_badge_color = "#6b7280"
-
-        # ── eye result block (per-eye images + result) ────────────────────────
-        def eye_result_block(eye_record: dict) -> str:
-            eye_name = str(eye_record.get("eyes") or "Eye").strip() or "Eye"
-            eye_result = str(eye_record.get("result") or "").strip()
-            eye_conf = str(eye_record.get("confidence") or "").strip()
-            if eye_conf.lower().startswith("confidence:"):
-                eye_conf = eye_conf[len("confidence:"):].strip()
-
-            src_uri = resolve_image_uri(eye_record.get("source_image_path", ""))
-            heat_uri = resolve_image_uri(eye_record.get("heatmap_image_path", ""))
-
-            def image_panel(uri: str, placeholder: str) -> str:
-                if uri:
-                    img_html = f'<img src="{uri}" style="width:100%;max-width:320px;max-height:230px;height:auto;display:block;margin:0 auto;border-radius:4px;page-break-inside:avoid;break-inside:avoid-page;" />'
-                else:
-                    img_html = (
-                        f'<div style="width:320px;height:230px;background:#f3f4f6;border-radius:4px;'
-                        f'display:flex;align-items:center;justify-content:center;margin:0 auto;">'
-                        f'<span style="font-size:8pt;color:#9ca3af;font-style:italic;text-align:center;padding:20px;">{placeholder}</span>'
-                        f'</div>'
-                    )
-                return f'<div style="text-align:center;background:#ffffff;padding:8px;border:1px solid #e5e7eb;">{img_html}</div>'
-
-            def titled_image_block(title: str, uri: str, placeholder: str, margin_top: str = "0") -> str:
-                return (
-                    f'<div style="page-break-inside:avoid;break-inside:avoid-page;margin-top:{margin_top};">'
-                    f'<div style="font-size:8pt;font-weight:700;color:#4b5563;text-transform:uppercase;letter-spacing:0.5px;margin:0 0 6px;">{title}</div>'
-                    f'{image_panel(uri, placeholder)}'
-                    f'</div>'
-                )
-
-            return (
-                f'<div style="border:1px solid #d1d5db;border-radius:6px;background:#ffffff;margin-bottom:14px;padding:14px 16px;page-break-inside:avoid;break-inside:avoid-page;">'
-                f'<div style="margin-bottom:12px;">'
-                f'<table width="100%" cellpadding="0" cellspacing="0"><tr>'
-                f'<td style="font-size:10pt;font-weight:700;color:#111827;">{escape(eye_name)}</td>'
-                f'<td align="right">'
-                f'<span style="font-size:8pt;color:#6b7280;font-weight:600;">AI Results:&nbsp;</span>'
-                f'<span style="font-size:9pt;font-weight:700;color:#111827;">{escape(eye_result) if eye_result else "&#8212;"}</span>'
-                f'</td>'
-                f'</tr></table>'
-                f'</div>'
-                f'<div style="font-size:8.5pt;color:#6b7280;margin-bottom:12px;">'
-                f'Confidence: <span style="font-weight:600;color:#374151;">{escape(eye_conf) if eye_conf else "&#8212;"}</span>'
-                f'</div>'
-                f'{titled_image_block("Fundus", src_uri, "Source image not stored")}'
-                f'{titled_image_block("Heatmap", heat_uri, "Heatmap not stored", "12px")}'
-                f'</div>'
-            )
-
-        eye_names = [str(r.get("eyes") or "").strip() for r in eye_records if str(r.get("eyes") or "").strip()]
-        combined_eye_display = ", ".join(eye_names) if eye_names else str(full.get("eyes") or "")
-        image_results_html = "".join(eye_result_block(r) for r in eye_records)
-
-        # ── assemble HTML ─────────────────────────────────────────────────────
-        html = f"""<!DOCTYPE html>
-<html>
-<head>
-<meta charset="utf-8">
-<style>
-  body {{
-    font-family: 'Segoe UI', 'Calibri', Arial, sans-serif;
-    font-size: 10pt;
-    color: #111827;
-    background: #ffffff;
-    margin: 0;
-    padding: 0;
-    line-height: 1.5;
-  }}
-  table {{ border-collapse: collapse; }}
-  td, div, span {{ word-break: break-word; }}
-  img {{ max-width: 100%; height: auto; border: 0; }}
-</style>
-</head>
-<body>
-
-<!-- HEADER -->
-<table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:20px;">
-<tr>
-  <td style="padding:16px 20px;background:#f9fafb;border-bottom:3px solid #1f2937;">
-    <div style="font-size:18pt;font-weight:700;color:#111827;margin-bottom:4px;">DIABETIC RETINOPATHY SCREENING REPORT</div>
-    <div style="font-size:8.5pt;color:#6b7280;">
-            <b>Generated:</b> {report_date} &nbsp;|&nbsp; <b>Created by:</b> {created_by}
-    </div>
-  </td>
-</tr>
-</table>
-
-<!-- BODY -->
-<table width="100%" cellpadding="0" cellspacing="0">
-<tr><td style="padding:0 20px;">
-
-  {sec("Patient Information")}
-  <table width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #d1d5db;margin-bottom:18px;">
-  {field_grid_2col([
-      ("Full Name", esc(full.get("name"))),
-      ("Date of Birth", esc(full.get("birthdate"))),
-      ("Age", esc(full.get("age"))),
-      ("Sex", esc(full.get("sex"))),
-      ("Patient ID", esc(full.get("patient_id"))),
-      ("Contact", esc(full.get("contact"))),
-      ("Height", height_disp),
-      ("Weight", weight_disp),
-      ("BMI", bmi_disp),
-      ("Eye(s) Screened", esc(combined_eye_display)),
-      ("Screening Date", esc(screening_date)),
-      ("", "")
-  ])}
-  </table>
-
-  {sec("Diabetic History & Diabetes Management")}
-  <table width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #d1d5db;margin-bottom:18px;">
-  {field_row("Diabetes Type", esc(full.get("diabetes_type")))}
-  {field_row("Diagnosis Date", esc(full.get("diabetes_diagnosis_date")))}
-  {field_row("Duration", dur_disp)}
-  {field_row("HbA1c", esc(full.get("hba1c")))}
-  {field_row("Treatment Regimen", treatment_regimen_disp)}
-  {field_row("Family History of Diabetes", prev_dr_stage_disp, False)}
-  </table>
-
-  {sec("Vital Signs")}
-  <table width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #d1d5db;margin-bottom:18px;">
-  {field_grid_2col([
-      ("Blood Pressure", bp_disp),
-      ("Fasting Blood Sugar", fbs_disp),
-      ("Visual Acuity (Left)", va_l),
-      ("Visual Acuity (Right)", va_r),
-      ("Random Blood Sugar", rbs_disp),
-      ("", "")
-  ])}
-  </table>
-
-  {sec("Reported Symptoms")}
-  <div style="padding:10px 12px;border:1px solid #d1d5db;margin-bottom:18px;background:#fafafa;">
-    <div style="font-size:9pt;color:#374151;">{sym_html}</div>
-  </div>
-
-    {sec("Other Symptom Details")}
-    <div style="padding:12px;border:1px solid #d1d5db;background:#fafafa;margin-bottom:18px;min-height:44px;">
-        <div style="font-size:9pt;color:#4b5563;line-height:1.65;">{other_symptom_disp}</div>
-    </div>
-
-  {sec("AI Classification Result")}
-  <table width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #d1d5db;margin-bottom:18px;">
-  {field_row("Classification", ai_result_label)}
-  {field_row("Confidence", conf_display, False)}
-  </table>
-
-  {sec("Doctor Decision")}
-  <table width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #d1d5db;margin-bottom:18px;">
-  {field_row("Doctor Classification", doctor_result_label)}
-  {field_row("Decision Mode", esc(decision_mode_raw.title()))}
-  {field_row("Doctor Findings", esc(doctor_findings_raw or "—"))}
-  {field_row("Final Diagnosis", final_dx_label)}
-  {field_row("Final Diagnosis Scale", "Based on ICDR Severity Scale", False)}
-  </table>
-
-    {sec("Doctor Comments")}
-    <div style="padding:12px;border:1px solid #d1d5db;background:#fafafa;margin-bottom:18px;min-height:44px;">
-        <div style="font-size:9pt;color:#4b5563;line-height:1.65;">{esc(doctor_findings_raw) if doctor_findings_raw else '<span style="color:#9ca3af;font-style:italic;">No doctor comments provided</span>'}</div>
-    </div>
-"""
-        if decision_mode_raw == "override":
-            html += f"""
-  <div style="padding:10px 12px;border:1px solid #fecaca;margin-bottom:18px;background:#fff1f2;">
-    <div style="font-size:8.5pt;color:#7f1d1d;">
-      <b>Override Justification:</b> {esc(override_reason_raw or "No justification provided")}
-    </div>
-  </div>
-"""
-        html += f"""
-
-  {sec("Image Results")}
-  {image_results_html}
-
-  {sec("Clinical Analysis")}
-  <div style="padding:14px;border:1px solid #d1d5db;background:#f9fafb;margin-bottom:18px;">
-    <div style="font-size:8pt;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;">Clinical Recommendation</div>
-    <div style="font-size:9.5pt;color:#111827;font-weight:600;line-height:1.6;margin-bottom:14px;">&rarr; {rec}</div>
-    <div style="border-top:1px solid #d1d5db;padding-top:12px;margin-top:12px;">
-      <div style="font-size:9.5pt;color:#374151;line-height:1.75;">{summary}</div>
-    </div>
-  </div>
-
-  {sec("Clinical Notes")}
-  <div style="padding:12px;border:1px solid #d1d5db;background:#fafafa;margin-bottom:18px;min-height:50px;">
-    <div style="font-size:9pt;color:#4b5563;font-style:italic;line-height:1.65;">{notes_disp}</div>
-  </div>
-
-  <!-- FOOTER -->
-  <div style="margin-top:24px;padding-top:14px;border-top:2px solid #e5e7eb;">
-    <div style="font-size:7.5pt;color:#9ca3af;line-height:1.8;">
-            <b>Created by:</b> {created_by}<br>
-            <b>Finalized by:</b> {finalized_by}<br>
-            <b>Generated:</b> {report_date}<br>
-      <i>This report is AI-assisted and does not replace the judgment of a licensed eye care professional. All findings must be reviewed and confirmed by a qualified healthcare professional before any clinical action is taken.</i>
-    </div>
-  </div>
-
-</td></tr>
-</table>
-
-</body>
-</html>"""
-
-        doc = QTextDocument()
-        doc.setDocumentMargin(0)
-        doc.setHtml(html)
-
-        writer = QPdfWriter(path)
-        writer.setResolution(150)
-        try:
-            writer.setPageSize(QPageSize(QPageSize.PageSizeId.A4))
-        except Exception:
-            pass
-        try:
-            writer.setPageMargins(QMarginsF(14, 10, 14, 16), QPageLayout.Unit.Millimeter)
-        except Exception:
-            pass
-
-        doc.print_(writer)
-        self.status_label.setText(f"Report saved: {os.path.basename(path)}")
-        UserManager.add_activity_log(
-            self.username,
-            (
-                f"REPORT_GENERATED patient_id={full.get('patient_id')}; "
-                f"record_id={full.get('id')}; "
-                f"created_by={created_by_raw or finalized_by_raw}; "
-                f"finalized_by={finalized_by_raw}; "
-                f"file={os.path.basename(path)}"
-            ),
-        )
-        QMessageBox.information(self, "Report Saved", f"Patient report saved to:\n{path}")
 
     def generate_referral(self):
         record = self._get_selected_record()

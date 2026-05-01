@@ -26,6 +26,7 @@ try:
     from .auth import UserManager
     from .ui_feedback import apply_dialog_style
     from .model_inference import SYSTEM_UNCERTAIN_LABEL
+    from .reports import generate_unified_patient_report
 except Exception:  # pragma: no cover
     from screening_styles import DR_COLORS, DR_RECOMMENDATIONS, PROGRESSBAR_STYLE
     from screening_widgets import ClickableImageLabel
@@ -33,6 +34,7 @@ except Exception:  # pragma: no cover
     from auth import UserManager
     from ui_feedback import apply_dialog_style
     from model_inference import SYSTEM_UNCERTAIN_LABEL
+    from reports import generate_unified_patient_report
 
 ICDR_OPTIONS = ["No DR", "Mild DR", "Moderate DR", "Severe DR", "Proliferative DR"]
 
@@ -1513,6 +1515,8 @@ class ResultsWindow(QWidget):
             p_hba1c = pd.get("hba1c", 0.0)
             p_family_hx = pd.get("prev_dr_stage", "")
             
+            p_treatment = pd.get("treatment_regimen", "")
+            
             profile_parts = [
                 f"<b>{p_name}</b>",
                 f"{p_age} years old" if p_age else "",
@@ -1536,7 +1540,11 @@ class ResultsWindow(QWidget):
                     dur_str = f"{m} months"
                 history.append(f"{dur_str} duration")
             if p_hba1c: history.append(f"HbA1c {p_hba1c}%")
+            
             history_txt = f" with a history of {', '.join(history)}" if history else " with no recorded diabetic history"
+            
+            if p_treatment and p_treatment not in ("", "Select", "None"):
+                history_txt += f", currently managed via {p_treatment.lower()}"
             
             if p_family_hx == "Yes":
                 history_txt += " and a positive family history of diabetes"
@@ -1958,731 +1966,52 @@ class ResultsWindow(QWidget):
             QMessageBox.information(self, "Generate Report", "No completed screening results to report.")
             return
 
-        _ai_uncertain = str(self._current_result_class or "").strip() == SYSTEM_UNCERTAIN_LABEL
-        if self.parent_page and not getattr(self.parent_page, "_current_eye_saved", False) and not _ai_uncertain:
-            QMessageBox.warning(self, "Generate Report", "Please save the result before generating a report")
-            return
-
-        if not self.bilateral_frame.isVisible():
-            box = QMessageBox(self)
-            box.setWindowTitle("Single-Eye Report")
-            box.setIcon(QMessageBox.Icon.Warning)
-            box.setText("Only one eye has been screened. Generate a single-eye report?")
-            generate_btn = box.addButton("Generate Anyway", QMessageBox.ButtonRole.AcceptRole)
-            box.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
-            box.exec()
-            if box.clickedButton() != generate_btn:
-                return
-
         pp = self.parent_page
-        missing_profile = []
-        if pp:
-            if not pp.p_name.text().strip():
-                missing_profile.append("Name")
-            if pp.p_age.value() <= 0:
-                missing_profile.append("Age")
-        if missing_profile:
-            QMessageBox.warning(
-                self,
-                "Profile Incomplete",
-                "Patient profile is incomplete. Missing fields will appear blank in the report.\n\nMissing: " + ", ".join(missing_profile),
-            )
+        
+        # Prepare patient_record (Identity + History)
+        patient_record = {
+            "name": self._current_patient_name or "Patient",
+            "patient_id": pp.p_id.text().strip() if pp and hasattr(pp, "p_id") else "",
+            "birthdate": pp.p_dob.text() if pp and hasattr(pp, "p_dob") and hasattr(pp.p_dob, "text") else "",
+            "age": str(pp.p_age.value()) if pp and hasattr(pp, "p_age") else "",
+            "sex": pp.p_sex.currentText() if pp and hasattr(pp, "p_sex") else "",
+            "phone": (pp.p_phone.text().strip() if hasattr(pp, "p_phone") else "") or (pp.p_contact.text().strip() if hasattr(pp, "p_contact") else ""),
+            "email": pp.p_email.text().strip() if pp and hasattr(pp, "p_email") else "",
+            "address": pp.p_address.text().strip() if pp and hasattr(pp, "p_address") else "",
+            "diabetes_type": pp.diabetes_type.currentText() if pp and hasattr(pp, "diabetes_type") else "",
+            "diag_date": pp._get_diagnosis_date().toString("MMMM d, yyyy") if pp and hasattr(pp, "_get_diagnosis_date") and pp._get_diagnosis_date().isValid() else "",
+            "duration": str(pp.diabetes_duration.value()) if pp and hasattr(pp, "diabetes_duration") else "",
+            "treatment_regimen": pp.treatment_regimen.currentText() if pp and hasattr(pp, "treatment_regimen") else "",
+        }
 
-        default_name = (
-            f"EyeShield_Report_{self._current_patient_name or 'Patient'}_"
-            f"{datetime.now().strftime('%Y%m%d_%H%M')}.pdf"
-        )
-        path, _ = QFileDialog.getSaveFileName(
-            self, "Save Screening Report", default_name, "PDF Files (*.pdf)"
-        )
-        if not path:
-            return
-
-        out_dir = os.path.dirname(path)
-        writable, write_err = can_write_directory(out_dir)
-        if not writable:
-            QMessageBox.warning(
-                self,
-                "Generate Report",
-                f"Cannot write to {out_dir}. Choose a different save location.\n\n{write_err}",
-            )
-            return
-
-        free_mb = get_free_space_mb(out_dir)
-        if free_mb < 50:
-            QMessageBox.warning(
-                self,
-                "Low Disk Space",
-                f"Low disk space ({free_mb} MB remaining). The report may fail to save.",
-            )
-
-        try:
-            from PySide6.QtGui import QPdfWriter, QPageSize, QPageLayout, QTextDocument
-            from PySide6.QtCore import QMarginsF
-        except ImportError:
-            QMessageBox.warning(self, "Generate Report", "PDF generation requires PySide6 PDF support.")
-            return
-
-        # Collect full patient data from the parent form
-        patient_id = pp.p_id.text().strip() if pp and hasattr(pp, "p_id") else ""
-        dob = pp.p_dob.text() if pp and hasattr(pp, "p_dob") and hasattr(pp.p_dob, "text") else ""
-        age = str(pp.p_age.value()) if pp and hasattr(pp, "p_age") else ""
-        sex = pp.p_sex.currentText() if pp and hasattr(pp, "p_sex") else ""
-        contact = pp.p_contact.text().strip() if pp and hasattr(pp, "p_contact") else ""
-        diabetes_type = pp.diabetes_type.currentText() if pp and hasattr(pp, "diabetes_type") else ""
-        diabetes_diagnosis_date = pp.diabetes_diagnosis_date.text().strip() if pp and hasattr(pp, "diabetes_diagnosis_date") else ""
-        duration_val = pp.diabetes_duration.value() if pp and hasattr(pp, "diabetes_duration") else 0
-        hba1c_num = pp.hba1c.value() if pp and hasattr(pp, "hba1c") else 0.0
-        prev_tx = "Yes" if pp and hasattr(pp, "prev_treatment") and pp.prev_treatment.isChecked() else "No"
-        notes = pp.notes.toPlainText().strip() if pp and hasattr(pp, "notes") else ""
-
-        va_left = pp.va_left.text().strip() if pp and hasattr(pp, "va_left") else ""
-        va_right = pp.va_right.text().strip() if pp and hasattr(pp, "va_right") else ""
-        bp_sys = str(pp.bp_systolic.value()) if pp and hasattr(pp, "bp_systolic") and pp.bp_systolic.value() > 0 else ""
-        bp_dia = str(pp.bp_diastolic.value()) if pp and hasattr(pp, "bp_diastolic") and pp.bp_diastolic.value() > 0 else ""
-        fbs_val = str(pp.fbs.value()) if pp and hasattr(pp, "fbs") and pp.fbs.value() > 0 else ""
-        rbs_val = str(pp.rbs.value()) if pp and hasattr(pp, "rbs") and pp.rbs.value() > 0 else ""
-
-        # Phase 1 additions
-        height_val = str(pp.height.value()) if pp and hasattr(pp, "height") and pp.height.value() > 0 else ""
-        weight_val = str(pp.weight.value()) if pp and hasattr(pp, "weight") and pp.weight.value() > 0 else ""
-        bmi_val = str(pp.bmi.value()) if pp and hasattr(pp, "bmi") and pp.bmi.value() > 0 else ""
-        treatment_regimen = pp.treatment_regimen.currentText() if pp and hasattr(pp, "treatment_regimen") else ""
-        prev_dr_stage = pp.prev_dr_stage.currentText() if pp and hasattr(pp, "prev_dr_stage") else ""
-
-        # Collect symptoms for pill display
-        symptoms = []
-        symptom_other_val = ""
-        if pp:
-            if hasattr(pp, "symptom_blurred") and pp.symptom_blurred.isChecked():
-                symptoms.append("Blurred Vision")
-            if hasattr(pp, "symptom_floaters") and pp.symptom_floaters.isChecked():
-                symptoms.append("Floaters")
-            if hasattr(pp, "symptom_flashes") and pp.symptom_flashes.isChecked():
-                symptoms.append("Flashes")
-            if hasattr(pp, "symptom_vision_loss") and pp.symptom_vision_loss.isChecked():
-                symptoms.append("Vision Loss")
-            # Other symptoms
-            symptom_other_val = pp.symptom_other.text().strip() if hasattr(pp, "symptom_other") else ""
-            if symptom_other_val:
-                symptoms.append(symptom_other_val)
-
-        # Helpers
-        def esc(value) -> str:
-            return escape(str(value or "").strip()) or "&mdash;"
-
-        def esc_or_dash(value) -> str:
-            v = str(value or "").strip()
-            return escape(v) if v and v not in ("0", "None", "Select") else "&mdash;"
-
-        # Clinic branding from config.json
-        config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config", "config.json")
-        clinic_name = "EyeShield EMR"
-        try:
-            with open(config_path, "r", encoding="utf-8") as f:
-                cfg = json.load(f)
-            clinic_name = cfg.get("clinic_name") or cfg.get("admin_contact", {}).get("location", "EyeShield EMR")
-        except (FileNotFoundError, json.JSONDecodeError):
-            pass
-
-        # Clean confidence text and derive result-specific report colors/content
-        raw_confidence = str(self._current_confidence or "").strip()
-        if raw_confidence.lower().startswith("confidence:"):
-            raw_confidence = raw_confidence[len("confidence:"):].strip()
-        confidence_display = escape(raw_confidence) if raw_confidence else "&mdash;"
-
-        result_raw = str(self._current_result_class or "").strip()
+        # Prepare eye_records
+        eye_records = []
         decision = self.get_decision_payload()
-        final_dx = str(decision.get("final_diagnosis_icdr") or result_raw or "").strip()
-        decision_mode = str(decision.get("decision_mode") or "accepted").strip()
-        override_note = str(decision.get("override_justification") or "").strip()
-        findings_note = str(decision.get("doctor_findings") or "").strip()
-        grade_color = DR_COLORS.get(result_raw, "#374151")
-        grade_bg_map = {
-            "No DR": "#d1f5e0",
-            "Mild DR": "#fef3e2",
-            "Moderate DR": "#fde8d8",
-            "Severe DR": "#fde8ea",
-            "Proliferative DR": "#f5d5d8",
-            SYSTEM_UNCERTAIN_LABEL: "#fffbeb",
-        }
-        grade_bg = grade_bg_map.get(result_raw, "#f3f4f6")
-
-        recommendation = escape(DR_RECOMMENDATIONS.get(final_dx or result_raw, "Consult a qualified ophthalmologist"))
-
-        explanation_text = (self.explanation.text() or "").strip()
-        if explanation_text:
-            explanation_html = escape(explanation_text).replace("\n\n", "<br><br>").replace("\n", "<br>")
-        else:
-            summary_map = {
-                "No DR": (
-                    "No signs of diabetic retinopathy were detected in this fundus image. "
-                    "Continue standard diabetes management and schedule routine annual retinal screening."
-                ),
-                "Mild DR": (
-                    "Early microaneurysms consistent with mild non-proliferative diabetic retinopathy (NPDR) were identified. "
-                    "A repeat retinal examination in 6 to 12 months is recommended."
-                ),
-                "Moderate DR": (
-                    "Features consistent with moderate NPDR were detected. "
-                    "Referral to an ophthalmologist within 3 months is advised."
-                ),
-                "Severe DR": (
-                    "Findings are consistent with severe NPDR. "
-                    "Urgent ophthalmology referral is required for further evaluation."
-                ),
-                "Proliferative DR": (
-                    "Proliferative diabetic retinopathy was detected, a sight-threatening condition. "
-                    "Immediate ophthalmology referral is required."
-                ),
-                SYSTEM_UNCERTAIN_LABEL: (
-                    "Automated screening did not produce a reliable diabetic retinopathy severity grade for this image. "
-                    "Specialist review is recommended for clinical assessment and management."
-                ),
-            }
-            explanation_html = escape(summary_map.get(result_raw, "Please consult a qualified ophthalmologist."))
-
-        report_date = datetime.now().strftime("%B %d, %Y %I:%M %p")
-        screened_by_name = str(
-            os.environ.get("EYESHIELD_CURRENT_NAME", "")
-            or os.environ.get("EYESHIELD_CURRENT_USER", "")
-        ).strip()
-        screened_by_title = str(os.environ.get("EYESHIELD_CURRENT_TITLE", "")).strip()
-        screened_by_raw = (
-            f"{screened_by_name} ({screened_by_title})"
-            if screened_by_name and screened_by_title
-            else screened_by_name
-        )
-        screened_by = escape(screened_by_raw) if screened_by_raw else "&mdash;"
-        created_by = screened_by
-        finalized_by = screened_by
-
-        duration_disp = f"{escape(str(duration_val))} year(s)" if duration_val and duration_val > 0 else "&mdash;"
-        notes_disp = escape(notes) if notes else "&mdash;"
-        hba1c_disp = f"{hba1c_num:.1f}%" if hba1c_num and hba1c_num > 0 else "&mdash;"
-
-        bp_display = (
-            f"{escape(bp_sys)}/{escape(bp_dia)} mmHg"
-            if bp_sys and bp_dia
-            else "&mdash;"
-        )
-        fbs_disp = f"{escape(fbs_val)} mg/dL" if fbs_val else "&mdash;"
-        rbs_disp = f"{escape(rbs_val)} mg/dL" if rbs_val else "&mdash;"
-
-        # Phase 1 display variables
-        height_disp = f"{escape(height_val)} cm" if height_val else "&mdash;"
-        weight_disp = f"{escape(weight_val)} kg" if weight_val else "&mdash;"
         
-        # BMI with classification
-        def get_bmi_category(bmi_value: str) -> tuple:
-            """Return (category, color) based on WHO BMI classification."""
-            try:
-                bmi = float(bmi_value)
-                if bmi < 18.5:
-                    return ("Underweight", "#ea580c")  # Orange
-                elif bmi < 25.0:
-                    return ("Normal", "#16a34a")  # Green
-                elif bmi < 30.0:
-                    return ("Overweight", "#d97706")  # Amber
-                else:
-                    return ("Obese", "#dc2626")  # Red
-            except (ValueError, TypeError):
-                return ("", "#6b7280")
+        # Current eye (second eye if bilateral, or only eye if single)
+        current_eye = {
+            "eyes": self._current_eye_label or "Eye",
+            "result": self._current_result_class or "No DR",
+            "confidence": self._current_confidence or "—",
+            "source_image_path": self._current_image_path,
+            "heatmap_image_path": self._current_heatmap_path,
+            "final_diagnosis_icdr": decision.get("final_diagnosis_icdr"),
+            "doctor_findings": decision.get("doctor_findings"),
+            "screened_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        }
         
-        if bmi_val:
-            bmi_category, bmi_color = get_bmi_category(bmi_val)
-            bmi_disp = f'{escape(bmi_val)} <span style="color:{bmi_color};font-weight:600;">({bmi_category})</span>'
-        else:
-            bmi_disp = "&mdash;"
+        # If bilateral, add the first eye
+        if hasattr(self, "_first_eye_context") and self._first_eye_context:
+            eye_records.append(self._first_eye_context)
         
-        treatment_disp = esc_or_dash(treatment_regimen)
-        prev_dr_disp = esc_or_dash(prev_dr_stage)
+        eye_records.append(current_eye)
 
-        symptom_html = (
-            " ".join(f'<span class="symptom-pill">{escape(s)}</span>' for s in symptoms)
-            if symptoms
-            else '<span style="color:#6b7280;">None reported</span>'
-        )
-        other_symptom_disp = esc_or_dash(symptom_other_val)
-
-        def resolve_image_path(path_value: str) -> str:
-            raw = str(path_value or "").strip()
-            if not raw:
-                return ""
-            if os.path.isabs(raw):
-                candidate = raw
-            else:
-                candidate = os.path.join(os.path.dirname(os.path.abspath(__file__)), raw)
-            if not os.path.isfile(candidate):
-                return ""
-            try:
-                return str(Path(candidate).resolve())
-            except OSError:
-                return ""
-
-        def build_embedded_image_uri(path_value: str, width: int = 200, height: int = 200) -> str:
-            """Build embedded base64 image URI with proper sizing"""
-            resolved = resolve_image_path(path_value)
-            if not resolved:
-                return ""
-
-            src = QImage(resolved)
-            if src.isNull():
-                return ""
-
-            # Scale to fit within bounds while maintaining aspect ratio
-            fitted = src.scaled(
-                width,
-                height,
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation,
-            )
-
-            # Create canvas with white background
-            canvas = QImage(fitted.width(), fitted.height(), QImage.Format.Format_ARGB32_Premultiplied)
-            canvas.fill(QColor("#ffffff"))
-            painter = QPainter(canvas)
-            painter.drawImage(0, 0, fitted)
-            painter.end()
-
-            ba = QByteArray()
-            buffer = QBuffer(ba)
-            if not buffer.open(QIODevice.OpenModeFlag.WriteOnly):
-                return ""
-            canvas.save(buffer, "PNG")
-            buffer.close()
-
-            b64 = bytes(ba.toBase64()).decode("ascii")
-            return f"data:image/png;base64,{b64}"
-
-        source_image_uri = build_embedded_image_uri(self._current_image_path, 280, 280)
-        heatmap_image_uri = build_embedded_image_uri(self._current_heatmap_path, 280, 280)
-
-        first_eye_ctx = dict(getattr(self, "_first_eye_context", {}) or {})
-        first_eye_label = str(first_eye_ctx.get("eye") or "").strip()
-        first_eye_result = str(first_eye_ctx.get("result") or "").strip() or ""
-        first_eye_confidence = str(first_eye_ctx.get("confidence") or "").strip() or ""
-        first_source_image_uri = build_embedded_image_uri(first_eye_ctx.get("image_path"), 280, 280) if first_eye_ctx else ""
-        first_heatmap_image_uri = build_embedded_image_uri(first_eye_ctx.get("heatmap_path"), 280, 280) if first_eye_ctx else ""
-
-        second_eye_label = str(self._current_eye_label or "").strip() or "Current Eye"
-        second_eye_result = str(result_raw or "").strip() or ""
-        second_eye_confidence = str(conf_display or "").strip() or ""
-
-        bilateral_eye_labels = []
-        for eye_name in (first_eye_label, second_eye_label):
-            name = str(eye_name or "").strip()
-            if name and name not in bilateral_eye_labels:
-                bilateral_eye_labels.append(name)
-        combined_eye_display = ", ".join(bilateral_eye_labels) if bilateral_eye_labels else (second_eye_label or "")
-        is_bilateral_report = bool(first_eye_ctx and first_eye_label)
-
-        def _render_eye_image_pair(eye_name: str, eye_grade: str, eye_conf: str, src_uri: str, heat_uri: str) -> str:
-            source_html = (
-                f'<img src="{src_uri}" style="max-width:100%;max-height:230px;width:auto;height:auto;page-break-inside:avoid;break-inside:avoid-page;" />'
-                if src_uri else
-                '<div style="text-align:center;background:#ffffff;padding:30px;border:1px solid #e5e7eb;color:#9ca3af;font-style:italic;font-size:9pt;">Image not available</div>'
-            )
-            heat_html = (
-                f'<img src="{heat_uri}" style="max-width:100%;max-height:230px;width:auto;height:auto;page-break-inside:avoid;break-inside:avoid-page;" />'
-                if heat_uri else
-                '<div style="text-align:center;background:#ffffff;padding:30px;border:1px solid #e5e7eb;color:#9ca3af;font-style:italic;font-size:9pt;">Heatmap not available</div>'
-            )
-
-            def titled_image_block(title: str, image_html: str, margin_top: str = "0") -> str:
-                return (
-                    '<div style="page-break-inside:avoid;break-inside:avoid-page;'
-                    f'margin-top:{margin_top};">'
-                    f'<div style="font-size:8pt;font-weight:700;color:#4b5563;text-transform:uppercase;letter-spacing:0.5px;margin:0 0 6px;">{title}</div>'
-                    '<div style="border:1px solid #d1d5db;padding:12px;background:#fafafa;">'
-                    f'{image_html}'
-                    '</div>'
-                    '</div>'
-                )
-
-            return (
-                '<div class="imageBlock" style="border:1px solid #d1d5db;border-radius:6px;background:#ffffff;margin-bottom:14px;padding:12px 14px;">'
-                '<table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:8px;"><tr>'
-                f'<td style="font-size:9pt;font-weight:700;color:#111827;">{esc(eye_name or "Eye")}</td>'
-                '<td align="right">'
-                '<span style="font-size:8pt;color:#6b7280;font-weight:600;">AI Results:&nbsp;</span>'
-                f'<span style="font-size:9pt;font-weight:700;color:#111827;">{esc(eye_grade)}</span>'
-                '</td>'
-                '</tr></table>'
-                f'<div style="font-size:8.5pt;color:#4b5563;margin-bottom:10px;">Confidence: <span style="font-weight:600;color:#374151;">{esc(eye_conf)}</span></div>'
-                f'{titled_image_block("Fundus", source_html)}'
-                f'{titled_image_block("Heatmap", heat_html, "12px")}'
-                '</div>'
-            )
-
-        if is_bilateral_report:
-            fundus_images_html = (
-                f'{sec("Bilateral Fundus Images")}'
-                + _render_eye_image_pair(first_eye_label, first_eye_result, first_eye_confidence, first_source_image_uri, first_heatmap_image_uri)
-                + _render_eye_image_pair(second_eye_label, second_eye_result, second_eye_confidence, source_image_uri, heatmap_image_uri)
-            )
-        else:
-            fundus_images_html = (
-                f'{sec("Fundus Images")}'
-                + _render_eye_image_pair(second_eye_label, second_eye_result, second_eye_confidence, source_image_uri, heatmap_image_uri)
-            )
-
-        # Report-tab-matching palette and structure
-        _COL = {
-            "No DR": "#166534",
-            "Mild DR": "#92400e",
-            "Moderate DR": "#9a3412",
-            "Severe DR": "#7f1d1d",
-            "Proliferative DR": "#6b1a1a",
-            SYSTEM_UNCERTAIN_LABEL: "#92400e",
-        }
-        _BG = {
-            "No DR": "#f0fdf4",
-            "Mild DR": "#fefce8",
-            "Moderate DR": "#fff7ed",
-            "Severe DR": "#fff8f8",
-            "Proliferative DR": "#fff8f8",
-            SYSTEM_UNCERTAIN_LABEL: "#fffbeb",
-        }
-        _BORDER = {
-            "No DR": "#16a34a",
-            "Mild DR": "#d97706",
-            "Moderate DR": "#ea580c",
-            "Severe DR": "#c24141",
-            "Proliferative DR": "#b91c1c",
-            SYSTEM_UNCERTAIN_LABEL: "#d97706",
-        }
-        _REC = {
-            "No DR": "Annual screening recommended",
-            "Mild DR": "Repeat screening in 6&#8211;12 months",
-            "Moderate DR": "Ophthalmology referral within 3 months",
-            "Severe DR": "Urgent ophthalmology referral",
-            "Proliferative DR": "Immediate ophthalmology referral",
-            SYSTEM_UNCERTAIN_LABEL: "Specialist review and referral as clinically indicated",
-        }
-        _SUM = {
-            "No DR": "No signs of diabetic retinopathy were detected in this fundus image. Continue standard diabetes management, maintain optimal glycaemic and blood pressure control, and schedule routine annual retinal screening.",
-            "Mild DR": "Early microaneurysms consistent with mild non-proliferative diabetic retinopathy (NPDR) were identified. Intensify glycaemic and blood pressure management. A repeat retinal examination in 6&#8211;12 months is recommended.",
-            "Moderate DR": "Features consistent with moderate non-proliferative diabetic retinopathy (NPDR) were detected, including microaneurysms, haemorrhages, and/or hard exudates. Referral to an ophthalmologist within 3 months is advised. Reassess systemic metabolic control.",
-            "Severe DR": "Findings consistent with severe non-proliferative diabetic retinopathy (NPDR) were detected. The risk of progression to proliferative disease within 12 months is high. Urgent ophthalmology referral is required.",
-            "Proliferative DR": "Proliferative diabetic retinopathy (PDR) was detected &#8212; a sight-threatening condition. Immediate ophthalmology referral is required for evaluation and potential intervention, such as laser photocoagulation or intravitreal anti-VEGF therapy.",
-            SYSTEM_UNCERTAIN_LABEL: (
-                "Automated diabetic retinopathy screening did not yield a reliable ICDR grade for this examination. "
-                "This does not exclude retinopathy or other pathology. Please arrange specialist ophthalmology review "
-                "for dilated examination, independent image interpretation, and management advice."
-            ),
-        }
-        gc = _COL.get(result_raw, "#1e3a5f")
-        gbg = _BG.get(result_raw, "#f8faff")
-        gb = _BORDER.get(result_raw, "#2563eb")
-        rec = _REC.get(result_raw, "Consult a qualified ophthalmologist")
-        summary = _SUM.get(result_raw, "Please consult a qualified ophthalmologist.")
-        conf_display = confidence_display
-
-        is_critical_grade = result_raw in ("Severe DR", "Proliferative DR")
-        if is_critical_grade:
-            gbg = "#b91c1c"
-            gc = "#ffffff"
-            gb = "#991b1b"
-            badge_bg = "#7f1d1d"
-            confidence_color = "#ffffff"
-            divider_color = "#fecaca"
-            reco_label_opacity = "1"
-        else:
-            badge_bg = gb
-            confidence_color = "#ffffff"
-            divider_color = "#ffffff"
-            reco_label_opacity = "0.95"
-            gc = "#ffffff"
-            gbg = gb
-
-        def sec(title):
-            return (
-                f'<div style="margin:18px 0 10px;padding-bottom:6px;border-bottom:2px solid #1f2937;">'
-                f'<span style="font-size:9pt;font-weight:700;color:#1f2937;letter-spacing:1.2px;text-transform:uppercase;">{title}</span>'
-                f'</div>'
-            )
-
-        def field_row(label, value, border=True):
-            border_style = 'border-bottom:1px solid #e5e7eb;' if border else ''
-            return (
-                f'<tr>'
-                f'<td style="padding:8px 12px;{border_style}font-size:9pt;color:#4b5563;font-weight:500;width:35%;">{label}</td>'
-                f'<td style="padding:8px 12px;{border_style}font-size:9pt;color:#111827;font-weight:600;">{value}</td>'
-                f'</tr>'
-            )
-
-        def field_grid_2col(fields):
-            """Generate 2-column grid layout for fields"""
-            rows_html = ""
-            for i in range(0, len(fields), 2):
-                left_label, left_value = fields[i]
-                if i + 1 < len(fields):
-                    right_label, right_value = fields[i + 1]
-                else:
-                    right_label, right_value = "", "&mdash;"
-                
-                rows_html += (
-                    f'<tr>'
-                    f'<td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;font-size:8.5pt;color:#6b7280;font-weight:500;width:18%;">{left_label}</td>'
-                    f'<td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;font-size:9pt;color:#111827;font-weight:600;width:32%;">{left_value}</td>'
-                    f'<td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;font-size:8.5pt;color:#6b7280;font-weight:500;width:18%;">{right_label}</td>'
-                    f'<td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;font-size:9pt;color:#111827;font-weight:600;width:32%;">{right_value}</td>'
-                    f'</tr>'
-                )
-            return rows_html
-
-        # Build result badge - minimal style
-        result_label = escape(result_raw) if result_raw else ""
-        if result_raw == "No DR":
-            result_badge_color = "#059669"  # Green
-        elif result_raw == "Mild DR":
-            result_badge_color = "#d97706"  # Amber
-        elif result_raw in ("Moderate DR", "Severe DR"):
-            result_badge_color = "#dc2626"  # Red
-        elif result_raw == "Proliferative DR":
-            result_badge_color = "#991b1b"  # Dark red
-        elif result_raw == SYSTEM_UNCERTAIN_LABEL:
-            result_badge_color = "#b45309"  # Amber — indeterminate AI
-        else:
-            result_badge_color = "#6b7280"  # Gray
-
-        html = f"""<!DOCTYPE html>
-<html><head><meta charset="utf-8"><style>
-body {{
-    font-family: 'Segoe UI', 'Calibri', Arial, sans-serif;
-    font-size: 10pt;
-    color: #111827;
-    background: #ffffff;
-    margin: 0;
-    padding: 0;
-    line-height: 1.5;
-}}
-table {{
-    border-collapse: collapse;
-}}
-td {{
-    overflow-wrap: anywhere;
-    word-break: break-word;
-}}
-img {{
-    max-width: 100%;
-    height: auto;
-    display: block;
-}}
-.imageBlock {{
-    page-break-inside: avoid;
-    break-inside: avoid-page;
-}}
-</style></head><body>
-
-<!-- Header -->
-<table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:20px;">
-<tr>
-    <td style="padding:16px 20px;background:#f9fafb;border-bottom:3px solid #1f2937;">
-        <div style="font-size:18pt;font-weight:700;color:#111827;margin-bottom:4px;">DIABETIC RETINOPATHY SCREENING REPORT</div>
-        <div style="font-size:8.5pt;color:#6b7280;">
-            <b>Generated:</b> {report_date} &nbsp;|&nbsp; <b>Created by:</b> {created_by}
-        </div>
-    </td>
-</tr>
-</table>
-
-<table width="100%" cellpadding="0" cellspacing="0">
-<tr><td style="padding:0 20px;">
-
-<!-- Patient Information -->
-{sec("Patient Information")}
-<table width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #d1d5db;margin-bottom:18px;">
-{field_grid_2col([
-    ("Full Name", esc(self._current_patient_name)),
-    ("Date of Birth", esc(dob)),
-    ("Age", esc(age)),
-    ("Sex", esc(sex)),
-    ("Patient ID", esc(patient_id)),
-    ("Contact", esc(contact)),
-    ("Height", height_disp),
-    ("Weight", weight_disp),
-    ("BMI", bmi_disp),
-    ("Eye Screened", esc(combined_eye_display or "")),
-    ("Screening Date", report_date),
-    ("", "")
-])}
-</table>
-
-<!-- Diabetic History & Diabetes Management -->
-{sec("Diabetic History & Diabetes Management")}
-<table width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #d1d5db;margin-bottom:18px;">
-{field_row("Diabetes Type", esc(diabetes_type))}
-{field_row("Diagnosis Date", esc_or_dash(diabetes_diagnosis_date))}
-{field_row("Duration", duration_disp)}
-{field_row("HbA1c", esc_or_dash(hba1c_disp))}
-{field_row("Treatment Regimen", treatment_disp)}
-{field_row("Family History of Diabetes", prev_dr_disp, False)}
-</table>
-
-<!-- Vital Signs -->
-{sec("Vital Signs")}
-<table width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #d1d5db;margin-bottom:18px;">
-{field_grid_2col([
-    ("Blood Pressure", bp_display),
-    ("Fasting Blood Sugar", fbs_disp),
-    ("Visual Acuity (Left)", esc_or_dash(va_left)),
-    ("Visual Acuity (Right)", esc_or_dash(va_right)),
-    ("Random Blood Sugar", rbs_disp),
-    ("", "")
-])}
-</table>
-
-<!-- Reported Symptoms -->
-{sec("Reported Symptoms")}
-<div style="padding:10px 12px;border:1px solid #d1d5db;margin-bottom:18px;background:#fafafa;">
-    <div style="font-size:9pt;color:#374151;">{symptom_html}</div>
-</div>
-
-{sec("Other Symptom Details")}
-<div style="padding:12px;border:1px solid #d1d5db;background:#fafafa;margin-bottom:18px;min-height:44px;">
-    <div style="font-size:9pt;color:#4b5563;line-height:1.65;">{other_symptom_disp}</div>
-</div>
-
-<!-- AI Classification Result -->
-{sec("AI Classification Result")}
-<table width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #d1d5db;margin-bottom:18px;">
-{field_row("Classification", result_label)}
-{field_row("Confidence", conf_display, False)}
-</table>
-
-{sec("Doctor Decision")}
-<table width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #d1d5db;margin-bottom:18px;">
-{field_row("Decision Mode", esc(decision_mode.title()))}
-{field_row("Doctor Classification", esc(final_dx or ""))}
-{field_row("Doctor Findings", esc(findings_note or ""))}
-{field_row("Final Diagnosis", esc("Based on ICDR Severity Scale"), False)}
-</table>
-
-{sec("Doctor Comments")}
-<div style="padding:12px;border:1px solid #d1d5db;background:#fafafa;margin-bottom:18px;min-height:44px;">
-    <div style="font-size:9pt;color:#4b5563;line-height:1.65;">{esc(findings_note) if findings_note else "&mdash;"}</div>
-</div>
-
-<div style="padding:10px 12px;border:1px solid #d1d5db;margin-bottom:18px;background:#fafafa;">
-    <div style="font-size:8.5pt;color:#374151;">
-        <b>Final Diagnosis: Based on ICDR Severity Scale</b><br>
-        AI output remains visible for transparency and decision support.
-    </div>
-</div>
-
-"""
-        if decision_mode == "override":
-            html += f"""
-<div style="padding:10px 12px;border:1px solid #fecaca;margin-bottom:18px;background:#fff1f2;">
-    <div style="font-size:8.5pt;color:#7f1d1d;">
-        <b>Override Justification:</b> {esc(override_note or "No justification provided")}
-    </div>
-</div>
-"""
-        html += f"""
-
-{fundus_images_html}
-
-<!-- Clinical Analysis -->
-{sec("Clinical Analysis")}
-<div style="padding:14px;border:1px solid #d1d5db;background:#f9fafb;margin-bottom:18px;">
-    <div style="font-size:8pt;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;">Clinical Recommendation</div>
-    <div style="font-size:9.5pt;color:#111827;font-weight:600;line-height:1.6;margin-bottom:14px;">&rarr; {rec}</div>
-    <div style="border-top:1px solid #d1d5db;padding-top:12px;margin-top:12px;">
-        <div style="font-size:9.5pt;color:#374151;line-height:1.75;">{summary}</div>
-    </div>
-</div>
-
-<!-- Clinical Notes -->
-{sec("Clinical Notes")}
-<div style="padding:12px;border:1px solid #d1d5db;background:#fafafa;margin-bottom:18px;min-height:50px;">
-    <div style="font-size:9pt;color:#4b5563;font-style:italic;line-height:1.65;">{notes_disp}</div>
-</div>
-
-<!-- Footer / Disclaimer -->
-<div style="margin-top:24px;padding-top:14px;border-top:2px solid #e5e7eb;">
-    <div style="font-size:7.5pt;color:#9ca3af;line-height:1.8;">
-        <b>Created by:</b> {created_by}<br>
-        <b>Finalized by:</b> {finalized_by}<br>
-        <b>Generated:</b> {report_date}<br>
-        <i>This report is AI-assisted and does not replace the judgment of a licensed eye care professional. All findings must be reviewed and confirmed by a qualified healthcare professional before any clinical action is taken.</i>
-    </div>
-</div>
-
-</td></tr>
-</table>
-
-</body></html>"""
-
-        progress = QProgressDialog("Rendering images...", "", 0, 4, self)
-        progress.setWindowTitle("Generating Report")
-        progress.setCancelButton(None)
-        progress.setWindowModality(Qt.WindowModality.ApplicationModal)
-        progress.setMinimumDuration(0)
-        progress.show()
-        QApplication.processEvents()
-
-        doc = QTextDocument()
-        doc.setDocumentMargin(0)
-        doc.setHtml(html)
-        progress.setValue(1)
-        progress.setLabelText("Composing layout...")
-        QApplication.processEvents()
-
-        progress.setValue(2)
-        progress.setLabelText("Writing PDF...")
-        QApplication.processEvents()
-
-        try:
-            writer = QPdfWriter(path)
-            writer.setResolution(150)
-            try:
-                writer.setPageSize(QPageSize(QPageSize.PageSizeId.A4))
-            except Exception:
-                pass
-            try:
-                writer.setPageMargins(QMarginsF(14, 8, 14, 14), QPageLayout.Unit.Millimeter)
-            except Exception:
-                pass
-            doc.print_(writer)
-            if not os.path.isfile(path) or os.path.getsize(path) == 0:
-                raise OSError("Output PDF was not written correctly.")
-        except OSError as err:
-            if os.path.exists(path):
-                try:
-                    os.remove(path)
-                except OSError:
-                    pass
-            progress.close()
-            write_activity("ERROR", "REPORT_FAILED", str(err))
-            QMessageBox.critical(self, "Generate Report", f"Disk full - PDF generation stopped. Free up space and try again.\n\n{err}")
-            return
-
-        progress.setValue(4)
-        progress.setLabelText("Done")
-        progress.close()
-
-        write_activity("INFO", "REPORT_GENERATED", f"path={path}")
-        done_box = QMessageBox(self)
-        done_box.setWindowTitle("Report Saved")
-        done_box.setIcon(QMessageBox.Icon.Information)
-        done_box.setText(f"Screening report saved to:\n{path}")
-        open_pdf_btn = done_box.addButton("Open PDF", QMessageBox.ButtonRole.ActionRole)
-        open_folder_btn = done_box.addButton("Open Folder", QMessageBox.ButtonRole.ActionRole)
-        done_box.addButton("Close", QMessageBox.ButtonRole.RejectRole)
-        done_box.exec()
-        if done_box.clickedButton() == open_pdf_btn:
-            try:
-                os.startfile(path)
-            except Exception:
-                pass
-        elif done_box.clickedButton() == open_folder_btn:
-            try:
-                os.startfile(os.path.dirname(path))
-            except Exception:
-                pass
+        # Call unified generator
+        username = os.environ.get("EYESHIELD_CURRENT_NAME", os.environ.get("EYESHIELD_CURRENT_USER", "Staff"))
+        success = generate_unified_patient_report(self, patient_record, eye_records, username)
+        
+        if success:
+            write_activity("INFO", "REPORT_GENERATED", f"patient_id={patient_record['patient_id']}")
 
     def _show_referral_options(self):
         """Start referral letter generation flow."""

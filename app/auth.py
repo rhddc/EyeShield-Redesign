@@ -16,10 +16,16 @@ from datetime import timezone
 from datetime import datetime
 from typing import Any, Optional
 try:
-    from .app_paths import BACKUPS_DIR, CONFIG_DIR, USERS_DB_PATH
+    import pyzipper
+    HAS_PYZIPPER = True
+except ImportError:
+    HAS_PYZIPPER = False
+
+try:
+    from .app_paths import BACKUPS_DIR, CONFIG_DIR, USERS_DB_PATH, PROJECT_ROOT
     from .referrals import ReferralService
 except Exception:  # pragma: no cover
-    from app_paths import BACKUPS_DIR, CONFIG_DIR, USERS_DB_PATH
+    from app_paths import BACKUPS_DIR, CONFIG_DIR, USERS_DB_PATH, PROJECT_ROOT
     from referrals import ReferralService
 
 DB_FILE = str(USERS_DB_PATH)
@@ -1527,6 +1533,7 @@ class UserManager:
     def create_fundus_only_backup(
         acting_username: Optional[str] = None,
         acting_role: Optional[str] = None,
+        password: Optional[str] = None,
     ) -> tuple[bool, str, Optional[str]]:
         """Create a local backup with users, patient records, and fundus images only."""
         if str(acting_role or "").strip().lower() != ADMIN_ROLE:
@@ -1587,7 +1594,7 @@ class UserManager:
                 processed_records.append(item)
                 continue
 
-            source_abs = source_rel if os.path.isabs(source_rel) else os.path.join(app_root, source_rel)
+            source_abs = source_rel if os.path.isabs(source_rel) else os.path.join(str(PROJECT_ROOT), source_rel)
             source_abs = os.path.abspath(source_abs)
             if not os.path.isfile(source_abs):
                 missing_fundus += 1
@@ -1636,7 +1643,30 @@ class UserManager:
             shutil.rmtree(backup_dir, ignore_errors=True)
             return False, f"Unable to write backup files: {err}", None
 
-        return True, "Backup created successfully.", backup_dir
+        # Create encrypted ZIP archive
+        zip_path = f"{backup_dir}.zip"
+        if not HAS_PYZIPPER:
+            return False, "Security module 'pyzipper' is missing. Please restart the application or contact support.", None
+
+        try:
+            with pyzipper.AESZipFile(zip_path, "w", compression=pyzipper.ZIP_DEFLATED, encryption=pyzipper.WZ_AES) as zf:
+                if password:
+                    zf.setpassword(password.encode("utf-8"))
+                
+                # Walk through the backup directory and add files
+                for root, _, files in os.walk(backup_dir):
+                    for file in files:
+                        abs_path = os.path.join(root, file)
+                        rel_path = os.path.relpath(abs_path, backup_dir)
+                        zf.write(abs_path, rel_path)
+            
+            # Clean up temporary directory
+            shutil.rmtree(backup_dir, ignore_errors=True)
+            return True, "Backup created successfully and encrypted.", zip_path
+        except Exception as err:
+            if os.path.exists(zip_path):
+                os.remove(zip_path)
+            return False, f"Unable to package encrypted ZIP: {err}", None
     
     @staticmethod
     def update_user_role(
