@@ -1271,6 +1271,9 @@ class EyeShieldApp(QMainWindow):
         if hasattr(self, "screening_page") and hasattr(self.screening_page, "apply_theme"):
             self.screening_page.apply_theme(theme)
 
+        if hasattr(self, "trusted_hospitals_page") and hasattr(self.trusted_hospitals_page, "apply_theme"):
+            self.trusted_hospitals_page.apply_theme(theme)
+
         self._update_nav_icon(self._dark_mode)
         self.refresh_dashboard()
 
@@ -2865,6 +2868,13 @@ class EyeShieldApp(QMainWindow):
             ranks = {"Proliferative DR": 4, "Severe DR": 3, "Moderate DR": 2, "Mild DR": 1, "No DR": 0}
             for s in all_screenings:
                 s["_rank"] = ranks.get(self._normalize_severity_label(s.get("result", "")), -1)
+            
+            # CRITICAL: Reversing so the latest records come first for the deduping logic below.
+            # This ensures KPI tallies (High Risk, Monthly) reflect the most recent patient status.
+            all_screenings.reverse()
+
+            # Filter out archived records to match the 'Patient Records' (Reports) page logic
+            all_screenings = [s for s in all_screenings if not s.get("archived_at")]
         except Exception as err:
             self._dash_db_error_text = str(err)
             all_screenings = []
@@ -2900,9 +2910,9 @@ class EyeShieldApp(QMainWindow):
             weekly_data[6-i] = count
 
         for s in display_screenings:
-            # High risk check
+            # High risk check: Include Moderate, Severe, and Proliferative to match Reports logic
             level = self._normalize_severity_label(s["result"])
-            if level in ("Severe DR", "Proliferative DR"):
+            if level in ("Moderate DR", "Severe DR", "Proliferative DR"):
                 high_risk_count += 1
             
             # Monthly check

@@ -2234,18 +2234,19 @@ class ReportsPage(QWidget):
 
         self.setStyleSheet("""
             QWidget {
-                background: #f8fafc;
-                color: #0f172a;
+                background: transparent;
+                color: palette(text);
                 font-family: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
             }
             QGroupBox {
-                background: #ffffff;
-                border: 1px solid #e2e8f0;
+                background: palette(window);
+                border: 1px solid palette(mid);
                 border-radius: 12px;
             }
             QLineEdit, QComboBox {
-                background: #ffffff;
-                border: 1px solid #cbd5e1;
+                background: palette(base);
+                color: palette(text);
+                border: 1px solid palette(mid);
                 border-radius: 10px;
                 padding: 8px 14px;
                 font-size: 14px;
@@ -2258,57 +2259,56 @@ class ReportsPage(QWidget):
                 padding: 7px 13px;
             }
             QTableWidget {
-                background: #ffffff;
-                border: 1px solid #e2e8f0;
+                background: palette(base);
+                border: 1px solid palette(mid);
                 border-radius: 12px;
-                gridline-color: #f1f5f9;
-                selection-background-color: #eff6ff;
-                selection-color: #1e40af;
+                gridline-color: transparent;
+                selection-background-color: palette(highlight);
+                selection-color: palette(highlighted-text);
                 outline: none;
             }
             QTableWidget::item {
-                border-bottom: 1px solid #f1f5f9;
+                border-bottom: 1px solid palette(mid);
                 padding: 12px;
             }
             QTableWidget::item:selected {
-                background: #eff6ff;
-                color: #1e40af;
+                background: palette(highlight);
+                color: palette(highlighted-text);
             }
             QHeaderView::section {
-                background: #f8fafc;
-                color: #475569;
+                background: palette(window);
+                color: #2563eb;
                 font-weight: 700;
                 font-size: 12px;
                 text-transform: uppercase;
                 letter-spacing: 0.05em;
                 border: none;
-                border-bottom: 2px solid #e2e8f0;
+                border-bottom: 2px solid palette(mid);
                 padding: 12px 16px;
             }
             QPushButton {
-                background: #ffffff;
-                border: 1px solid #e2e8f0;
+                background: palette(button);
+                border: 1px solid palette(mid);
                 border-radius: 8px;
                 padding: 8px 16px;
                 font-weight: 600;
                 font-size: 13px;
-                color: #334155;
+                color: palette(button-text);
             }
             QPushButton:hover {
-                background: #f1f5f9;
+                background: palette(highlight);
                 border: 1px solid #cbd5e1;
-                color: #0f172a;
             }
             QPushButton:pressed {
-                background: #e2e8f0;
+                background: palette(mid);
             }
             QPushButton:disabled {
-                background: #f8fafc;
-                color: #94a3b8;
-                border: 1px solid #f1f5f9;
+                background: palette(window);
+                color: palette(disabled-text);
+                border: 1px solid palette(mid);
             }
             QLabel#statusLabel {
-                color: #64748b;
+                color: palette(placeholder-text);
                 font-size: 12px;
             }
         """)
@@ -2454,7 +2454,16 @@ class ReportsPage(QWidget):
                     name_rect = r
 
                     selected = bool(opt.state & QStyle.State_Selected)
-                    name_color = QColor("#0f172a") if not selected else QColor("#0b1220")
+                    
+                    # Theme-aware colors
+                    is_dark = False
+                    if widget:
+                        is_dark = widget.palette().color(widget.backgroundRole()).value() < 128
+
+                    if is_dark:
+                        name_color = QColor("#f8fafc") if not selected else QColor("#ffffff")
+                    else:
+                        name_color = QColor("#0f172a") if not selected else QColor("#0b1220")
 
                     name_font = QFont(opt.font)
                     name_font.setBold(False)

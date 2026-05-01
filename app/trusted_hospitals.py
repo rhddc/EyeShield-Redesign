@@ -1,8 +1,9 @@
 import os
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor
+from PySide6.QtGui import QColor, QPalette
 from PySide6.QtWidgets import (
+    QApplication,
     QFrame,
     QGridLayout,
     QGroupBox,
@@ -159,26 +160,26 @@ class TrustedHospitalsPage(QWidget):
         self.setStyleSheet(
             """
             QWidget {
-                background: #ffffff;
-                color: #1a1a1a;
+                background: transparent;
+                color: palette(text);
                 font-size: 13px;
                 font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
                 font-weight: 400;
             }
             QFrame#trustedHero {
-                background: #ffffff;
-                border: 1px solid #dbeafe;
+                background: palette(window);
+                border: 1px solid palette(mid);
                 border-radius: 12px;
             }
             QLabel#headerTitle {
-                color: #1d4ed8;
+                color: #2563eb;
                 font-size: 20px;
                 font-weight: 400;
                 background: transparent;
             }
             QGroupBox {
-                background: #ffffff;
-                border: 1px solid #dbeafe;
+                background: palette(window);
+                border: 1px solid palette(mid);
                 border-radius: 12px;
                 margin-top: 8px;
                 font-weight: 400;
@@ -188,26 +189,26 @@ class TrustedHospitalsPage(QWidget):
                 subcontrol-origin: margin;
                 left: 14px;
                 padding: 0 8px;
-                background: #ffffff;
-                color: #1d4ed8;
+                background: transparent;
+                color: #2563eb;
                 font-size: 12px;
                 font-weight: 400;
                 letter-spacing: 0.5px;
             }
             QLabel#fieldLabel {
-                color: #6b7280;
+                color: palette(placeholder-text);
                 font-size: 12px;
                 font-weight: 400;
                 letter-spacing: 0.5px;
             }
             QLabel#metaLabel {
-                color: #6b7280;
+                color: palette(placeholder-text);
                 font-size: 13px;
                 font-weight: 400;
             }
             QLineEdit {
-                background: #ffffff;
-                border: 1px solid #bfdbfe;
+                background: palette(base);
+                border: 1px solid palette(mid);
                 border-radius: 8px;
                 padding: 8px 10px;
                 min-height: 22px;
@@ -219,15 +220,15 @@ class TrustedHospitalsPage(QWidget):
                 border: 1px solid #60a5fa;
             }
             QPushButton {
-                background: #ffffff;
-                color: #1a1a1a;
-                border: 1px solid #bfdbfe;
+                background: palette(button);
+                color: palette(button-text);
+                border: 1px solid palette(mid);
                 border-radius: 8px;
                 padding: 7px 12px;
                 font-weight: 400;
             }
             QPushButton:hover {
-                background: #eff6ff;
+                background: palette(highlight);
             }
             QPushButton#primaryAction {
                 background: #2563eb;
@@ -239,23 +240,23 @@ class TrustedHospitalsPage(QWidget):
                 background: #1d4ed8;
             }
             QTableWidget {
-                background: #ffffff;
-                border: 1px solid #dbeafe;
+                background: palette(base);
+                border: 1px solid palette(mid);
                 border-radius: 10px;
                 gridline-color: transparent;
             }
             QHeaderView::section {
-                background: #ffffff;
-                color: #1d4ed8;
+                background: palette(window);
+                color: #2563eb;
                 border: none;
-                border-bottom: 1px solid #dbeafe;
+                border-bottom: 1px solid palette(mid);
                 font-size: 12px;
                 font-weight: 400;
                 padding: 10px 16px;
             }
             QCheckBox {
                 spacing: 8px;
-                color: #1a1a1a;
+                color: palette(text);
                 background: transparent;
                 font-size: 13px;
                 font-weight: 400;
@@ -263,16 +264,16 @@ class TrustedHospitalsPage(QWidget):
             QCheckBox::indicator {
                 width: 16px;
                 height: 16px;
-                border: 1px solid #bfdbfe;
+                border: 1px solid palette(mid);
                 border-radius: 4px;
-                background: #ffffff;
+                background: palette(base);
             }
             QCheckBox::indicator:checked {
                 background: #2563eb;
                 border: 1px solid #1d4ed8;
             }
             QLabel#statusLabel {
-                color: #6b7280;
+                color: palette(placeholder-text);
                 font-size: 12px;
                 font-weight: 400;
                 padding: 2px 0;
@@ -280,14 +281,14 @@ class TrustedHospitalsPage(QWidget):
                 background: transparent;
             }
             QPushButton#ghostAction {
-                background: #ffffff;
-                border: 1px solid #bfdbfe;
-                color: #1a1a1a;
+                background: palette(button);
+                border: 1px solid palette(mid);
+                color: palette(button-text);
                 font-weight: 400;
                 padding: 8px 12px;
             }
             QPushButton#ghostAction:hover {
-                background: #eff6ff;
+                background: palette(highlight);
             }
             """
         )
@@ -375,6 +376,35 @@ class TrustedHospitalsPage(QWidget):
 
         self._configure_referral_hospitals_section()
 
+    def showEvent(self, event) -> None:
+        """Rebuild row colors when the page is shown; stacked pages can be hidden during theme apply."""
+        super().showEvent(event)
+        if self._active_role() not in {"clinician", "doctor"}:
+            return
+        if not UserManager.ensure_referral_hospitals_table():
+            return
+        self._reload_referral_hospitals()
+
+    def _is_dark_theme(self) -> bool:
+        app = QApplication.instance()
+        ss = (app.styleSheet() or "") if app else ""
+        if "#20242b" in ss:
+            return True
+        main_window = self.window()
+        if main_window is not None and main_window is not self:
+            if hasattr(main_window, "_dark_mode"):
+                return bool(getattr(main_window, "_dark_mode", False))
+        base = self.palette().color(QPalette.ColorRole.Base)
+        return base.value() < 128
+
+    def apply_theme(self, _theme: str) -> None:
+        if self._active_role() not in {"clinician", "doctor"}:
+            return
+        if not UserManager.ensure_referral_hospitals_table():
+            return
+        # Do not gate on isVisible(); QStackedWidget hides non-current pages so theme apply would skip reload.
+        self._reload_referral_hospitals()
+
     def _active_role(self) -> str:
         main_window = self.window()
         role = getattr(main_window, "role", None) if main_window is not self else None
@@ -430,12 +460,20 @@ class TrustedHospitalsPage(QWidget):
             e_item.setTextAlignment(Qt.AlignCenter)
             self.referral_hospitals_table.setItem(row_index, 4, e_item)
             
-            # Apply alternating row background colors
-            bg_color = QColor("#ffffff") if row_index % 2 == 0 else QColor("#f3f4f6")
+            # Apply alternating row background colors (transparent page bg breaks palette-only checks)
+            is_dark = self._is_dark_theme()
+            if is_dark:
+                bg_color = QColor("#2a3038") if row_index % 2 == 0 else QColor("#252b33")
+                text_color = QColor("#d6dbe4")
+            else:
+                bg_color = QColor("#ffffff") if row_index % 2 == 0 else QColor("#f3f4f6")
+                text_color = QColor("#1a1a1a")
+
             for col in range(5):
                 item_widget = self.referral_hospitals_table.item(row_index, col)
                 if item_widget:
                     item_widget.setBackground(bg_color)
+                    item_widget.setForeground(text_color)
         self._sync_referral_action_buttons()
 
     def _selected_referral_hospital(self):
