@@ -1946,10 +1946,78 @@ class EyeShieldApp(QMainWindow):
             )
             cal_v.addWidget(self._dash_calendar, 1)
         else:
-            # ── Left: Recent screenings (Main Area) ──────────────────────────
+            # ── Doctor: Left Column (Queue + Recent Screenings) ──────────────
+            left_col_widget = QWidget()
+            left_col_widget.setObjectName("doctorLeftCol")
+            left_col_v = QVBoxLayout(left_col_widget)
+            left_col_v.setContentsMargins(0, 0, 0, 0)
+            left_col_v.setSpacing(16)
+
+            # 1. Patient Queue Card
+            queue_card = QWidget()
+            queue_card.setObjectName("doctorQueueCard")
+            queue_card.setMinimumHeight(320)
+            queue_card.setStyleSheet(
+                "QWidget#doctorQueueCard{background:#ffffff;border-radius:16px;border:1px solid #e2e8f0;}"
+                "QTableWidget{background:#ffffff;color:#334155;border:none;}"
+                "QHeaderView::section{background:#f8fbff;color:#64748b;border:none;border-bottom:1px solid #e2e8f0;"
+                "padding:10px 8px;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:0.8px;}"
+            )
+            queue_v = QVBoxLayout(queue_card)
+            queue_v.setContentsMargins(20, 16, 20, 18)
+            queue_v.setSpacing(10)
+
+            queue_header_l = QHBoxLayout()
+            queue_title = QLabel("PATIENT QUEUE")
+            queue_title.setStyleSheet(
+                "color:#94a3b8;font-size:10px;font-weight:800;letter-spacing:1.0px;background:transparent;"
+            )
+            queue_header_l.addWidget(queue_title)
+            queue_header_l.addStretch()
+            
+            view_queue_btn = QPushButton(" View Full Queue")
+            view_queue_btn.setCursor(Qt.PointingHandCursor)
+            view_queue_btn.setMinimumHeight(28)
+            
+            # Resolve icon path
+            icons_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icons")
+            inbox_icon_path = os.path.join(icons_dir, "inbox.svg")
+            self._set_button_svg_icon(view_queue_btn, inbox_icon_path, "#2563eb", QSize(14, 14))
+            
+            view_queue_btn.setStyleSheet(
+                "QPushButton{"
+                "  background: rgba(37, 99, 235, 0.08);"
+                "  color: #2563eb;"
+                "  border: 1px solid rgba(37, 99, 235, 0.12);"
+                "  border-radius: 14px;"
+                "  padding: 0 14px 0 10px;"
+                "  font-size: 11px;"
+                "  font-weight: 700;"
+                "  text-align: center;"
+                "}"
+                "QPushButton:hover{"
+                "  background: rgba(37, 99, 235, 0.14);"
+                "  border-color: rgba(37, 99, 235, 0.25);"
+                "  color: #1d4ed8;"
+                "}"
+                "QPushButton:pressed{"
+                "  background: rgba(37, 99, 235, 0.22);"
+                "}"
+            )
+            view_queue_btn.clicked.connect(lambda: self._navigate_to(10, nav_key="Patient Queue"))
+            queue_header_l.addWidget(view_queue_btn)
+            
+            queue_v.addLayout(queue_header_l)
+
+            self.doctor_queue_list_layout = QVBoxLayout()
+            self.doctor_queue_list_layout.setSpacing(6)
+            queue_v.addLayout(self.doctor_queue_list_layout)
+            queue_v.addStretch(1)
+
+            # 2. Recent Screenings Card
             rec_card = QWidget()
             rec_card.setObjectName("recentCard")
-            rec_card.setMinimumHeight(380)
+            rec_card.setMinimumHeight(320)
             rec_card.setStyleSheet(
                 "QWidget#recentCard{background:#ffffff;border-radius:16px;border:1px solid #e2e8f0;}"
             )
@@ -1967,7 +2035,10 @@ class EyeShieldApp(QMainWindow):
             self.recent_list_layout.setSpacing(6)
             rec_v.addLayout(self.recent_list_layout)
             rec_v.addStretch(1)
-            content_row.addWidget(rec_card, 6)
+
+            left_col_v.addWidget(queue_card, 1)
+            left_col_v.addWidget(rec_card, 1)
+            content_row.addWidget(left_col_widget, 6)
 
         # ── Right Sidebar ─────────────────────────────────────────────────────
         sidebar_w = QWidget()
@@ -2478,6 +2549,85 @@ class EyeShieldApp(QMainWindow):
             self._dash_queue_table.setItem(i, 2, QTableWidgetItem(purpose))
             self._dash_queue_table.setItem(i, 3, QTableWidgetItem(status))
 
+    def _dash_refresh_doctor_queue(self, text_primary, text_secondary, text_muted, dark) -> None:
+        """Doctor Dashboard: populate the embedded patient queue list (matching Recent style)."""
+        if not hasattr(self, "doctor_queue_list_layout"):
+            return
+            
+        while self.doctor_queue_list_layout.count():
+            item = self.doctor_queue_list_layout.takeAt(0)
+            if w := item.widget(): w.deleteLater()
+            
+        try:
+            rows = emr.list_queue_rows()
+        except Exception:
+            rows = []
+
+        if not rows:
+            empty = QLabel("No patients in queue.")
+            empty.setStyleSheet(f"font-size:12px;color:{text_muted};font-weight:600;padding:8px 0;")
+            self.doctor_queue_list_layout.addWidget(empty)
+            return
+
+        # Add Header Row
+        header_w = QWidget()
+        header_w.setStyleSheet("background: transparent; border-bottom: 1px solid #e2e8f0; margin-bottom: 4px;")
+        header_l = QHBoxLayout(header_w)
+        header_l.setContentsMargins(16, 4, 16, 8)
+        header_l.setSpacing(12)
+        
+        h_qno = QLabel("Q#")
+        h_patient = QLabel("Patient")
+        h_purpose = QLabel("Purpose")
+        h_status = QLabel("Status")
+        for h in (h_qno, h_patient, h_purpose, h_status):
+            h.setStyleSheet(f"color:{text_muted};font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:0.8px;")
+        
+        header_l.addWidget(h_qno, 1)
+        header_l.addWidget(h_patient, 3)
+        header_l.addWidget(h_purpose, 2)
+        header_l.addWidget(h_status, 2)
+        self.doctor_queue_list_layout.addWidget(header_w)
+
+        for r in rows:
+            qno = str(r.get("queue_number") or "")
+            patient = f"{r.get('first_name','')} {r.get('last_name','')}".strip()
+            purpose_raw = str(r.get("screening_purpose") or "new")
+            purpose = "follow-up" if purpose_raw == "follow_up" else purpose_raw.replace("_", "-")
+            status = str(r.get("status") or "")
+            
+            item_w = QWidget()
+            item_w.setStyleSheet(
+                f"QWidget{{background:{'#13273a' if dark else '#f8fbff'};border-radius:12px;}}"
+                f"QWidget:hover{{background:{'#1a3550' if dark else '#eff6ff'};}}"
+            )
+            item_l = QHBoxLayout(item_w)
+            item_l.setContentsMargins(16, 12, 16, 12)
+            item_l.setSpacing(12)
+
+            qno_lbl = QLabel(qno)
+            qno_lbl.setStyleSheet(f"font-size:13px;font-weight:800;color:{text_muted};background:transparent;")
+            
+            patient_lbl = QLabel(patient)
+            patient_lbl.setStyleSheet(f"font-size:14px;font-weight:700;color:{text_primary};background:transparent;")
+            
+            purpose_lbl = QLabel(purpose.capitalize())
+            purpose_lbl.setStyleSheet(f"font-size:12px;font-weight:600;color:{text_secondary};background:transparent;")
+            
+            status_lbl = QLabel(status.upper())
+            status_col = text_muted
+            if status.lower() == "waiting": status_col = "#2563eb"
+            elif status.lower() == "in-progress": status_col = "#059669"
+            status_lbl.setStyleSheet(f"font-size:11px;font-weight:800;color:{status_col};background:transparent;")
+            status_lbl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+
+            item_l.addWidget(qno_lbl, 1)
+            item_l.addWidget(patient_lbl, 3)
+            item_l.addWidget(purpose_lbl, 2)
+            item_l.addWidget(status_lbl, 2)
+            
+            self.doctor_queue_list_layout.addWidget(item_w)
+
     def _dash_clear_today_queue(self) -> None:
         """Frontdesk Dashboard: clear today's queue entries (EMR)."""
         role_l = str(getattr(self, "role", "") or "").strip().lower()
@@ -2797,6 +2947,9 @@ class EyeShieldApp(QMainWindow):
             if hasattr(self, "_fd_stat_total"): self._fd_stat_total.setText(str(len(seen_patients)))
             if hasattr(self, "_fd_stat_no_dr"): self._fd_stat_no_dr.setText(str(fd_no))
             if hasattr(self, "_fd_stat_abnormal"): self._fd_stat_abnormal.setText(str(fd_abn))
+        else:
+            # Doctor specific updates
+            self._dash_refresh_doctor_queue(text_primary, text_secondary, text_muted, dark)
 
         # Recent list population
         if hasattr(self, "recent_list_layout"):
