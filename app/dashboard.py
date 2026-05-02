@@ -59,10 +59,10 @@ except Exception:  # pragma: no cover
 
 try:
     from . import emr_service as emr
-    from .ui_feedback import apply_dialog_style
+    from .ui_feedback import apply_dialog_style, confirm
 except Exception:  # pragma: no cover
     import emr_service as emr
-    from ui_feedback import apply_dialog_style
+    from ui_feedback import apply_dialog_style, confirm
 
 try:
     from .user_auth import get_user_profile
@@ -596,17 +596,16 @@ class EyeShieldApp(QMainWindow):
             return
 
         try:
-            today = date.today().isoformat()
-            rows = emr.list_queue_rows(today)
-            waiting_count = sum(1 for r in rows if str(r.get("status") or "").strip().lower() == "waiting")
+            # Use the refined helper to count both waiting and in-progress patients
+            active_count = self._get_waiting_patient_count()
 
-            if waiting_count > 0:
+            if active_count > 0:
                 msg = QMessageBox(self)
                 apply_dialog_style(msg)
                 msg.setWindowTitle("Patient Queue Notification")
                 msg.setIcon(QMessageBox.Icon.Information)
                 msg.setText(f"Welcome back, {self.display_name}!")
-                msg.setInformativeText(f"There are currently {waiting_count} patient(s) waiting in your queue.")
+                msg.setInformativeText(f"There are currently {active_count} patient(s) active in your queue.")
 
                 view_list_btn = msg.addButton("View Patient Queue", QMessageBox.ActionRole)
                 ok_btn = msg.addButton("Stay on Dashboard", QMessageBox.RejectRole)
@@ -1322,6 +1321,16 @@ class EyeShieldApp(QMainWindow):
 
         self.refresh_dashboard()
 
+    def _get_waiting_patient_count(self) -> int:
+        """Fetch the number of patients with 'waiting' or 'in_progress' status for today's queue."""
+        try:
+            today = date.today().isoformat()
+            rows = emr.list_queue_rows(today)
+            # Both 'waiting' and 'in_progress' represent active clinical work.
+            return sum(1 for r in rows if str(r.get("status") or "").strip().lower() in {"waiting", "in_progress"})
+        except Exception:
+            return 0
+
     # ── Window events ─────────────────────────────────────────────────────────
 
     def closeEvent(self, event):
@@ -1331,22 +1340,56 @@ class EyeShieldApp(QMainWindow):
         if self._confirm_quit_during_screening():
             event.ignore()
             return
-        reply = QMessageBox.question(
-            self, "Quit EyeShield", "Are you sure you want to quit EyeShield?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
-        )
-        event.accept() if reply == QMessageBox.StandardButton.Yes else event.ignore()
+
+        # Formal queue check on exit.
+        wait_n = self._get_waiting_patient_count()
+        if wait_n > 0:
+            reply = QMessageBox.warning(
+                self,
+                "Pending Clinical Assessments",
+                f"The patient queue currently contains {wait_n} pending assessment(s).\n\n"
+                "Closing the system now will interrupt the clinical workflow for these patients.\n\n"
+                "Are you sure you want to exit?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No
+            )
+            if reply == QMessageBox.StandardButton.Yes:
+                event.accept()
+            else:
+                event.ignore()
+        else:
+            reply = QMessageBox.question(
+                self, "Quit EyeShield", "Are you sure you want to quit EyeShield?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            event.accept() if reply == QMessageBox.StandardButton.Yes else event.ignore()
 
     def handle_logout(self):
         if self._confirm_quit_during_screening():
             return
-        reply = QMessageBox.question(
-            self, "Logout", "Are you sure you want to log out?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-        )
-        if reply != QMessageBox.StandardButton.Yes:
-            return
+
+        # Formal queue check on logout.
+        wait_n = self._get_waiting_patient_count()
+        if wait_n > 0:
+            reply = QMessageBox.warning(
+                self,
+                "Active Patient Queue",
+                f"The system indicates that {wait_n} patient(s) are still awaiting assessment.\n\n"
+                "Logging out now may delay their clinical processing.\n\n"
+                "Do you wish to proceed with the logout?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
+        else:
+            reply = QMessageBox.question(
+                self, "Logout", "Are you sure you want to log out?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
         try:
             import user_store
             user_store.log_activity_event(self.username, "LOGOUT",

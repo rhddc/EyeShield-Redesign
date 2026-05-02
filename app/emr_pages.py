@@ -1589,6 +1589,59 @@ class EmrVisitsPage(QWidget):
                 qid_i = int(qid)
             except (TypeError, ValueError):
                 qid_i = None
+        # Queue priority check: Warn if there are "waiting" patients ahead in the sorted list.
+        try:
+            today = date.today().isoformat()
+            all_q = emr.list_queue_rows(today)
+            # Filter for waiting patients only
+            waiting_only = [
+                r for r in all_q if str(r.get("status") or "").strip().lower() == "waiting"
+            ]
+            # Sort by priority (same logic as refresh())
+            waiting_only.sort(
+                key=lambda r: (
+                    int(str(r.get("queue_number", "")).split("-")[-1]) if str(r.get("queue_number", "")).split("-")[-1].isdigit() else 999999,
+                    int(r.get("queue_id") or 0),
+                )
+            )
+
+            if waiting_only and qid_i is not None:
+                first_qid = int(waiting_only[0].get("queue_id") or 0)
+                if first_qid != int(qid_i):
+                    # Current patient is not at the front of the waiting queue.
+                    ahead_count = 0
+                    patient_found_in_waiting = False
+                    for r in waiting_only:
+                        if int(r.get("queue_id") or 0) == int(qid_i):
+                            patient_found_in_waiting = True
+                            break
+                        ahead_count += 1
+                    
+                    # Only warn if the patient is actually in the waiting list but not at the front.
+                    # If they are already in_progress, we don't need to warn again about skipping.
+                    if patient_found_in_waiting:
+                        next_patient = f"{waiting_only[0].get('first_name','')} {waiting_only[0].get('last_name','')}".strip()
+                        curr_name = ""
+                        for r in all_q:
+                            if int(r.get("queue_id") or 0) == int(qid_i):
+                                curr_name = f"{r.get('first_name','')} {r.get('last_name','')}".strip()
+                                break
+
+                        if not confirm(
+                            self,
+                            "Queue Priority Warning",
+                            f"You are starting a diagnosis for {curr_name or 'this patient'}.\n\n"
+                            f"There are {ahead_count} patient(s) waiting ahead in the queue.\n"
+                            f"The next patient should be: {next_patient}.\n\n"
+                            "Are you sure you want to proceed?",
+                            yes_text="Proceed Anyway",
+                            no_text="Cancel"
+                        ):
+                            return
+        except Exception:
+            # Ensure the doctor is never blocked if priority check fails.
+            pass
+
         if not self._prepare_clinical_visit_open(qid_i, pid_i):
             self.refresh()
             return
